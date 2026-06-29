@@ -1,0 +1,3409 @@
+<!DOCTYPE html>
+	
+
+	<html lang="en">
+	
+
+	<head>
+	
+
+	<meta charset="UTF-8">
+	
+
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+	
+
+	<title>FenMeat Sales App</title>
+	
+
+	<style>
+	
+
+	* { box-sizing: border-box; margin: 0; padding: 0; }
+	
+
+	
+
+	
+
+	:root {
+	
+
+	--red: #C0392B;
+	
+
+	--dark: #1a1a1a;
+	
+
+	--mid: #2d2d2d;
+	
+
+	--card: #f9f9f9;
+	
+
+	--border: #e0e0e0;
+	
+
+	--green: #27AE60;
+	
+
+	--orange: #E67E22;
+	
+
+	--blue: #2980B9;
+	
+
+	--text: #222;
+	
+
+	--muted: #777;
+	
+
+	}
+	
+
+	
+
+	
+
+	body {
+	
+
+	font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+	
+
+	background: #f0f0f0;
+	
+
+	color: var(--text);
+	
+
+	min-height: 100vh;
+	
+
+	}
+	
+
+	
+
+	
+
+	/* HEADER */
+	
+
+	.header {
+	
+
+	background: var(--dark);
+	
+
+	color: white;
+	
+
+	padding: 14px 16px;
+	
+
+	display: flex;
+	
+
+	align-items: center;
+	
+
+	justify-content: space-between;
+	
+
+	position: sticky;
+	
+
+	top: 0;
+	
+
+	z-index: 100;
+	
+
+	}
+	
+
+	.header h1 { font-size: 18px; font-weight: 700; letter-spacing: 0.5px; }
+	
+
+	.header .logo { color: var(--red); font-weight: 900; }
+	
+
+	.header-right { font-size: 12px; color: #aaa; text-align: right; }
+	
+
+	
+
+	
+
+	/* DATE BAR */
+	
+
+	.date-bar {
+	
+
+	background: var(--red);
+	
+
+	padding: 12px 16px;
+	
+
+	display: flex;
+	
+
+	align-items: center;
+	
+
+	gap: 12px;
+	
+
+	}
+	
+
+	.date-bar label { color: white; font-size: 13px; font-weight: 600; white-space: nowrap; }
+	
+
+	.date-bar input[type=date] {
+	
+
+	flex: 1;
+	
+
+	padding: 8px 10px;
+	
+
+	border: none;
+	
+
+	border-radius: 6px;
+	
+
+	font-size: 15px;
+	
+
+	font-weight: 600;
+	
+
+	background: white;
+	
+
+	color: var(--dark);
+	
+
+	}
+	
+
+	
+
+	
+
+	/* MODE TOGGLE */
+	
+
+	.mode-bar {
+	
+
+	background: var(--mid);
+	
+
+	display: flex;
+	
+
+	padding: 10px 16px;
+	
+
+	gap: 10px;
+	
+
+	}
+	
+
+	.mode-btn {
+	
+
+	flex: 1;
+	
+
+	padding: 10px;
+	
+
+	border: none;
+	
+
+	border-radius: 8px;
+	
+
+	font-size: 14px;
+	
+
+	font-weight: 700;
+	
+
+	cursor: pointer;
+	
+
+	transition: all 0.2s;
+	
+
+	background: #444;
+	
+
+	color: #aaa;
+	
+
+	}
+	
+
+	.mode-btn.active {
+	
+
+	background: white;
+	
+
+	color: var(--dark);
+	
+
+	}
+	
+
+	.mode-btn.active.morning { background: #F39C12; color: white; }
+	
+
+	.mode-btn.active.evening { background: var(--blue); color: white; }
+	.mode-btn.active.cashup { background: var(--orange); color: white; }
+	
+
+	
+
+	
+
+	/* ROUTE TABS */
+	
+
+	.route-tabs {
+	
+
+	background: white;
+	
+
+	display: flex;
+	
+
+	overflow-x: auto;
+	
+
+	border-bottom: 2px solid var(--border);
+	
+
+	padding: 0 8px;
+	
+
+	gap: 4px;
+	
+
+	}
+	
+
+	.route-tab {
+	
+
+	padding: 14px 20px;
+	
+
+	font-size: 17px;
+	
+
+	font-weight: 700;
+	
+
+	border: none;
+	
+
+	background: none;
+	
+
+	cursor: pointer;
+	
+
+	color: var(--muted);
+	
+
+	white-space: nowrap;
+	
+
+	border-bottom: 3px solid transparent;
+	
+
+	margin-bottom: -2px;
+	
+
+	}
+	
+
+	.route-tab.active {
+	
+
+	color: var(--red);
+	
+
+	border-bottom-color: var(--red);
+	
+
+	}
+	
+
+	.late-badge {
+	
+
+	display: inline-block;
+	
+
+	background: var(--orange);
+	
+
+	color: white;
+	
+
+	font-size: 9px;
+	
+
+	padding: 1px 4px;
+	
+
+	border-radius: 3px;
+	
+
+	margin-left: 4px;
+	
+
+	}
+	
+
+	
+
+	
+
+	/* CONTENT */
+	
+
+	.content { padding: 12px 16px; max-width: 600px; margin: 0 auto; }
+	
+
+	
+
+	
+
+	/* ROUTE SUMMARY CARD */
+	
+
+	.route-summary {
+	
+
+	background: white;
+	
+
+	border-radius: 10px;
+	
+
+	padding: 14px;
+	
+
+	margin-bottom: 12px;
+	
+
+	border-left: 4px solid var(--red);
+	
+
+	display: flex;
+	
+
+	justify-content: space-between;
+	
+
+	align-items: center;
+	
+
+	}
+	
+
+	.route-summary .route-name { font-size: 18px; font-weight: 800; }
+	
+
+	.route-summary .route-day { font-size: 12px; color: var(--muted); margin-top: 2px; }
+	
+
+	.route-summary .totals { text-align: right; font-size: 12px; color: var(--muted); }
+	
+
+	.route-summary .total-val { font-size: 16px; font-weight: 700; color: var(--green); }
+	
+
+	
+
+	
+
+	/* PRODUCT LIST */
+	
+
+	.product-list { background: white; border-radius: 10px; overflow: hidden; margin-bottom: 12px; }
+	
+
+	.product-header {
+	
+
+	background: var(--dark);
+	
+
+	color: white;
+	
+
+	padding: 10px 14px;
+	
+
+	display: grid;
+	
+
+	font-size: 11px;
+	
+
+	font-weight: 700;
+	
+
+	text-transform: uppercase;
+	
+
+	letter-spacing: 0.5px;
+	
+
+	}
+	
+
+	.product-header.morning-mode { grid-template-columns: 1fr 50px 70px 40px; }
+	
+
+	.product-header.evening-mode { grid-template-columns: 1fr 45px 45px 55px 50px; }
+	
+
+	
+
+	
+
+	.product-row {
+	
+
+	display: grid;
+	
+
+	align-items: center;
+	
+
+	padding: 10px 14px;
+	
+
+	border-bottom: 1px solid var(--border);
+	
+
+	gap: 8px;
+	
+
+	}
+	
+
+	.product-row.morning-mode { grid-template-columns: 1fr 50px 70px 40px; }
+	
+
+	.product-row.evening-mode { grid-template-columns: 1fr 45px 45px 55px 50px; }
+	
+
+	.product-row:last-child { border-bottom: none; }
+	
+
+	.product-row:nth-child(even) { background: #fafafa; }
+	
+
+	
+
+	
+
+	.product-name { font-size: 13px; font-weight: 600; }
+	
+
+	.product-code { font-size: 10px; color: var(--muted); }
+	
+
+	
+
+	
+
+	.qty-input {
+	
+
+	width: 100%;
+	
+
+	padding: 7px 6px;
+	
+
+	border: 2px solid var(--border);
+	
+
+	border-radius: 6px;
+	
+
+	font-size: 15px;
+	
+
+	font-weight: 700;
+	
+
+	text-align: center;
+	
+
+	color: var(--dark);
+	
+
+	background: white;
+	
+
+	}
+	
+
+	.qty-input:focus {
+	
+
+	outline: none;
+	
+
+	border-color: var(--red);
+	
+
+	}
+	
+
+	.qty-input.modified {
+	
+
+	border-color: var(--orange);
+	
+
+	background: #FFF9F0;
+	
+
+	}
+	
+
+	.load-check {
+	width: 24px;
+	height: 24px;
+	cursor: pointer;
+	accent-color: var(--green);
+	}
+	
+
+	
+
+	
+
+	.out-display {
+	
+
+	font-size: 15px;
+	
+
+	font-weight: 700;
+	
+
+	text-align: center;
+	
+
+	color: var(--dark);
+	
+
+	}
+	
+
+	.sold-display {
+	
+
+	font-size: 15px;
+	
+
+	font-weight: 700;
+	
+
+	text-align: center;
+	
+
+	}
+	
+
+	.sold-positive { color: var(--green); }
+	
+
+	.sold-negative { color: var(--red); }
+	
+
+	.sold-zero { color: var(--muted); }
+	
+
+	.zoho-display {
+	font-size: 15px;
+	font-weight: 700;
+	text-align: center;
+	}
+	
+
+	.zoho-match { color: var(--muted); }
+	
+
+	.zoho-mismatch { color: var(--red); font-weight: 800; }
+	
+
+	
+
+	
+
+	/* ACTION BUTTONS */
+	
+
+	.action-bar {
+	
+
+	display: flex;
+	
+
+	gap: 10px;
+	
+
+	margin-bottom: 12px;
+	
+
+	}
+	
+
+	.btn {
+	
+
+	flex: 1;
+	
+
+	padding: 14px;
+	
+
+	border: none;
+	
+
+	border-radius: 10px;
+	
+
+	font-size: 14px;
+	
+
+	font-weight: 700;
+	
+
+	cursor: pointer;
+	
+
+	transition: all 0.15s;
+	
+
+	}
+	
+
+	.btn:active { transform: scale(0.97); }
+	
+
+	.btn-primary { background: var(--red); color: white; }
+	
+
+	.btn-secondary { background: #444; color: white; }
+	
+
+	.btn-success { background: var(--green); color: white; }
+	
+
+	.btn-print { background: var(--dark); color: white; }
+	
+
+	
+
+	
+
+	/* STATUS BAR */
+	
+
+	.status-bar {
+	
+
+	background: white;
+	
+
+	border-radius: 10px;
+	
+
+	padding: 12px 14px;
+	
+
+	margin-bottom: 12px;
+	
+
+	display: flex;
+	
+
+	gap: 16px;
+	
+
+	font-size: 12px;
+	
+
+	}
+	
+
+	.status-item { flex: 1; text-align: center; }
+	
+
+	.status-val { font-size: 20px; font-weight: 800; }
+	
+
+	.status-label { color: var(--muted); margin-top: 2px; }
+	
+
+	
+
+	
+
+	/* LOADING / MESSAGES */
+	
+
+	.loading {
+	
+
+	text-align: center;
+	
+
+	padding: 40px;
+	
+
+	color: var(--muted);
+	
+
+	font-size: 14px;
+	
+
+	}
+	
+
+	.spinner {
+	
+
+	width: 30px; height: 30px;
+	
+
+	border: 3px solid var(--border);
+	
+
+	border-top-color: var(--red);
+	
+
+	border-radius: 50%;
+	
+
+	animation: spin 0.8s linear infinite;
+	
+
+	margin: 0 auto 12px;
+	
+
+	}
+	
+
+	@keyframes spin { to { transform: rotate(360deg); } }
+	
+
+	
+
+	
+
+	.toast {
+	
+
+	position: fixed;
+	
+
+	bottom: 20px;
+	
+
+	left: 50%;
+	
+
+	transform: translateX(-50%);
+	
+
+	background: var(--dark);
+	
+
+	color: white;
+	
+
+	padding: 12px 24px;
+	
+
+	border-radius: 25px;
+	
+
+	font-size: 14px;
+	
+
+	font-weight: 600;
+	
+
+	z-index: 1000;
+	
+
+	animation: slideUp 0.3s ease;
+	
+
+	max-width: 90vw;
+	
+
+	text-align: center;
+	
+
+	}
+	
+
+	.toast.success { background: var(--green); }
+	
+
+	.toast.error { background: var(--red); }
+	
+
+	@keyframes slideUp { from { bottom: 0; opacity: 0; } to { bottom: 20px; opacity: 1; } }
+	
+
+	
+
+	
+
+	/* SUMMARY SCREEN */
+	
+
+	.summary-card {
+	
+
+	background: white;
+	
+
+	border-radius: 10px;
+	
+
+	padding: 16px;
+	
+
+	margin-bottom: 12px;
+	
+
+	}
+	
+
+	.summary-title { font-size: 16px; font-weight: 800; margin-bottom: 12px; color: var(--dark); }
+	
+
+	.summary-row { display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+	
+
+	.summary-row:last-child { border-bottom: none; }
+	
+
+	.summary-total { font-weight: 700; color: var(--green); }
+	
+
+	
+
+	
+
+	/* PRINT STYLES */
+	
+
+	@media print {
+	
+
+	.no-print { display: none !important; }
+	
+
+	body { background: white; }
+	
+
+	.product-row { break-inside: avoid; }
+	
+
+	}
+	
+
+	</style>
+	
+
+	</head>
+	
+
+	<body>
+	
+
+	
+
+	
+
+	<!-- HEADER -->
+	
+
+	<div class="header no-print">
+	
+
+	<h1><span class="logo">FEN</span>MEAT Sales</h1>
+	
+
+	<div class="header-right" id="connectionStatus">⚪ Connecting...</div>
+	
+
+	</div>
+	
+
+	
+
+	
+
+	<!-- DATE BAR -->
+	
+
+	<div class="date-bar no-print">
+	
+
+	<label>📅 Date:</label>
+	
+
+	<input type="date" id="dateInput" onchange="onDateChange()">
+	
+
+	</div>
+	
+
+	
+
+	
+
+	<!-- MODE TOGGLE -->
+	
+
+	<div class="mode-bar no-print">
+	
+
+	<button class="mode-btn morning active" id="btnMorning" onclick="setMode('morning')">🌅 MORNING — Load OUT</button>
+	
+
+	<button class="mode-btn evening" id="btnEvening" onclick="setMode('evening')">🌙 EVENING — Capture IN</button>
+	<button class="mode-btn cashup" id="btnCashUp" onclick="setMode('cashup')">💰 CASH UP</button>
+	
+
+	</div>
+	
+
+	
+
+	
+
+	<!-- ROUTE TABS -->
+	
+
+	<div class="route-tabs no-print" id="routeTabs"></div>
+	
+
+	
+
+	
+
+	<!-- MAIN CONTENT -->
+	
+
+	<div class="content" id="mainContent">
+	
+
+	<div class="loading">
+	
+
+	<div class="spinner"></div>
+	
+
+	Select a date to begin
+	
+
+	</div>
+	
+
+	</div>
+	
+
+	
+
+	
+
+	<script>
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// CONFIGURATION
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbzOvHW0qLnNQUP_kgImFdAXNcU7SMDsA6vYOFfeyyuBrs7j4MOrtWBgvoMv8Wba_A1yYw/exec';
+	
+
+	const NEW_SHEET_ID = '1UzTdOY9_Ade5bQ4FsQz5_gMgQNmiWWEwIYDoRUKPpak';
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// PRODUCTS (32 products - full list)
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	const PRODUCTS = [
+	
+
+	{code:'W01', name:'BRAAI WORS', price:184},
+	
+
+	{code:'W02', name:'OUMA', price:104},
+	
+
+	{code:'W03', name:'CHAKALAKA', price:104},
+	
+
+	{code:'W04', name:'SUPERBRAAI', price:104},
+	
+
+	{code:'W05', name:'BABALAS WORS', price:104},
+	
+
+	{code:'W06', name:'BOEREWORS', price:120},
+	
+
+	{code:'W07', name:'PATTIES', price:96},
+	
+
+	{code:'W08', name:'MINCE', price:96},
+	
+
+	{code:'R01', name:'RUSSIAN 6', price:200},
+	
+
+	{code:'R02', name:'RUSSIAN 5', price:176},
+	
+
+	{code:'R03', name:'RUSSIAN 4', price:152},
+	
+
+	{code:'R04', name:'RUSSIAN 3', price:120},
+	
+
+	{code:'R05', name:'ECONO RUSSIAN', price:192},
+	
+
+	{code:'R06', name:'CHEESE RUSSIAN', price:232},
+	
+
+	{code:'R07', name:'BABALAS RUSSIAN', price:232},
+	
+
+	{code:'R08', name:'JUMBO RUSSIAN', price:100},
+	
+
+	{code:'V01', name:'VIENNA', price:160},
+	
+
+	{code:'V02', name:'CHEESE VIENNA', price:176},
+	
+
+	{code:'P01', name:'PIZZA TOPPINGS', price:200},
+	
+
+	{code:'P02', name:'POLONY SMALL', price:56},
+	
+
+	{code:'P03', name:'POLONY MED', price:88},
+	
+
+	{code:'P04', name:'POLONY LONG', price:136},
+	
+
+	{code:'C01', name:'CHICKEN BURGER', price:108},
+	
+
+	{code:'C02', name:'CHICKEN STEAK', price:108},
+	
+
+	{code:'C03', name:'CHICKEN NUGGETS', price:108},
+	
+
+	{code:'S01', name:'SIX GUN 20g', price:95},
+	
+
+	{code:'S02', name:'SIX GUN 200g', price:20},
+	
+
+	{code:'S03', name:'CHICKEN SOUPPACK', price:300},
+	
+
+	{code:'O01', name:'HEADS & FEET', price:200},
+	
+
+	{code:'O02', name:'CHICKEN NECKS', price:220},
+	
+
+	{code:'O03', name:'CHICKEN LIVERS', price:155},
+	
+
+	];
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// ROUTE LOGIC
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	function getRoutesForDate(dateStr) {
+	
+
+	const d = new Date(dateStr + 'T12:00:00');
+	
+
+	const day = d.getDay(); // 0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat
+	
+
+	// Friday alternation anchored to a known date (19 June 2026 = STILBAAI), counted in whole weeks.
+	// This avoids calendar week-of-year drift across year boundaries.
+	const altAnchor = new Date('2026-06-19T12:00:00');
+	const weeksFromAnchor = Math.round((d - altAnchor) / (7 * 86400000));
+	const isEvenWeek = weeksFromAnchor % 2 === 0;
+	
+
+	
+
+	
+
+	if (day === 1) return [{name:'GEORGE', day:'Monday', late:false}];
+	
+
+	if (day === 2) return [
+	
+
+	{name:'KNYSNA', day:'Tuesday', late:false},
+	
+
+	{name:'RIVERSDALE', day:'Tuesday', late:false},
+	
+
+	{name:'GROOTBRAK', day:'Tuesday', late:true},
+	
+
+	];
+	
+
+	if (day === 3) return [
+	
+
+	{name:'PACALTSDORP', day:'Wednesday', late:false},
+	
+
+	{name:'CRAGS', day:'Wednesday', late:false},
+	
+
+	];
+	
+
+	if (day === 4) return [
+	
+
+	{name:'MOSSEL BAY', day:'Thursday', late:false},
+	
+
+	{name:'PLETT', day:'Thursday', late:false},
+	
+
+	];
+	
+
+	if (day === 5) {
+	
+
+	const altRoute = isEvenWeek ? 'STILBAAI' : 'OUDTSHOORN';
+	
+
+	return [
+	
+
+	{name:'THEMBALETHU', day:'Friday', late:false},
+	
+
+	{name:altRoute, day:'Friday', late:false},
+	
+
+	];
+	
+
+	}
+	
+
+	return [];
+	
+
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// STATE
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	let state = {
+	
+
+	date: '',
+	
+
+	mode: 'morning',
+	
+
+	routes: [],
+	
+
+	activeRoute: '',
+	
+
+	// Per route data: { routeName: { products: [{code, name, price, out, in, forecast}] } }
+	
+
+	routeData: {},
+	
+
+	forecastLoaded: false,
+	
+
+	};
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// INIT
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	window.onload = function() {
+	
+
+	// Set today's date
+	
+
+	const today = new Date();
+	
+
+	const yyyy = today.getFullYear();
+	
+
+	const mm = String(today.getMonth()+1).padStart(2,'0');
+	
+
+	const dd = String(today.getDate()).padStart(2,'0');
+	
+
+	document.getElementById('dateInput').value = `${yyyy}-${mm}-${dd}`;
+	
+
+	onDateChange();
+	
+
+	
+
+	
+
+	// Test connection to Apps Script
+	
+
+	testConnection();
+	
+
+	};
+	
+
+	
+
+	
+
+	async function testConnection() {
+	
+
+	try {
+	
+
+	const url = `${SCRIPT_URL}?action=ping&sheetId=${NEW_SHEET_ID}`;
+	
+
+	const resp = await fetch(url);
+	
+
+	const data = await resp.json();
+	
+
+	if (data.status === 'ok') {
+	
+
+	setStatus('🟢 Connected', 'green');
+	
+
+	} else {
+	
+
+	setStatus('🟡 Script connected', 'orange');
+	
+
+	}
+	
+
+	} catch(e) {
+	
+
+	setStatus('🔴 Offline — using forecast data', 'red');
+	
+
+	}
+	
+
+	}
+	
+
+	
+
+	
+
+	function setStatus(msg, color) {
+	
+
+	const el = document.getElementById('connectionStatus');
+	
+
+	el.textContent = msg;
+	
+
+	el.style.color = color === 'green' ? '#27AE60' : color === 'red' ? '#E74C3C' : '#F39C12';
+	
+
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// DATE CHANGE
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	function onDateChange() {
+	
+
+	const dateStr = document.getElementById('dateInput').value;
+	
+
+	if (!dateStr) return;
+	
+
+	
+
+	
+
+	state.date = dateStr;
+	
+
+	state.routes = getRoutesForDate(dateStr);
+	
+
+	state.forecastLoaded = false;
+	
+
+	
+
+	
+
+	if (state.routes.length === 0) {
+	
+
+	document.getElementById('routeTabs').innerHTML = '';
+	
+
+	document.getElementById('mainContent').innerHTML = `
+	
+
+	<div class="loading">
+	
+
+	<div style="font-size:40px;margin-bottom:12px">😴</div>
+	
+
+	<strong>No routes today</strong><br>
+	
+
+	<span style="color:var(--muted)">Routes run Monday to Friday only</span>
+	
+
+	</div>`;
+	
+
+	return;
+	
+
+	}
+	
+
+	
+
+	
+
+	// Init route data
+	
+
+	state.routes.forEach(r => {
+	
+
+	if (!state.routeData[r.name]) {
+	
+
+	state.routeData[r.name] = {
+	
+
+	products: PRODUCTS.map(p => ({...p, out: 0, inQty: 0, forecast: 0, loaded: false}))
+	
+
+	};
+	
+
+	}
+	
+
+	});
+	
+
+	
+
+	
+
+	state.activeRoute = state.routes[0].name;
+	
+
+	renderRouteTabs();
+	
+
+	loadForecastData();
+	
+
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// LOAD FORECAST FROM GOOGLE SHEETS
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	async function loadForecastData() {
+	
+
+	renderContent(); // Show loading state
+	
+
+	
+
+	
+
+	for (const route of state.routes) {
+	
+
+	try {
+	
+
+	const url = `${SCRIPT_URL}?action=getForecast&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+	
+
+	const resp = await fetch(url);
+	
+
+	const data = await resp.json();
+	
+
+	
+
+	
+
+	if (data.products && data.products.length > 0) {
+	
+
+	// Map forecast data to products
+	
+
+	state.routeData[route.name].products = PRODUCTS.map(p => {
+	
+
+	const f = data.products.find(fp => fp.code === p.code);
+	
+
+	return {
+	
+
+	...p,
+	
+
+	out: f ? f.qty : 0,
+	
+
+	forecast: f ? f.qty : 0,
+	
+
+	inQty: 0,
+	
+
+	loaded: true,
+	
+
+	};
+	
+
+	});
+	
+
+	} else {
+	
+
+	// Use FORECAST sheet averages from our new sheet as fallback
+	
+
+	await loadFromNewForecastSheet(route.name);
+	
+
+	}
+	
+
+	} catch(e) {
+	
+
+	// Fallback to new sheet direct
+	
+
+	await loadFromNewForecastSheet(route.name);
+	
+
+	}
+
+	// Apply any saved Morning Load override so confirmed loads persist (restored 23 June 2026)
+	await applyLoadLogOverride(route.name);
+	
+	// Apply any saved Evening Capture IN override so captured sales persist (added 25 June 2026)
+	await applySalesLogOverride(route.name);
+	
+	
+
+	}
+	
+
+	
+
+	
+
+	state.forecastLoaded = true;
+	
+
+	renderContent();
+	
+
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	// APPLY SAVED MORNING LOAD (restored 23 June 2026 — confirmed loads must persist)
+	// ═══════════════════════════════════════════════════════════════════
+	async function applyLoadLogOverride(routeName) {
+	try {
+	const url = `${SCRIPT_URL}?action=getLoadLog&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+	const resp = await fetch(url);
+	const data = await resp.json();
+	if (data.found && data.products && data.products.length > 0) {
+	state.routeData[routeName].products = state.routeData[routeName].products.map(p => {
+	const saved = data.products.find(sp => sp.code === p.code);
+	return saved ? { ...p, out: saved.qty } : p;
+	});
+	}
+	} catch (e) {
+	// No connection - keep forecast values, don't block the app
+	}
+	}
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	// APPLY SAVED EVENING CAPTURE IN (added 25 June 2026 — captured sales must persist)
+	// IN is reconstructed as OUT (already overridden above) minus SOLD from SALES_LOG,
+	// since raw IN is not stored directly in SALES_LOG.
+	// ═══════════════════════════════════════════════════════════════════
+	async function applySalesLogOverride(routeName) {
+	try {
+	const url = `${SCRIPT_URL}?action=getSalesLog&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+	const resp = await fetch(url);
+	const data = await resp.json();
+	if (data.found && data.products && data.products.length > 0) {
+	state.routeData[routeName].products = state.routeData[routeName].products.map(p => {
+	const soldRow = data.products.find(sp => sp.code === p.code);
+	if (!soldRow) return p;
+	const inQty = Math.max(0, p.out - soldRow.sold);
+	return { ...p, inQty: inQty };
+	});
+	}
+	} catch (e) {
+	// No connection - keep default inQty, don't block the app
+	}
+	}
+	
+
+	async function loadFromNewForecastSheet(routeName) {
+	
+
+	try {
+	
+
+	// Read from FORECAST sheet in new Master File
+	
+
+	const url = `${SCRIPT_URL}?action=getNewForecast&route=${encodeURIComponent(routeName)}&sheetId=${NEW_SHEET_ID}`;
+	
+
+	const resp = await fetch(url);
+	
+
+	const data = await resp.json();
+	
+
+	
+
+	
+
+	if (data.products && data.products.length > 0) {
+	
+
+	state.routeData[routeName].products = PRODUCTS.map(p => {
+	
+
+	const f = data.products.find(fp => fp.code === p.code);
+	
+
+	const qty = f ? Math.round(f.avg_qty) : 0;
+	
+
+	return { ...p, out: qty, forecast: qty, inQty: 0, loaded: true };
+	
+
+	});
+	
+
+	} else {
+	
+
+	// Mark as loaded with zeros
+	
+
+	state.routeData[routeName].products = PRODUCTS.map(p => ({
+	
+
+	...p, out: 0, forecast: 0, inQty: 0, loaded: true
+	
+
+	}));
+	
+
+	}
+	
+
+	} catch(e) {
+	
+
+	// No connection - use zeros
+	
+
+	state.routeData[routeName].products = PRODUCTS.map(p => ({
+	
+
+	...p, out: 0, forecast: 0, inQty: 0, loaded: true
+	
+
+	}));
+	
+
+	}
+	
+
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// RENDER ROUTE TABS
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	function renderRouteTabs() {
+	
+
+	const tabsEl = document.getElementById('routeTabs');
+	
+
+	tabsEl.innerHTML = state.routes.map(r => `
+	
+
+	<button class="route-tab ${r.name === state.activeRoute ? 'active' : ''}"
+	
+
+	onclick="setActiveRoute('${r.name}')">
+	
+
+	${r.name}
+	
+
+	${r.late ? '<span class="late-badge">13:00</span>' : ''}
+	
+
+	</button>
+	
+
+	`).join('');
+	
+
+	}
+	
+
+	
+
+	
+
+	function setActiveRoute(name) {
+	
+
+	state.activeRoute = name;
+	
+
+	renderRouteTabs();
+	
+
+	renderContent();
+	
+
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// MODE TOGGLE
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	function setMode(mode) {
+	
+
+	state.mode = mode;
+	
+
+	document.getElementById('btnMorning').className = `mode-btn morning ${mode === 'morning' ? 'active' : ''}`;
+	
+
+	document.getElementById('btnEvening').className = `mode-btn evening ${mode === 'evening' ? 'active' : ''}`;
+	document.getElementById('btnCashUp').className = `mode-btn cashup ${mode === 'cashup' ? 'active' : ''}`;
+	
+
+	renderContent();
+	
+
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// RENDER MAIN CONTENT
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	function renderContent() {
+	
+
+	const route = state.routes.find(r => r.name === state.activeRoute);
+	
+
+	if (!route) return;
+	
+
+	
+
+	
+
+	const rData = state.routeData[state.activeRoute];
+	
+
+	if (!rData || !rData.products[0].loaded) {
+	
+
+	document.getElementById('mainContent').innerHTML = `
+	
+
+	<div class="loading">
+	
+
+	<div class="spinner"></div>
+	
+
+	Loading ${state.activeRoute} data...
+	
+
+	</div>`;
+	
+
+	return;
+	
+
+	}
+	
+
+	
+
+	
+
+	const products = rData.products;
+	
+
+	const totalOut = products.reduce((s, p) => s + p.out, 0);
+	
+
+	const totalIn = products.reduce((s, p) => s + p.inQty, 0);
+	
+
+	const totalSold = totalOut - totalIn;
+	
+
+	const totalValue = products.reduce((s, p) => s + (p.out - p.inQty) * p.price, 0);
+	
+
+	
+
+	
+
+	if (state.mode === 'morning') {
+	renderMorning(route, products, totalOut, totalValue);
+	} else if (state.mode === 'evening') {
+	renderEvening(route, products, totalOut, totalIn, totalSold, totalValue);
+	} else {
+	renderCashUp(route, totalValue);
+	}
+	
+
+	}
+	
+
+	
+
+	
+
+	function renderMorning(route, products, totalOut, totalValue) {
+	
+
+	const html = `
+	
+
+	<div class="route-summary">
+	
+
+	<div>
+	
+
+	<div class="route-name">${route.name}</div>
+	
+
+	<div class="route-day">📅 ${route.day} — ${state.date}</div>
+	
+
+	</div>
+	
+
+	<div class="totals">
+	
+
+	<div class="total-val">${totalOut} bags</div>
+	
+
+	<div>Load Total</div>
+	
+
+	</div>
+	
+
+	</div>
+	
+
+	
+
+	
+
+	<div class="action-bar">
+	
+
+	<button class="btn btn-print" onclick="printMorningLoad()">🖨️ Print List</button>
+	
+
+	<button class="btn btn-primary" onclick="confirmMorning()">✅ Confirm Load</button>
+	
+
+	</div>
+	
+
+	
+
+	
+
+	<div class="product-list">
+	
+
+	<div class="product-header morning-mode">
+	
+
+	<div>PRODUCT</div>
+	
+
+	<div style="text-align:center">FCST</div>
+	
+
+	<div style="text-align:center">OUT QTY</div>
+	
+
+	<div style="text-align:center">✓</div>
+	
+
+	</div>
+	
+
+	${products.map((p, i) => `
+	
+
+	<div class="product-row morning-mode">
+	
+
+	<div>
+	
+
+	<div class="product-name">${p.name}</div>
+	
+
+	<div class="product-code">${p.code}</div>
+	
+
+	</div>
+	
+
+	<div class="out-display" style="color:var(--muted);font-size:13px">${p.forecast}</div>
+	
+
+	<div>
+	
+
+	<input type="number" class="qty-input ${p.out !== p.forecast ? 'modified' : ''}"
+	
+
+	id="out_${i}" value="${p.out}" min="0"
+	
+
+	oninput="updateOut(${i}, this.value)"
+	
+
+	onfocus="this.select()">
+	
+
+	</div>
+	
+
+	<div style="text-align:center">
+	<input type="checkbox" class="load-check" ${p.checked ? 'checked' : ''}
+	onchange="toggleChecked(${i}, this.checked)">
+	</div>
+	
+
+	</div>
+	
+
+	`).join('')}
+	
+
+	</div>
+	
+
+	`;
+	
+
+	document.getElementById('mainContent').innerHTML = html;
+	
+
+	}
+	
+
+	
+
+	
+
+	function renderEvening(route, products, totalOut, totalIn, totalSold, totalValue) {
+	
+
+	const html = `
+	
+
+	<div class="route-summary">
+	
+
+	<div>
+	
+
+	<div class="route-name">${route.name}</div>
+	
+
+	<div class="route-day">📅 ${route.day} — ${state.date}</div>
+	
+
+	</div>
+	
+
+	<div class="totals">
+	
+
+	<div class="total-val">R ${totalValue.toLocaleString('en-ZA')}</div>
+	
+
+	<div>Sales Value</div>
+	
+
+	</div>
+	
+
+	</div>
+	
+
+	
+
+	
+
+	<div class="status-bar">
+	
+
+	<div class="status-item">
+	
+
+	<div class="status-val" style="color:var(--dark)">${totalOut}</div>
+	
+
+	<div class="status-label">OUT</div>
+	
+
+	</div>
+	
+
+	<div class="status-item">
+	
+
+	<div class="status-val" style="color:var(--blue)">${totalIn}</div>
+	
+
+	<div class="status-label">IN (Returns)</div>
+	
+
+	</div>
+	
+
+	<div class="status-item">
+	
+
+	<div class="status-val" style="color:var(--green)">${totalSold}</div>
+	
+
+	<div class="status-label">SOLD</div>
+	
+
+	</div>
+	
+
+	</div>
+	
+
+	
+
+	
+
+	<div class="action-bar">
+	
+
+	<button class="btn btn-secondary" onclick="printRoute()">🖨️ Print</button>
+	
+
+	<button class="btn btn-success" onclick="saveSalesData()">💾 Save Sales</button>
+	
+
+	</div>
+	
+
+	
+
+	
+
+	<div class="product-list">
+	
+
+	<div class="product-header evening-mode">
+	
+
+	<div>PRODUCT</div>
+	
+
+	<div style="text-align:center">OUT</div>
+	
+
+	<div style="text-align:center">IN</div>
+	
+
+	<div style="text-align:center">SOLD</div>
+	
+
+	<div style="text-align:center">ZOHO</div>
+	
+
+	</div>
+	
+
+	${products.map((p, i) => {
+	
+
+	const sold = p.out - p.inQty;
+	
+
+	const soldClass = sold > 0 ? 'sold-positive' : sold < 0 ? 'sold-negative' : 'sold-zero';
+	
+
+	return `
+	
+
+	<div class="product-row evening-mode">
+	
+
+	<div>
+	
+
+	<div class="product-name">${p.name}</div>
+	
+
+	<div class="product-code">${p.code}</div>
+	
+
+	</div>
+	
+
+	<div class="out-display">${p.out}</div>
+	
+
+	<div>
+	
+
+	<input type="number" class="qty-input"
+	
+
+	id="in_${i}" value="${p.inQty}" min="0"
+	
+
+	oninput="updateIn(${i}, this.value)"
+	
+
+	onfocus="this.select()">
+	
+
+	</div>
+	
+
+	<div class="sold-display ${soldClass}">${sold}</div>
+	
+
+	<div class="zoho-display" id="zoho_${i}">–</div>
+	
+
+	</div>
+	
+
+	`;
+	
+
+	}).join('')}
+	
+
+	</div>
+	
+
+	`;
+	
+
+	document.getElementById('mainContent').innerHTML = html;
+	
+
+	loadZohoItemSales(route.name);
+	
+
+	}
+
+	// ═══════════════════════════════════════════════════════════════════
+	// ZOHO ITEM SALES CHECK (added 26 June 2026) — Evening Capture IN 4th column
+	// Compares SOLD (stock) against ZOHO (invoiced qty) so a mismatch is visible at a glance
+	// ═══════════════════════════════════════════════════════════════════
+	async function loadZohoItemSales(routeName) {
+	try {
+	const url = `${SCRIPT_URL}?action=getZohoItemSales&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+	const resp = await fetch(url);
+	const data = await resp.json();
+	if (data.status !== 'ok') return;
+	const zohoMap = {};
+	(data.products || []).forEach(p => { zohoMap[p.code] = p.zohoQty; });
+	const products = state.routeData[routeName].products;
+	products.forEach((p, i) => {
+	const zohoQty = zohoMap.hasOwnProperty(p.code) ? zohoMap[p.code] : 0;
+	p.zohoQty = zohoQty;
+	const el = document.getElementById(`zoho_${i}`);
+	if (!el) return;
+	const sold = p.out - p.inQty;
+	el.textContent = zohoQty;
+	el.className = `zoho-display ${zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
+	});
+	} catch (e) {
+	// No connection - leave ZOHO column blank, don't block the app
+	}
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// UPDATE HANDLERS
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	function updateOut(idx, val) {
+	
+
+	const v = parseInt(val) || 0;
+	
+
+	state.routeData[state.activeRoute].products[idx].out = v;
+	
+
+	// Update sold display if in evening mode
+	
+
+	const soldEl = document.getElementById('mainContent').querySelectorAll('.sold-display')[idx];
+	
+
+	if (soldEl) {
+	
+
+	const p = state.routeData[state.activeRoute].products[idx];
+	
+
+	const sold = p.out - p.inQty;
+	
+
+	soldEl.textContent = sold;
+	
+
+	soldEl.className = `sold-display ${sold > 0 ? 'sold-positive' : sold < 0 ? 'sold-negative' : 'sold-zero'}`;
+	
+
+	
+
+	const zohoEl = document.getElementById('mainContent').querySelectorAll('.zoho-display')[idx];
+	if (zohoEl && typeof p.zohoQty === 'number') {
+	zohoEl.className = `zoho-display ${p.zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
+	}
+	}
+	
+
+	updateTotals();
+	
+
+	}
+
+	// Tick box for Morning Load — visual loading checklist only (not saved to the
+	// backend; matches the same idea as the ✓ column on the printed paper list)
+	function toggleChecked(idx, checked) {
+	state.routeData[state.activeRoute].products[idx].checked = checked;
+	}
+	
+
+	
+
+	
+
+	function updateIn(idx, val) {
+	
+
+	const v = parseInt(val) || 0;
+	
+
+	state.routeData[state.activeRoute].products[idx].inQty = v;
+	
+
+	// Update sold display
+	
+
+	const rows = document.querySelectorAll('.product-row.evening-mode');
+	
+
+	if (rows[idx]) {
+	
+
+	const p = state.routeData[state.activeRoute].products[idx];
+	
+
+	const sold = p.out - p.inQty;
+	
+
+	const soldEl = rows[idx].querySelector('.sold-display');
+	
+
+	if (soldEl) {
+	
+
+	soldEl.textContent = sold;
+	
+
+	soldEl.className = `sold-display ${sold > 0 ? 'sold-positive' : sold < 0 ? 'sold-negative' : 'sold-zero'}`;
+	
+
+	
+
+	const zohoEl = rows[idx].querySelector('.zoho-display');
+	if (zohoEl && typeof p.zohoQty === 'number') {
+	zohoEl.className = `zoho-display ${p.zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
+	}
+	}
+	
+
+	}
+	
+
+	updateTotals();
+	
+
+	}
+	
+
+	
+
+	
+
+	function updateTotals() {
+	
+
+	const products = state.routeData[state.activeRoute].products;
+	
+
+	const totalOut = products.reduce((s, p) => s + p.out, 0);
+	
+
+	const totalIn = products.reduce((s, p) => s + p.inQty, 0);
+	
+
+	const totalSold = totalOut - totalIn;
+	
+
+	const totalValue = products.reduce((s, p) => s + (p.out - p.inQty) * p.price, 0);
+	
+
+	
+
+	
+
+	// Update status bars
+	
+
+	const vals = document.querySelectorAll('.status-val');
+	
+
+	if (vals.length >= 3) {
+	
+
+	vals[0].textContent = totalOut;
+	
+
+	vals[1].textContent = totalIn;
+	
+
+	vals[2].textContent = totalSold;
+	
+
+	}
+	
+
+	const totalValEl = document.querySelector('.total-val');
+	
+
+	if (totalValEl) {
+	
+
+	totalValEl.textContent = `R ${totalValue.toLocaleString('en-ZA')}`;
+	
+
+	}
+	
+
+	}
+
+async function renderCashUp(route, totalValue) {
+	document.getElementById('mainContent').innerHTML = `
+		<div class="route-summary">
+			<div>
+				<div class="route-name">${route.name}</div>
+				<div class="route-day">📅 ${route.day} — ${state.date}</div>
+			</div>
+			<div class="totals">
+				<div class="total-val">R ${totalValue.toLocaleString('en-ZA')}</div>
+				<div>Stock Sales Value</div>
+			</div>
+		</div>
+
+		<div id="zohoBox" style="padding:16px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin:12px 0;">
+			Loading Zoho figures...
+		</div>
+
+		<div id="denomBox" style="padding:16px;"></div>
+
+		<div class="action-bar">
+			<button class="btn btn-secondary" onclick="printCashUp()">🖨️ Print</button>
+			<button class="btn btn-success" onclick="saveCashUp(${totalValue})">💾 Save Cash Up</button>
+		</div>
+	`;
+
+	const denoms = [
+		{key:'r200', label:'R200', value:200},
+		{key:'r100', label:'R100', value:100},
+		{key:'r50', label:'R50', value:50},
+		{key:'r20', label:'R20', value:20},
+		{key:'r10', label:'R10', value:10},
+		{key:'r5', label:'R5', value:5},
+		{key:'r2', label:'R2', value:2},
+		{key:'r1', label:'R1', value:1},
+		{key:'r050', label:'50c', value:0.5}
+	];
+
+	document.getElementById('denomBox').innerHTML = `
+		<h3 style="margin-bottom:10px;">Cash Count</h3>
+		${denoms.map(d => `
+			<div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border);">
+				<span style="font-weight:600;">${d.label}</span>
+				<input type="number" min="0" id="denom_${d.key}" value="0"
+					style="width:80px;padding:8px;font-size:16px;text-align:center;border:1px solid var(--border);border-radius:6px;"
+					oninput="updateCashTotal()" onfocus="this.select()">
+				<span id="sub_${d.key}" style="width:90px;text-align:right;color:var(--muted);">R 0.00</span>
+			</div>
+		`).join('')}
+		<div style="display:flex;justify-content:space-between;padding:12px 0;font-weight:700;font-size:18px;">
+			<span>Counted Total</span>
+			<span id="cashCountedTotal">R 0.00</span>
+		</div>
+		<div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;font-size:18px;" id="diffRow">
+			<span>Cash Difference</span>
+			<span id="cashDiffValue">—</span>
+		</div>
+	`;
+
+	try {
+		const url = `${SCRIPT_URL}?action=getZohoSyncForRoute&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+		const resp = await fetch(url);
+		const data = await resp.json();
+
+		if (data.status === 'ok' && data.found) {
+			state.cashUpZoho = data.data;
+			document.getElementById('zohoBox').innerHTML = `
+				<h3 style="margin-bottom:10px;">Zoho Figures (${state.date})</h3>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Zoho Total Sales</span><b>R ${Number(data.data.zohoTotalSales).toLocaleString('en-ZA')}</b></div>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Cash (Zoho)</span><b>R ${Number(data.data.cashTotal).toLocaleString('en-ZA')}</b></div>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Shop2Shop</span><b>R ${Number(data.data.shop2shopTotal).toLocaleString('en-ZA')}</b></div>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>New Credit Today</span><b>R ${Number(data.data.newCreditToday).toLocaleString('en-ZA')}</b></div>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Credit Collected Today</span><b>R ${Number(data.data.creditCollectedToday).toLocaleString('en-ZA')}</b></div>
+			`;
+		} else {
+			state.cashUpZoho = null;
+			document.getElementById('zohoBox').innerHTML = `<div style="color:var(--orange);">⚠️ No Zoho sync data yet for ${route.name} on ${state.date}. Run the sync, or save anyway — Zoho fields will show as 0.</div>`;
+		}
+	} catch (err) {
+		state.cashUpZoho = null;
+		document.getElementById('zohoBox').innerHTML = `<div style="color:var(--red);">⚠️ Could not load Zoho data: ${err.message}</div>`;
+	}
+
+	// Apply any previously saved Cash Up counts so they persist (added 25 June 2026)
+	try {
+		const cuUrl = `${SCRIPT_URL}?action=getCashUpLog&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+		const cuResp = await fetch(cuUrl);
+		const cuData = await cuResp.json();
+		if (cuData.status === 'ok' && cuData.found) {
+			const fieldMap = {r200:'R200_QTY', r100:'R100_QTY', r50:'R50_QTY', r20:'R20_QTY', r10:'R10_QTY', r5:'R5_QTY', r2:'R2_QTY', r1:'R1_QTY', r050:'R0.50_QTY'};
+			Object.keys(fieldMap).forEach(key => {
+				const val = cuData.data[fieldMap[key]];
+				const el = document.getElementById(`denom_${key}`);
+				if (el && val !== undefined && val !== '') el.value = val;
+			});
+		}
+	} catch (e) {
+		// No connection - keep counts at 0, don't block the app
+	}
+
+	updateCashTotal();
+}
+
+function updateCashTotal() {
+	const denoms = [
+		{key:'r200', value:200}, {key:'r100', value:100}, {key:'r50', value:50},
+		{key:'r20', value:20}, {key:'r10', value:10}, {key:'r5', value:5},
+		{key:'r2', value:2}, {key:'r1', value:1}, {key:'r050', value:0.5}
+	];
+	let total = 0;
+	denoms.forEach(d => {
+		const qty = Number(document.getElementById(`denom_${d.key}`).value) || 0;
+		const sub = qty * d.value;
+		total += sub;
+		document.getElementById(`sub_${d.key}`).textContent = `R ${sub.toLocaleString('en-ZA', {minimumFractionDigits:2})}`;
+	});
+	document.getElementById('cashCountedTotal').textContent = `R ${total.toLocaleString('en-ZA', {minimumFractionDigits:2})}`;
+
+	const zoho = state.cashUpZoho;
+	const diffEl = document.getElementById('cashDiffValue');
+	if (zoho) {
+		const expectedCash = Number(zoho.cashTotal) || 0;
+		const shop2shop = Number(zoho.shop2shopTotal) || 0; // informational only, not used in cash diff
+		const diff = total - expectedCash; // Counted Cash vs Zoho Cash (fixed 25 June 2026)
+		diffEl.textContent = `R ${diff.toLocaleString('en-ZA', {minimumFractionDigits:2})} ${diff >= 0 ? '(Over)' : '(Short)'}`;
+		diffEl.style.color = diff === 0 ? 'var(--green)' : (diff > 0 ? 'var(--blue)' : 'var(--red)');
+	} else {
+		diffEl.textContent = '—';
+	}
+}
+
+async function saveCashUp(totalValue) {
+	const denoms = [
+		{key:'r200', value:200}, {key:'r100', value:100}, {key:'r50', value:50},
+		{key:'r20', value:20}, {key:'r10', value:10}, {key:'r5', value:5},
+		{key:'r2', value:2}, {key:'r1', value:1}, {key:'r050', value:0.5}
+	];
+	let cashCountedTotal = 0;
+	const counts = {};
+	denoms.forEach(d => {
+		const qty = Number(document.getElementById(`denom_${d.key}`).value) || 0;
+		counts[d.key] = qty;
+		cashCountedTotal += qty * d.value;
+	});
+
+	const zoho = state.cashUpZoho || {};
+	const expectedCash = Number(zoho.cashTotal) || 0;
+	const shop2shop = Number(zoho.shop2shopTotal) || 0; // informational only, not used in cash diff
+	const cashDifference = cashCountedTotal - expectedCash; // Counted Cash vs Zoho Cash (fixed 25 June 2026)
+
+	try {
+		const resp = await fetch(SCRIPT_URL, {
+			method: 'POST',
+			headers: {'Content-Type': 'text/plain'},
+			body: JSON.stringify({
+				action: 'writeCashUpLog',
+				sheetId: NEW_SHEET_ID,
+				date: state.date,
+				route: state.activeRoute,
+				cashUp: {
+					stockSalesValue: totalValue,
+					zohoTotalSales: Number(zoho.zohoTotalSales) || 0,
+					zohoCash: Number(zoho.cashTotal) || 0,
+					zohoShop2Shop: shop2shop,
+					newCreditToday: Number(zoho.newCreditToday) || 0,
+					creditCollectedToday: Number(zoho.creditCollectedToday) || 0,
+					...counts,
+					cashCountedTotal,
+					cashDifference
+				}
+			})
+		});
+		const data = await resp.json();
+		if (data.status === 'ok') {
+			showToast(`✅ Cash Up saved — Difference: R ${cashDifference.toLocaleString('en-ZA', {minimumFractionDigits:2})}`, 'success');
+		} else {
+			showToast(`❌ ${data.message}`, 'error');
+		}
+	} catch (err) {
+		showToast(`❌ Save failed: ${err.message}`, 'error');
+	}
+}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// CONFIRM MORNING LOAD
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	async function confirmMorning() {
+	const products = state.routeData[state.activeRoute].products;
+	const totalOut = products.reduce((s, p) => s + p.out, 0);
+	if (totalOut === 0) {
+	showToast('⚠️ No quantities entered', 'error');
+	return;
+	}
+	if (!confirm(`Confirm loading ${totalOut} bags for ${state.activeRoute}?\n\nThis cannot be undone.`)) return;
+	showToast('💾 Saving load...', '');
+	const rows = products.map(p => ({ code: p.code, name: p.name, qty: p.out }));
+	try {
+	const resp = await fetch(SCRIPT_URL, {
+	method: 'POST',
+	headers: {'Content-Type': 'text/plain'},
+	body: JSON.stringify({
+	action: 'writeLoadLog',
+	sheetId: NEW_SHEET_ID,
+	date: state.date,
+	route: state.activeRoute,
+	rows: rows
+	})
+	});
+	const data = await resp.json();
+	if (data.status === 'ok') {
+	showToast(`✅ ${state.activeRoute} load confirmed — ${totalOut} bags`, 'success');
+	setMode('evening');
+	} else {
+	showToast('⚠️ Save failed: ' + (data.message || 'unknown error'), 'error');
+	}
+	} catch (e) {
+	showToast('⚠️ Save failed - check connection', 'error');
+	}
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// SAVE SALES DATA TO GOOGLE SHEETS
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	async function saveSalesData() {
+	
+
+	const products = state.routeData[state.activeRoute].products;
+	
+
+	const totalSold = products.reduce((s, p) => s + (p.out - p.inQty), 0);
+	
+
+	const totalValue = products.reduce((s, p) => s + (p.out - p.inQty) * p.price, 0);
+	
+
+	
+
+	
+
+	if (totalSold <= 0) {
+	
+
+	showToast('⚠️ No sales to save', 'error');
+	
+
+	return;
+	
+
+	}
+	
+
+	
+
+	
+
+	if (!confirm(`Save sales for ${state.activeRoute}?\n\nTotal Sold: ${totalSold} bags\nValue: R ${totalValue.toLocaleString('en-ZA')}`)) return;
+	
+
+	
+
+	
+
+	showToast('💾 Saving...', '');
+	
+
+	
+
+	
+
+	const _d = new Date(state.date + 'T12:00:00');
+	const _dayNum = _d.getDay() === 0 ? 7 : _d.getDay();
+	_d.setDate(_d.getDate() - (_dayNum - 1));
+	const weekStart = _d.toISOString().split('T')[0];
+	
+
+	const salesRows = products
+	
+
+	.filter(p => (p.out - p.inQty) > 0)
+	
+
+	.map(p => ({
+	
+
+	date: state.date,
+	weekStart: weekStart,
+	
+
+	route: state.activeRoute,
+	
+
+	code: p.code,
+	
+
+	name: p.name,
+	
+
+	out: p.out,
+	
+
+	inQty: p.inQty,
+	
+
+	sold: p.out - p.inQty,
+	
+
+	price: p.price,
+	
+
+	value: (p.out - p.inQty) * p.price
+	
+
+	}));
+	
+
+	
+
+	
+
+	try {
+	
+
+	const resp = await fetch(SCRIPT_URL, {
+	
+
+	method: 'POST',
+	
+
+	headers: {'Content-Type': 'text/plain'},
+	
+
+	body: JSON.stringify({
+	
+
+	action: 'writeSalesLog',
+	
+
+	sheetId: NEW_SHEET_ID,
+	
+
+	date: state.date,
+	
+
+	route: state.activeRoute,
+	
+
+	rows: salesRows
+	
+
+	})
+	
+
+	});
+	
+
+	const data = await resp.json();
+	
+
+	if (data.status === 'ok') {
+	
+
+	showToast(`✅ Saved! ${salesRows.length} products — R ${totalValue.toLocaleString('en-ZA')}`, 'success');
+	
+
+	} else {
+	
+
+	throw new Error(data.message || 'Save failed');
+	
+
+	}
+	
+
+	} catch(e) {
+	
+
+	// Save locally as fallback
+	
+
+	const saved = JSON.stringify({date: state.date, route: state.activeRoute, rows: salesRows});
+	
+
+	console.log('SALES DATA (copy if needed):', saved);
+	
+
+	showToast('⚠️ Could not save to Sheet — see console for data', 'error');
+	
+
+	}
+	
+
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// PRINT
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	// CASH UP PRINTOUT (added 27 June 2026) — prints a record of the figures
+	// already entered on screen (denomination counts, Zoho figures, totals),
+	// not a blank form, since the Cash Up screen is already digitally filled in.
+	// ═══════════════════════════════════════════════════════════════════
+	function printCashUp() {
+	const route = state.routes.find(r => r.name === state.activeRoute);
+	const denoms = [
+	{key:'r200', label:'R200', value:200}, {key:'r100', label:'R100', value:100},
+	{key:'r50', label:'R50', value:50}, {key:'r20', label:'R20', value:20},
+	{key:'r10', label:'R10', value:10}, {key:'r5', label:'R5', value:5},
+	{key:'r2', label:'R2', value:2}, {key:'r1', label:'R1', value:1},
+	{key:'r050', label:'50c', value:0.5}
+	];
+
+	const counts = {};
+	let countedTotal = 0;
+	denoms.forEach(d => {
+	const el = document.getElementById(`denom_${d.key}`);
+	const qty = el ? (parseInt(el.value) || 0) : 0;
+	counts[d.key] = qty;
+	countedTotal += qty * d.value;
+	});
+
+	const zoho = state.cashUpZoho || {};
+	const zohoCash = Number(zoho.cashTotal) || 0;
+	const shop2shop = Number(zoho.shop2shopTotal) || 0;
+	const cashDifference = countedTotal - zohoCash;
+
+	function denomCell(d) {
+	return `<div class="denom-cell"><span class="denom-label">${d.label}</span><span class="box denom-box filled">${counts[d.key]}</span></div>`;
+	}
+
+	const printWin = window.open('', '_blank');
+	printWin.document.write(`
+	<html><head><title>FenMeat — ${state.activeRoute} — Cash Up</title>
+	<style>
+	@page { size: A4; margin: 12mm; }
+	body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #222; margin: 0; }
+
+	.header { display: flex; justify-content: space-between; align-items: flex-end;
+	border-bottom: 3px solid #C0392B; padding-bottom: 8px; margin-bottom: 20px; }
+	.header h1 { font-size: 23px; margin: 0; letter-spacing: 0.5px; }
+	.header h1 .fen { color: #C0392B; }
+	.header .route-name { font-size: 16px; font-weight: bold; margin-top: 3px; }
+	.header .meta { text-align: right; font-size: 11px; color: #555; line-height: 1.5; }
+
+	.box { border: 1.5px solid #333; border-radius: 3px; display: inline-flex;
+	align-items: center; justify-content: center; font-weight: bold; }
+	.box.filled { background: #f7f7f7; }
+
+	.cashup-card { border: 2px solid #1a1a1a; border-radius: 5px; overflow: hidden; }
+	.cashup-title { background: #C0392B; color: #fff; padding: 9px 16px; font-size: 15px; font-weight: bold; letter-spacing: 0.3px; }
+	.cashup-body { padding: 20px 24px; }
+
+	.cashup-columns { display: flex; gap: 34px; }
+	.denom-section { flex: 1.1; }
+	.denom-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 22px; }
+	.denom-cell { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+	.denom-label { font-weight: bold; width: 32px; }
+	.denom-box { width: 58px; height: 26px; font-size: 14px; }
+
+	.totals-section { flex: 1; border-left: 1px solid #ddd; padding-left: 28px; }
+	.totals-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-bottom: 14px; }
+	.totals-row .totals-label { color: #333; }
+	.totals-row .currency { color: #555; margin-right: 4px; }
+	.totals-box { min-width: 95px; height: 26px; padding: 0 8px; font-size: 14px; }
+	.totals-box.highlight { border-color: #C0392B; border-width: 2px; color: #C0392B; }
+
+	.zoho-recap { margin-top: 18px; padding-top: 14px; border-top: 1px solid #ddd;
+	display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 30px; font-size: 11.5px; color: #444; }
+	.zoho-recap div { display: flex; justify-content: space-between; }
+	</style></head><body>
+
+	<div class="header">
+	<div>
+	<h1><span class="fen">FEN</span>MEAT</h1>
+	<div class="route-name">${state.activeRoute} — CASH UP</div>
+	</div>
+	<div class="meta">📅 ${state.date}<br>${route.day}</div>
+	</div>
+
+	<div class="cashup-card">
+	<div class="cashup-title">CASH UP — ${state.activeRoute} — ${state.date}</div>
+	<div class="cashup-body">
+	<div class="cashup-columns">
+
+	<div class="denom-section">
+	<div class="denom-grid">
+	${denoms.map(denomCell).join('')}
+	</div>
+	</div>
+
+	<div class="totals-section">
+	<div class="totals-row"><span class="totals-label">Total Cash Counted</span><span><span class="currency">R</span><span class="box totals-box filled">${countedTotal.toFixed(2)}</span></span></div>
+	<div class="totals-row"><span class="totals-label">Zoho Cash (recorded)</span><span><span class="currency">R</span><span class="box totals-box filled">${zohoCash.toFixed(2)}</span></span></div>
+	<div class="totals-row"><span class="totals-label">Shop2Shop Total</span><span><span class="currency">R</span><span class="box totals-box filled">${shop2shop.toFixed(2)}</span></span></div>
+	<div class="totals-row"><span class="totals-label"><b>Cash Difference</b> (Over/Short)</span><span><span class="currency">R</span><span class="box totals-box highlight filled">${cashDifference.toFixed(2)}</span></span></div>
+	</div>
+
+	</div>
+
+	<div class="zoho-recap">
+	<div><span>Zoho Total Sales</span><b>R ${(Number(zoho.zohoTotalSales)||0).toFixed(2)}</b></div>
+	<div><span>New Credit Today</span><b>R ${(Number(zoho.newCreditToday)||0).toFixed(2)}</b></div>
+	<div><span>Credit Collected Today</span><b>R ${(Number(zoho.creditCollectedToday)||0).toFixed(2)}</b></div>
+	<div><span>Stock Sales Value</span><b>R ${(state.routeData[state.activeRoute].products.reduce((s,p)=>s+(p.out-p.inQty)*p.price,0)).toFixed(2)}</b></div>
+	</div>
+
+	</div>
+	</div>
+
+	<script>window.print(); window.close();<\/script>
+	</body></html>
+	`);
+	}
+
+	// ═══════════════════════════════════════════════════════════════════
+	// MORNING LOAD PRINTOUT — redesigned 26 June 2026: one page, with a
+	// fillable Cash Up section at the bottom (separate from printRoute(),
+	// which Evening's Print button still uses, untouched)
+	// ═══════════════════════════════════════════════════════════════════
+	function printMorningLoad() {
+	const products = state.routeData[state.activeRoute].products;
+	const route = state.routes.find(r => r.name === state.activeRoute);
+
+	// Split into two columns to keep the whole list compact enough for one page
+	const half = Math.ceil(products.length / 2);
+	const colA = products.slice(0, half);
+	const colB = products.slice(half);
+
+	function productTable(list) {
+	return `
+	<table>
+	<tr><th>Code</th><th>Product</th><th style="text-align:center">OUT</th><th style="text-align:center">✓</th><th style="text-align:center">IN</th></tr>
+	${list.map(p => `
+	<tr>
+	<td class="code">${p.code}</td>
+	<td>${p.name}</td>
+	<td class="num">${p.out || ''}</td>
+	<td class="num">☐</td>
+	<td class="num"></td>
+	</tr>
+	`).join('')}
+	</table>
+	`;
+	}
+
+	const denomLabels = ['R200','R100','R50','R20','R10','R5','R2','R1','50c'];
+	function denomCell(label) {
+	return `<div class="denom-cell"><span class="denom-label">${label}</span><span class="box denom-box"></span></div>`;
+	}
+
+	const printWin = window.open('', '_blank');
+	printWin.document.write(`
+	<html><head><title>FenMeat — ${state.activeRoute} — Morning Load</title>
+	<style>
+	@page { size: A4; margin: 12mm; }
+	body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #222; margin: 0; }
+
+	.header { display: flex; justify-content: space-between; align-items: flex-end;
+	border-bottom: 3px solid #C0392B; padding-bottom: 8px; margin-bottom: 16px; }
+	.header h1 { font-size: 23px; margin: 0; letter-spacing: 0.5px; }
+	.header h1 .fen { color: #C0392B; }
+	.header .route-name { font-size: 16px; font-weight: bold; margin-top: 3px; }
+	.header .meta { text-align: right; font-size: 11px; color: #555; line-height: 1.5; }
+
+	.columns { display: flex; gap: 18px; margin-bottom: 14px; }
+	.col { flex: 1; }
+	table { width: 100%; border-collapse: collapse; }
+	th { background: #1a1a1a; color: #fff; padding: 6px 8px; font-size: 10.5px; text-align: left; }
+	td { padding: 5px 8px; border-bottom: 1px solid #eee; font-size: 11px; }
+	tr:nth-child(even) td { background: #f7f7f7; }
+	.code { color: #999; font-size: 9px; }
+	.num { text-align: center; font-weight: bold; }
+
+	.box { border: 1.5px solid #333; border-radius: 3px; display: inline-block; }
+
+	.cashup-card { border: 2px solid #1a1a1a; border-radius: 5px; overflow: hidden; }
+	.cashup-title { background: #C0392B; color: #fff; padding: 9px 16px; font-size: 15px; font-weight: bold; letter-spacing: 0.3px; }
+	.cashup-body { padding: 14px 20px 12px; }
+
+	.cashup-columns { display: flex; gap: 30px; }
+	.denom-section { flex: 1.1; }
+	.denom-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 20px; }
+	.denom-cell { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+	.denom-label { font-weight: bold; width: 32px; }
+	.denom-box { width: 58px; height: 24px; }
+
+	.totals-section { flex: 1; border-left: 1px solid #ddd; padding-left: 26px; }
+	.totals-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-bottom: 12px; }
+	.totals-row .totals-label { color: #333; }
+	.totals-row .currency { color: #555; margin-right: 4px; }
+	.totals-box { width: 95px; height: 24px; }
+	.totals-box.highlight { border-color: #C0392B; border-width: 2px; }
+
+	.staff-section { margin-top: 18px; }
+	.staff-row { font-size: 13px; display: flex; align-items: center; margin-bottom: 11px; }
+	.staff-row:last-child { margin-bottom: 0; }
+	.staff-row span:first-child { font-weight: bold; width: 50px; }
+	.staff-line { display: inline-block; flex: 1; border-bottom: 1.5px solid #333; height: 14px; }
+	</style></head><body>
+
+	<div class="header">
+	<div>
+	<h1><span class="fen">FEN</span>MEAT</h1>
+	<div class="route-name">${state.activeRoute}</div>
+	</div>
+	<div class="meta">📅 ${state.date}<br>${route.day}${route.late ? ' · ⏰ LATE LOAD 13:00' : ''}</div>
+	</div>
+
+	<div class="columns">
+	<div class="col">${productTable(colA)}</div>
+	<div class="col">${productTable(colB)}</div>
+	</div>
+
+	<div class="cashup-card">
+	<div class="cashup-title">CASH UP — ${state.activeRoute} — ${state.date}</div>
+	<div class="cashup-body">
+	<div class="cashup-columns">
+
+	<div class="denom-section">
+	<div class="denom-grid">
+	${denomLabels.map(denomCell).join('')}
+	</div>
+	<div class="staff-section">
+	<div class="staff-row"><span>Sales:</span><span class="staff-line"></span></div>
+	<div class="staff-row"><span>Driver:</span><span class="staff-line"></span></div>
+	<div class="staff-row"><span>Stock:</span><span class="staff-line"></span></div>
+	</div>
+	</div>
+
+	<div class="totals-section">
+	<div class="totals-row"><span class="totals-label">Total Cash Counted</span><span><span class="currency">R</span><span class="box totals-box"></span></span></div>
+	<div class="totals-row"><span class="totals-label">Shop2Shop Total</span><span><span class="currency">R</span><span class="box totals-box"></span></span></div>
+	<div class="totals-row"><span class="totals-label">Stock Sales Value</span><span><span class="currency">R</span><span class="box totals-box"></span></span></div>
+	<div class="totals-row"><span class="totals-label"><b>Cash Difference</b> (Over/Short)</span><span><span class="currency">R</span><span class="box totals-box highlight"></span></span></div>
+	</div>
+
+	</div>
+
+	</div>
+	</div>
+
+	<script>window.print(); window.close();<\/script>
+	</body></html>
+	`);
+	}
+
+	function printRoute() {
+	
+
+	const products = state.routeData[state.activeRoute].products;
+	
+
+	const route = state.routes.find(r => r.name === state.activeRoute);
+	
+
+	
+
+	
+
+	const printWin = window.open('', '_blank');
+	
+
+	printWin.document.write(`
+	
+
+	<html><head><title>FenMeat — ${state.activeRoute}</title>
+	
+
+	<style>
+	
+
+	body { font-family: Arial, sans-serif; font-size: 12px; }
+	
+
+	h1 { font-size: 18px; margin-bottom: 4px; }
+	
+
+	.meta { color: #666; margin-bottom: 12px; font-size: 11px; }
+	
+
+	table { width: 100%; border-collapse: collapse; }
+	
+
+	th { background: #333; color: white; padding: 6px 8px; text-align: left; font-size: 11px; }
+	
+
+	td { padding: 5px 8px; border-bottom: 1px solid #eee; }
+	
+
+	tr:nth-child(even) td { background: #f9f9f9; }
+	
+
+	.code { color: #999; font-size: 10px; }
+	
+
+	.num { text-align: center; font-weight: bold; }
+	
+
+	.footer { margin-top: 16px; font-size: 11px; color: #666; border-top: 1px solid #ccc; padding-top: 8px; }
+	
+
+	</style></head><body>
+	
+
+	<h1>FenMeat — ${state.activeRoute}</h1>
+	
+
+	<div class="meta">📅 ${state.date} | ${route.day}${route.late ? ' | ⏰ LATE LOAD 13:00' : ''}</div>
+	
+
+	<table>
+	
+
+	<tr>
+	
+
+	<th>Code</th>
+	
+
+	<th>Product</th>
+	
+
+	<th style="text-align:center">OUT</th>
+	
+
+	<th style="text-align:center">✓</th>
+	
+
+	<th style="text-align:center">IN</th>
+	
+
+	</tr>
+	
+
+	${products.map(p => `
+	
+
+	<tr>
+	
+
+	<td class="code">${p.code}</td>
+	
+
+	<td>${p.name}</td>
+	
+
+	<td class="num">${p.out || ''}</td>
+	
+
+	<td class="num">☐</td>
+	
+
+	<td class="num"></td>
+	
+
+	</tr>
+	
+
+	`).join('')}
+	
+
+	</table>
+	
+
+	<div class="footer">
+	
+
+	CASH UP: R _____________ | Signed: _________________ | Date: ${state.date}
+	
+
+	</div>
+	
+
+	<script>window.print(); window.close();<\/script>
+	
+
+	</body></html>
+	
+
+	`);
+	
+
+	}
+	
+
+	
+
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	// TOAST
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	
+
+	function showToast(msg, type) {
+	
+
+	const existing = document.querySelector('.toast');
+	
+
+	if (existing) existing.remove();
+	
+
+	const t = document.createElement('div');
+	
+
+	t.className = `toast ${type}`;
+	
+
+	t.textContent = msg;
+	
+
+	document.body.appendChild(t);
+	
+
+	setTimeout(() => t.remove(), 3500);
+	
+
+	}
+	
+
+	</script>
+	
+
+	</body>
+	
+
+	</html>
