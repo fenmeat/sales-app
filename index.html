@@ -308,10 +308,10 @@
 	.route-tab {
 	
 
-	padding: 10px 14px;
+	padding: 14px 20px;
 	
 
-	font-size: 12px;
+	font-size: 17px;
 	
 
 	font-weight: 700;
@@ -479,10 +479,10 @@
 	}
 	
 
-	.product-header.morning-mode { grid-template-columns: 1fr 50px 70px; }
+	.product-header.morning-mode { grid-template-columns: 1fr 50px 70px 40px; }
 	
 
-	.product-header.evening-mode { grid-template-columns: 1fr 55px 55px 65px; }
+	.product-header.evening-mode { grid-template-columns: 1fr 45px 45px 55px 50px; }
 	
 
 	
@@ -510,10 +510,10 @@
 	}
 	
 
-	.product-row.morning-mode { grid-template-columns: 1fr 50px 70px; }
+	.product-row.morning-mode { grid-template-columns: 1fr 50px 70px 40px; }
 	
 
-	.product-row.evening-mode { grid-template-columns: 1fr 55px 55px 65px; }
+	.product-row.evening-mode { grid-template-columns: 1fr 45px 45px 55px 50px; }
 	
 
 	.product-row:last-child { border-bottom: none; }
@@ -593,6 +593,14 @@
 	}
 	
 
+	.load-check {
+	width: 24px;
+	height: 24px;
+	cursor: pointer;
+	accent-color: var(--green);
+	}
+	
+
 	
 
 	
@@ -637,6 +645,19 @@
 	
 
 	.sold-zero { color: var(--muted); }
+	
+
+	.zoho-display {
+	font-size: 15px;
+	font-weight: 700;
+	text-align: center;
+	}
+	
+
+	.zoho-match { color: var(--muted); }
+	
+
+	.zoho-mismatch { color: var(--red); font-weight: 800; }
 	
 
 	
@@ -1627,11 +1648,13 @@
 	
 
 	}
-	
 
-	// Check if a Morning Load was already confirmed for this route + date —
-	// if so, override with those saved numbers instead of the forecast default
+	// Apply any saved Morning Load override so confirmed loads persist (restored 23 June 2026)
 	await applyLoadLogOverride(route.name);
+	
+	// Apply any saved Evening Capture IN override so captured sales persist (added 25 June 2026)
+	await applySalesLogOverride(route.name);
+	
 	
 
 	}
@@ -1652,6 +1675,50 @@
 
 	
 
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	// APPLY SAVED MORNING LOAD (restored 23 June 2026 — confirmed loads must persist)
+	// ═══════════════════════════════════════════════════════════════════
+	async function applyLoadLogOverride(routeName) {
+	try {
+	const url = `${SCRIPT_URL}?action=getLoadLog&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+	const resp = await fetch(url);
+	const data = await resp.json();
+	if (data.found && data.products && data.products.length > 0) {
+	state.routeData[routeName].products = state.routeData[routeName].products.map(p => {
+	const saved = data.products.find(sp => sp.code === p.code);
+	return saved ? { ...p, out: saved.qty } : p;
+	});
+	}
+	} catch (e) {
+	// No connection - keep forecast values, don't block the app
+	}
+	}
+	
+
+	// ═══════════════════════════════════════════════════════════════════
+	// APPLY SAVED EVENING CAPTURE IN (added 25 June 2026 — captured sales must persist)
+	// IN is reconstructed as OUT (already overridden above) minus SOLD from SALES_LOG,
+	// since raw IN is not stored directly in SALES_LOG.
+	// ═══════════════════════════════════════════════════════════════════
+	async function applySalesLogOverride(routeName) {
+	try {
+	const url = `${SCRIPT_URL}?action=getSalesLog&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+	const resp = await fetch(url);
+	const data = await resp.json();
+	if (data.found && data.products && data.products.length > 0) {
+	state.routeData[routeName].products = state.routeData[routeName].products.map(p => {
+	const soldRow = data.products.find(sp => sp.code === p.code);
+	if (!soldRow) return p;
+	const inQty = Math.max(0, p.out - soldRow.sold);
+	return { ...p, inQty: inQty };
+	});
+	}
+	} catch (e) {
+	// No connection - keep default inQty, don't block the app
+	}
+	}
 	
 
 	async function loadFromNewForecastSheet(routeName) {
@@ -1729,42 +1796,6 @@
 
 	}
 	
-
-	}
-
-
-	// ═══════════════════════════════════════════════════════════════════
-	// APPLY CONFIRMED MORNING LOAD OVERRIDE (LOAD_LOG)
-	// Added 23 June 2026 - fixes Morning Load reverting to forecast on reload
-	// ═══════════════════════════════════════════════════════════════════
-
-	async function applyLoadLogOverride(routeName) {
-
-	try {
-
-	const url = `${SCRIPT_URL}?action=getLoadLog&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
-
-	const resp = await fetch(url);
-
-	const data = await resp.json();
-
-	if (data.found && data.products && data.products.length > 0) {
-
-	state.routeData[routeName].products = state.routeData[routeName].products.map(p => {
-
-	const saved = data.products.find(sp => sp.code === p.code);
-
-	return saved ? { ...p, out: saved.qty } : p;
-
-	});
-
-	}
-
-	} catch(e) {
-
-	// No connection - keep forecast values, do not block the app
-
-	}
 
 	}
 	
@@ -1998,7 +2029,7 @@
 	<div class="action-bar">
 	
 
-	<button class="btn btn-print" onclick="printRoute()">🖨️ Print List</button>
+	<button class="btn btn-print" onclick="printMorningLoad()">🖨️ Print List</button>
 	
 
 	<button class="btn btn-primary" onclick="confirmMorning()">✅ Confirm Load</button>
@@ -2024,6 +2055,9 @@
 	
 
 	<div style="text-align:center">OUT QTY</div>
+	
+
+	<div style="text-align:center">✓</div>
 	
 
 	</div>
@@ -2065,6 +2099,12 @@
 	onfocus="this.select()">
 	
 
+	</div>
+	
+
+	<div style="text-align:center">
+	<input type="checkbox" class="load-check" ${p.checked ? 'checked' : ''}
+	onchange="toggleChecked(${i}, this.checked)">
 	</div>
 	
 
@@ -2210,6 +2250,9 @@
 	<div style="text-align:center">SOLD</div>
 	
 
+	<div style="text-align:center">ZOHO</div>
+	
+
 	</div>
 	
 
@@ -2264,6 +2307,9 @@
 	<div class="sold-display ${soldClass}">${sold}</div>
 	
 
+	<div class="zoho-display" id="zoho_${i}">–</div>
+	
+
 	</div>
 	
 
@@ -2282,6 +2328,36 @@
 	document.getElementById('mainContent').innerHTML = html;
 	
 
+	loadZohoItemSales(route.name);
+	
+
+	}
+
+	// ═══════════════════════════════════════════════════════════════════
+	// ZOHO ITEM SALES CHECK (added 26 June 2026) — Evening Capture IN 4th column
+	// Compares SOLD (stock) against ZOHO (invoiced qty) so a mismatch is visible at a glance
+	// ═══════════════════════════════════════════════════════════════════
+	async function loadZohoItemSales(routeName) {
+	try {
+	const url = `${SCRIPT_URL}?action=getZohoItemSales&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+	const resp = await fetch(url);
+	const data = await resp.json();
+	if (data.status !== 'ok') return;
+	const zohoMap = {};
+	(data.products || []).forEach(p => { zohoMap[p.code] = p.zohoQty; });
+	const products = state.routeData[routeName].products;
+	products.forEach((p, i) => {
+	const zohoQty = zohoMap.hasOwnProperty(p.code) ? zohoMap[p.code] : 0;
+	p.zohoQty = zohoQty;
+	const el = document.getElementById(`zoho_${i}`);
+	if (!el) return;
+	const sold = p.out - p.inQty;
+	el.textContent = zohoQty;
+	el.className = `zoho-display ${zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
+	});
+	} catch (e) {
+	// No connection - leave ZOHO column blank, don't block the app
+	}
 	}
 	
 
@@ -2328,12 +2404,24 @@
 	soldEl.className = `sold-display ${sold > 0 ? 'sold-positive' : sold < 0 ? 'sold-negative' : 'sold-zero'}`;
 	
 
+	
+
+	const zohoEl = document.getElementById('mainContent').querySelectorAll('.zoho-display')[idx];
+	if (zohoEl && typeof p.zohoQty === 'number') {
+	zohoEl.className = `zoho-display ${p.zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
+	}
 	}
 	
 
 	updateTotals();
 	
 
+	}
+
+	// Tick box for Morning Load — visual loading checklist only (not saved to the
+	// backend; matches the same idea as the ✓ column on the printed paper list)
+	function toggleChecked(idx, checked) {
+	state.routeData[state.activeRoute].products[idx].checked = checked;
 	}
 	
 
@@ -2377,6 +2465,12 @@
 	soldEl.className = `sold-display ${sold > 0 ? 'sold-positive' : sold < 0 ? 'sold-negative' : 'sold-zero'}`;
 	
 
+	
+
+	const zohoEl = rows[idx].querySelector('.zoho-display');
+	if (zohoEl && typeof p.zohoQty === 'number') {
+	zohoEl.className = `zoho-display ${p.zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
+	}
 	}
 	
 
@@ -2470,7 +2564,8 @@ async function renderCashUp(route, totalValue) {
 		<div id="denomBox" style="padding:16px;"></div>
 
 		<div class="action-bar">
-			<button class="btn-save" onclick="saveCashUp(${totalValue})">💾 Save Cash Up</button>
+			<button class="btn btn-secondary" onclick="printCashUp()">🖨️ Print</button>
+			<button class="btn btn-success" onclick="saveCashUp(${totalValue})">💾 Save Cash Up</button>
 		</div>
 	`;
 
@@ -2493,7 +2588,7 @@ async function renderCashUp(route, totalValue) {
 				<span style="font-weight:600;">${d.label}</span>
 				<input type="number" min="0" id="denom_${d.key}" value="0"
 					style="width:80px;padding:8px;font-size:16px;text-align:center;border:1px solid var(--border);border-radius:6px;"
-					oninput="updateCashTotal()">
+					oninput="updateCashTotal()" onfocus="this.select()">
 				<span id="sub_${d.key}" style="width:90px;text-align:right;color:var(--muted);">R 0.00</span>
 			</div>
 		`).join('')}
@@ -2531,6 +2626,23 @@ async function renderCashUp(route, totalValue) {
 		document.getElementById('zohoBox').innerHTML = `<div style="color:var(--red);">⚠️ Could not load Zoho data: ${err.message}</div>`;
 	}
 
+	// Apply any previously saved Cash Up counts so they persist (added 25 June 2026)
+	try {
+		const cuUrl = `${SCRIPT_URL}?action=getCashUpLog&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+		const cuResp = await fetch(cuUrl);
+		const cuData = await cuResp.json();
+		if (cuData.status === 'ok' && cuData.found) {
+			const fieldMap = {r200:'R200_QTY', r100:'R100_QTY', r50:'R50_QTY', r20:'R20_QTY', r10:'R10_QTY', r5:'R5_QTY', r2:'R2_QTY', r1:'R1_QTY', r050:'R0.50_QTY'};
+			Object.keys(fieldMap).forEach(key => {
+				const val = cuData.data[fieldMap[key]];
+				const el = document.getElementById(`denom_${key}`);
+				if (el && val !== undefined && val !== '') el.value = val;
+			});
+		}
+	} catch (e) {
+		// No connection - keep counts at 0, don't block the app
+	}
+
 	updateCashTotal();
 }
 
@@ -2552,9 +2664,9 @@ function updateCashTotal() {
 	const zoho = state.cashUpZoho;
 	const diffEl = document.getElementById('cashDiffValue');
 	if (zoho) {
-		const expected = Number(zoho.zohoTotalSales) || 0;
-		const shop2shop = Number(zoho.shop2shopTotal) || 0;
-		const diff = (total + shop2shop) - expected;
+		const expectedCash = Number(zoho.cashTotal) || 0;
+		const shop2shop = Number(zoho.shop2shopTotal) || 0; // informational only, not used in cash diff
+		const diff = total - expectedCash; // Counted Cash vs Zoho Cash (fixed 25 June 2026)
 		diffEl.textContent = `R ${diff.toLocaleString('en-ZA', {minimumFractionDigits:2})} ${diff >= 0 ? '(Over)' : '(Short)'}`;
 		diffEl.style.color = diff === 0 ? 'var(--green)' : (diff > 0 ? 'var(--blue)' : 'var(--red)');
 	} else {
@@ -2577,9 +2689,9 @@ async function saveCashUp(totalValue) {
 	});
 
 	const zoho = state.cashUpZoho || {};
-	const expected = Number(zoho.zohoTotalSales) || 0;
-	const shop2shop = Number(zoho.shop2shopTotal) || 0;
-	const cashDifference = (cashCountedTotal + shop2shop) - expected;
+	const expectedCash = Number(zoho.cashTotal) || 0;
+	const shop2shop = Number(zoho.shop2shopTotal) || 0; // informational only, not used in cash diff
+	const cashDifference = cashCountedTotal - expectedCash; // Counted Cash vs Zoho Cash (fixed 25 June 2026)
 
 	try {
 		const resp = await fetch(SCRIPT_URL, {
@@ -2592,7 +2704,7 @@ async function saveCashUp(totalValue) {
 				route: state.activeRoute,
 				cashUp: {
 					stockSalesValue: totalValue,
-					zohoTotalSales: expected,
+					zohoTotalSales: Number(zoho.zohoTotalSales) || 0,
 					zohoCash: Number(zoho.cashTotal) || 0,
 					zohoShop2Shop: shop2shop,
 					newCreditToday: Number(zoho.newCreditToday) || 0,
@@ -2629,101 +2741,37 @@ async function saveCashUp(totalValue) {
 	
 
 	async function confirmMorning() {
-	
-
 	const products = state.routeData[state.activeRoute].products;
-	
-
 	const totalOut = products.reduce((s, p) => s + p.out, 0);
-	
-
 	if (totalOut === 0) {
-	
-
 	showToast('⚠️ No quantities entered', 'error');
-	
-
 	return;
-	
-
 	}
-	
-
 	if (!confirm(`Confirm loading ${totalOut} bags for ${state.activeRoute}?\n\nThis cannot be undone.`)) return;
-	
-
 	showToast('💾 Saving load...', '');
-	
-
 	const rows = products.map(p => ({ code: p.code, name: p.name, qty: p.out }));
-	
-
 	try {
-	
-
 	const resp = await fetch(SCRIPT_URL, {
-	
-
 	method: 'POST',
-	
-
 	headers: {'Content-Type': 'text/plain'},
-	
-
 	body: JSON.stringify({
-	
-
 	action: 'writeLoadLog',
-	
-
 	sheetId: NEW_SHEET_ID,
-	
-
 	date: state.date,
-	
-
 	route: state.activeRoute,
-	
-
 	rows: rows
-	
-
 	})
-	
-
 	});
-	
-
 	const data = await resp.json();
-	
-
 	if (data.status === 'ok') {
-	
-
 	showToast(`✅ ${state.activeRoute} load confirmed — ${totalOut} bags`, 'success');
-	
-
 	setMode('evening');
-	
-
 	} else {
-	
-
 	showToast('⚠️ Save failed: ' + (data.message || 'unknown error'), 'error');
-	
-
 	}
-	
-
-	} catch(e) {
-	
-
+	} catch (e) {
 	showToast('⚠️ Save failed - check connection', 'error');
-	
-
 	}
-	
-
 	}
 	
 
@@ -2923,6 +2971,255 @@ async function saveCashUp(totalValue) {
 
 	// ═══════════════════════════════════════════════════════════════════
 	
+
+	// ═══════════════════════════════════════════════════════════════════
+	// CASH UP PRINTOUT (added 27 June 2026) — prints a record of the figures
+	// already entered on screen (denomination counts, Zoho figures, totals),
+	// not a blank form, since the Cash Up screen is already digitally filled in.
+	// ═══════════════════════════════════════════════════════════════════
+	function printCashUp() {
+	const route = state.routes.find(r => r.name === state.activeRoute);
+	const denoms = [
+	{key:'r200', label:'R200', value:200}, {key:'r100', label:'R100', value:100},
+	{key:'r50', label:'R50', value:50}, {key:'r20', label:'R20', value:20},
+	{key:'r10', label:'R10', value:10}, {key:'r5', label:'R5', value:5},
+	{key:'r2', label:'R2', value:2}, {key:'r1', label:'R1', value:1},
+	{key:'r050', label:'50c', value:0.5}
+	];
+
+	const counts = {};
+	let countedTotal = 0;
+	denoms.forEach(d => {
+	const el = document.getElementById(`denom_${d.key}`);
+	const qty = el ? (parseInt(el.value) || 0) : 0;
+	counts[d.key] = qty;
+	countedTotal += qty * d.value;
+	});
+
+	const zoho = state.cashUpZoho || {};
+	const zohoCash = Number(zoho.cashTotal) || 0;
+	const shop2shop = Number(zoho.shop2shopTotal) || 0;
+	const cashDifference = countedTotal - zohoCash;
+
+	function denomCell(d) {
+	return `<div class="denom-cell"><span class="denom-label">${d.label}</span><span class="box denom-box filled">${counts[d.key]}</span></div>`;
+	}
+
+	const printWin = window.open('', '_blank');
+	printWin.document.write(`
+	<html><head><title>FenMeat — ${state.activeRoute} — Cash Up</title>
+	<style>
+	@page { size: A4; margin: 12mm; }
+	body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #222; margin: 0; }
+
+	.header { display: flex; justify-content: space-between; align-items: flex-end;
+	border-bottom: 3px solid #C0392B; padding-bottom: 8px; margin-bottom: 20px; }
+	.header h1 { font-size: 23px; margin: 0; letter-spacing: 0.5px; }
+	.header h1 .fen { color: #C0392B; }
+	.header .route-name { font-size: 16px; font-weight: bold; margin-top: 3px; }
+	.header .meta { text-align: right; font-size: 11px; color: #555; line-height: 1.5; }
+
+	.box { border: 1.5px solid #333; border-radius: 3px; display: inline-flex;
+	align-items: center; justify-content: center; font-weight: bold; }
+	.box.filled { background: #f7f7f7; }
+
+	.cashup-card { border: 2px solid #1a1a1a; border-radius: 5px; overflow: hidden; }
+	.cashup-title { background: #C0392B; color: #fff; padding: 9px 16px; font-size: 15px; font-weight: bold; letter-spacing: 0.3px; }
+	.cashup-body { padding: 20px 24px; }
+
+	.cashup-columns { display: flex; gap: 34px; }
+	.denom-section { flex: 1.1; }
+	.denom-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px 22px; }
+	.denom-cell { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+	.denom-label { font-weight: bold; width: 32px; }
+	.denom-box { width: 58px; height: 26px; font-size: 14px; }
+
+	.totals-section { flex: 1; border-left: 1px solid #ddd; padding-left: 28px; }
+	.totals-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-bottom: 14px; }
+	.totals-row .totals-label { color: #333; }
+	.totals-row .currency { color: #555; margin-right: 4px; }
+	.totals-box { min-width: 95px; height: 26px; padding: 0 8px; font-size: 14px; }
+	.totals-box.highlight { border-color: #C0392B; border-width: 2px; color: #C0392B; }
+
+	.zoho-recap { margin-top: 18px; padding-top: 14px; border-top: 1px solid #ddd;
+	display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 30px; font-size: 11.5px; color: #444; }
+	.zoho-recap div { display: flex; justify-content: space-between; }
+	</style></head><body>
+
+	<div class="header">
+	<div>
+	<h1><span class="fen">FEN</span>MEAT</h1>
+	<div class="route-name">${state.activeRoute} — CASH UP</div>
+	</div>
+	<div class="meta">📅 ${state.date}<br>${route.day}</div>
+	</div>
+
+	<div class="cashup-card">
+	<div class="cashup-title">CASH UP — ${state.activeRoute} — ${state.date}</div>
+	<div class="cashup-body">
+	<div class="cashup-columns">
+
+	<div class="denom-section">
+	<div class="denom-grid">
+	${denoms.map(denomCell).join('')}
+	</div>
+	</div>
+
+	<div class="totals-section">
+	<div class="totals-row"><span class="totals-label">Total Cash Counted</span><span><span class="currency">R</span><span class="box totals-box filled">${countedTotal.toFixed(2)}</span></span></div>
+	<div class="totals-row"><span class="totals-label">Zoho Cash (recorded)</span><span><span class="currency">R</span><span class="box totals-box filled">${zohoCash.toFixed(2)}</span></span></div>
+	<div class="totals-row"><span class="totals-label">Shop2Shop Total</span><span><span class="currency">R</span><span class="box totals-box filled">${shop2shop.toFixed(2)}</span></span></div>
+	<div class="totals-row"><span class="totals-label"><b>Cash Difference</b> (Over/Short)</span><span><span class="currency">R</span><span class="box totals-box highlight filled">${cashDifference.toFixed(2)}</span></span></div>
+	</div>
+
+	</div>
+
+	<div class="zoho-recap">
+	<div><span>Zoho Total Sales</span><b>R ${(Number(zoho.zohoTotalSales)||0).toFixed(2)}</b></div>
+	<div><span>New Credit Today</span><b>R ${(Number(zoho.newCreditToday)||0).toFixed(2)}</b></div>
+	<div><span>Credit Collected Today</span><b>R ${(Number(zoho.creditCollectedToday)||0).toFixed(2)}</b></div>
+	<div><span>Stock Sales Value</span><b>R ${(state.routeData[state.activeRoute].products.reduce((s,p)=>s+(p.out-p.inQty)*p.price,0)).toFixed(2)}</b></div>
+	</div>
+
+	</div>
+	</div>
+
+	<script>window.print(); window.close();<\/script>
+	</body></html>
+	`);
+	}
+
+	// ═══════════════════════════════════════════════════════════════════
+	// MORNING LOAD PRINTOUT — redesigned 26 June 2026: one page, with a
+	// fillable Cash Up section at the bottom (separate from printRoute(),
+	// which Evening's Print button still uses, untouched)
+	// ═══════════════════════════════════════════════════════════════════
+	function printMorningLoad() {
+	const products = state.routeData[state.activeRoute].products;
+	const route = state.routes.find(r => r.name === state.activeRoute);
+
+	// Split into two columns to keep the whole list compact enough for one page
+	const half = Math.ceil(products.length / 2);
+	const colA = products.slice(0, half);
+	const colB = products.slice(half);
+
+	function productTable(list) {
+	return `
+	<table>
+	<tr><th>Code</th><th>Product</th><th style="text-align:center">OUT</th><th style="text-align:center">✓</th><th style="text-align:center">IN</th></tr>
+	${list.map(p => `
+	<tr>
+	<td class="code">${p.code}</td>
+	<td>${p.name}</td>
+	<td class="num">${p.out != null ? p.out : ''}</td>
+	<td class="num">☐</td>
+	<td class="num"></td>
+	</tr>
+	`).join('')}
+	</table>
+	`;
+	}
+
+	const denomLabels = ['R200','R100','R50','R20','R10','R5','R2','R1','50c'];
+	function denomCell(label) {
+	return `<div class="denom-cell"><span class="denom-label">${label}</span><span class="box denom-box"></span></div>`;
+	}
+
+	const printWin = window.open('', '_blank');
+	printWin.document.write(`
+	<html><head><title>FenMeat — ${state.activeRoute} — Morning Load</title>
+	<style>
+	@page { size: A4; margin: 12mm; }
+	body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #222; margin: 0; }
+
+	.header { display: flex; justify-content: space-between; align-items: flex-end;
+	border-bottom: 3px solid #C0392B; padding-bottom: 8px; margin-bottom: 16px; }
+	.header h1 { font-size: 23px; margin: 0; letter-spacing: 0.5px; }
+	.header h1 .fen { color: #C0392B; }
+	.header .route-name { font-size: 16px; font-weight: bold; margin-top: 3px; }
+	.header .meta { text-align: right; font-size: 11px; color: #555; line-height: 1.5; }
+
+	.columns { display: flex; gap: 18px; margin-bottom: 14px; }
+	.col { flex: 1; }
+	table { width: 100%; border-collapse: collapse; }
+	th { background: #1a1a1a; color: #fff; padding: 6px 8px; font-size: 10.5px; text-align: left; }
+	td { padding: 5px 8px; border-bottom: 1px solid #eee; font-size: 11px; }
+	tr:nth-child(even) td { background: #f7f7f7; }
+	.code { color: #999; font-size: 9px; }
+	.num { text-align: center; font-weight: bold; }
+
+	.box { border: 1.5px solid #333; border-radius: 3px; display: inline-block; }
+
+	.cashup-card { border: 2px solid #1a1a1a; border-radius: 5px; overflow: hidden; }
+	.cashup-title { background: #C0392B; color: #fff; padding: 9px 16px; font-size: 15px; font-weight: bold; letter-spacing: 0.3px; }
+	.cashup-body { padding: 14px 20px 12px; }
+
+	.cashup-columns { display: flex; gap: 30px; }
+	.denom-section { flex: 1.1; }
+	.denom-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 20px; }
+	.denom-cell { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+	.denom-label { font-weight: bold; width: 32px; }
+	.denom-box { width: 58px; height: 24px; }
+
+	.totals-section { flex: 1; border-left: 1px solid #ddd; padding-left: 26px; }
+	.totals-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-bottom: 12px; }
+	.totals-row .totals-label { color: #333; }
+	.totals-row .currency { color: #555; margin-right: 4px; }
+	.totals-box { width: 95px; height: 24px; }
+	.totals-box.highlight { border-color: #C0392B; border-width: 2px; }
+
+	.staff-section { margin-top: 18px; }
+	.staff-row { font-size: 13px; display: flex; align-items: center; margin-bottom: 11px; }
+	.staff-row:last-child { margin-bottom: 0; }
+	.staff-row span:first-child { font-weight: bold; width: 50px; }
+	.staff-line { display: inline-block; flex: 1; border-bottom: 1.5px solid #333; height: 14px; }
+	</style></head><body>
+
+	<div class="header">
+	<div>
+	<h1><span class="fen">FEN</span>MEAT</h1>
+	<div class="route-name">${state.activeRoute}</div>
+	</div>
+	<div class="meta">📅 ${state.date}<br>${route.day}${route.late ? ' · ⏰ LATE LOAD 13:00' : ''}</div>
+	</div>
+
+	<div class="columns">
+	<div class="col">${productTable(colA)}</div>
+	<div class="col">${productTable(colB)}</div>
+	</div>
+
+	<div class="cashup-card">
+	<div class="cashup-title">CASH UP — ${state.activeRoute} — ${state.date}</div>
+	<div class="cashup-body">
+	<div class="cashup-columns">
+
+	<div class="denom-section">
+	<div class="denom-grid">
+	${denomLabels.map(denomCell).join('')}
+	</div>
+	<div class="staff-section">
+	<div class="staff-row"><span>Sales:</span><span class="staff-line"></span></div>
+	<div class="staff-row"><span>Driver:</span><span class="staff-line"></span></div>
+	<div class="staff-row"><span>Stock:</span><span class="staff-line"></span></div>
+	</div>
+	</div>
+
+	<div class="totals-section">
+	<div class="totals-row"><span class="totals-label">Total Cash Counted</span><span><span class="currency">R</span><span class="box totals-box"></span></span></div>
+	<div class="totals-row"><span class="totals-label">Shop2Shop Total</span><span><span class="currency">R</span><span class="box totals-box"></span></span></div>
+	<div class="totals-row"><span class="totals-label">Stock Sales Value</span><span><span class="currency">R</span><span class="box totals-box"></span></span></div>
+	<div class="totals-row"><span class="totals-label"><b>Cash Difference</b> (Over/Short)</span><span><span class="currency">R</span><span class="box totals-box highlight"></span></span></div>
+	</div>
+
+	</div>
+
+	</div>
+	</div>
+
+	<script>window.print(); window.close();<\/script>
+	</body></html>
+	`);
+	}
 
 	function printRoute() {
 	
