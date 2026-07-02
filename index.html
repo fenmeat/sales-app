@@ -3103,15 +3103,21 @@ async function saveCashUp(totalValue) {
 	const colA = products.slice(0, half);
 	const colB = products.slice(half);
 
+	// Requirement 2: OUT must always show a number, never a blank cell
+	function outVal(p) {
+	return (p.out !== undefined && p.out !== null && p.out !== '') ? p.out : 0;
+	}
+
 	function productTable(list) {
 	return `
 	<table>
+	<colgroup><col style="width:11%"><col style="width:45%"><col style="width:16%"><col style="width:12%"><col style="width:16%"></colgroup>
 	<tr><th>Code</th><th>Product</th><th style="text-align:center">OUT</th><th style="text-align:center">✓</th><th style="text-align:center">IN</th></tr>
 	${list.map(p => `
 	<tr>
 	<td class="code">${p.code}</td>
 	<td>${p.name}</td>
-	<td class="num">${p.out || ''}</td>
+	<td class="num">${outVal(p)}</td>
 	<td class="num">☐</td>
 	<td class="num"></td>
 	</tr>
@@ -3129,51 +3135,56 @@ async function saveCashUp(totalValue) {
 	printWin.document.write(`
 	<html><head><title>FenMeat — ${state.activeRoute} — Morning Load</title>
 	<style>
-	@page { size: A4; margin: 12mm; }
-	body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #222; margin: 0; }
+	@page { size: A4; margin: 10mm; }
+	* { box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+	body { font-family: Arial, Helvetica, sans-serif; font-size: 10px; color: #222; margin: 0; }
+
+	#printRoot { transform-origin: top left; }
 
 	.header { display: flex; justify-content: space-between; align-items: flex-end;
-	border-bottom: 3px solid #C0392B; padding-bottom: 8px; margin-bottom: 16px; }
-	.header h1 { font-size: 23px; margin: 0; letter-spacing: 0.5px; }
+	border-bottom: 2.5px solid #C0392B; padding-bottom: 5px; margin-bottom: 10px; }
+	.header h1 { font-size: 19px; margin: 0; letter-spacing: 0.5px; }
 	.header h1 .fen { color: #C0392B; }
-	.header .route-name { font-size: 16px; font-weight: bold; margin-top: 3px; }
-	.header .meta { text-align: right; font-size: 11px; color: #555; line-height: 1.5; }
+	.header .route-name { font-size: 13px; font-weight: bold; margin-top: 2px; }
+	.header .meta { text-align: right; font-size: 10px; color: #555; line-height: 1.4; }
 
-	.columns { display: flex; gap: 18px; margin-bottom: 14px; }
+	.columns { display: flex; gap: 14px; margin-bottom: 10px; }
 	.col { flex: 1; }
-	table { width: 100%; border-collapse: collapse; }
-	th { background: #1a1a1a; color: #fff; padding: 6px 8px; font-size: 10.5px; text-align: left; }
-	td { padding: 5px 8px; border-bottom: 1px solid #eee; font-size: 11px; }
+	table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+	th { background: #1a1a1a; color: #fff; padding: 3px 5px; font-size: 8.5px; text-align: left; }
+	td { padding: 2.5px 5px; border-bottom: 1px solid #eee; font-size: 9.5px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 	tr:nth-child(even) td { background: #f7f7f7; }
-	.code { color: #999; font-size: 9px; }
-	.num { text-align: center; font-weight: bold; font-size: 15px; }
+	.code { color: #999; font-size: 8px; }
+	.num { text-align: center; font-weight: bold; font-size: 13px; }
 
 	.box { border: 1.5px solid #333; border-radius: 3px; display: inline-block; }
 
 	.cashup-card { border: 2px solid #1a1a1a; border-radius: 5px; overflow: hidden; }
-	.cashup-title { background: #C0392B; color: #fff; padding: 9px 16px; font-size: 15px; font-weight: bold; letter-spacing: 0.3px; }
-	.cashup-body { padding: 14px 20px 12px; }
+	.cashup-title { background: #C0392B; color: #fff; padding: 5px 12px; font-size: 12.5px; font-weight: bold; letter-spacing: 0.3px; }
+	.cashup-body { padding: 9px 16px 8px; }
 
-	.cashup-columns { display: flex; gap: 30px; }
+	.cashup-columns { display: flex; gap: 24px; }
 	.denom-section { flex: 1.1; }
-	.denom-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 20px; }
-	.denom-cell { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-	.denom-label { font-weight: bold; width: 32px; }
-	.denom-box { width: 58px; height: 24px; }
+	.denom-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px 16px; }
+	.denom-cell { display: flex; align-items: center; gap: 6px; font-size: 11px; }
+	.denom-label { font-weight: bold; width: 30px; }
+	.denom-box { width: 50px; height: 18px; }
 
-	.totals-section { flex: 1; border-left: 1px solid #ddd; padding-left: 26px; }
-	.totals-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-bottom: 12px; }
+	.totals-section { flex: 1; border-left: 1px solid #ddd; padding-left: 20px; }
+	.totals-row { display: flex; justify-content: space-between; align-items: center; font-size: 11px; margin-bottom: 7px; }
 	.totals-row .totals-label { color: #333; }
-	.totals-row .currency { color: #555; margin-right: 4px; }
-	.totals-box { width: 95px; height: 24px; }
+	.totals-row .currency { color: #555; margin-right: 3px; }
+	.totals-box { width: 82px; height: 18px; }
 	.totals-box.highlight { border-color: #C0392B; border-width: 2px; }
 
-	.staff-section { margin-top: 18px; }
-	.staff-row { font-size: 13px; display: flex; align-items: center; margin-bottom: 11px; }
+	.staff-section { margin-top: 10px; }
+	.staff-row { font-size: 11px; display: flex; align-items: center; margin-bottom: 6px; }
 	.staff-row:last-child { margin-bottom: 0; }
-	.staff-row span:first-child { font-weight: bold; width: 50px; }
-	.staff-line { display: inline-block; flex: 1; border-bottom: 1.5px solid #333; height: 14px; }
+	.staff-row span:first-child { font-weight: bold; width: 44px; }
+	.staff-line { display: inline-block; flex: 1; border-bottom: 1.5px solid #333; height: 12px; }
 	</style></head><body>
+
+	<div id="printRoot">
 
 	<div class="header">
 	<div>
@@ -3216,7 +3227,23 @@ async function saveCashUp(totalValue) {
 	</div>
 	</div>
 
-	<script>window.print(); window.close();<\/script>
+	</div>
+
+	<script>
+	(function() {
+	var root = document.getElementById('printRoot');
+	var pageHeightPx = 1046; // A4 (297mm) minus 10mm top+bottom @page margins, at 96dpi
+	var contentHeight = root.scrollHeight;
+	if (contentHeight > pageHeightPx) {
+	var scale = pageHeightPx / contentHeight;
+	if (scale < 0.75) scale = 0.75;
+	root.style.transform = 'scale(' + scale + ')';
+	root.style.width = (100 / scale) + '%';
+	}
+	window.print();
+	window.close();
+	})();
+	<\/script>
 	</body></html>
 	`);
 	}
