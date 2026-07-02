@@ -3111,7 +3111,7 @@ async function saveCashUp(totalValue) {
 	<tr>
 	<td class="code">${p.code}</td>
 	<td>${p.name}</td>
-	<td class="num">${p.out != null ? p.out : ''}</td>
+	<td class="num">${p.out || ''}</td>
 	<td class="num">☐</td>
 	<td class="num"></td>
 	</tr>
@@ -3146,7 +3146,7 @@ async function saveCashUp(totalValue) {
 	td { padding: 5px 8px; border-bottom: 1px solid #eee; font-size: 11px; }
 	tr:nth-child(even) td { background: #f7f7f7; }
 	.code { color: #999; font-size: 9px; }
-	.num { text-align: center; font-weight: bold; }
+	.num { text-align: center; font-weight: bold; font-size: 15px; }
 
 	.box { border: 1.5px solid #333; border-radius: 3px; display: inline-block; }
 
@@ -3270,7 +3270,7 @@ async function saveCashUp(totalValue) {
 	.code { color: #999; font-size: 10px; }
 	
 
-	.num { text-align: center; font-weight: bold; }
+	.num { text-align: center; font-weight: bold; font-size: 15px; }
 	
 
 	.footer { margin-top: 16px; font-size: 11px; color: #666; border-top: 1px solid #ccc; padding-top: 8px; }
@@ -3321,7 +3321,7 @@ async function saveCashUp(totalValue) {
 	<td>${p.name}</td>
 	
 
-	<td class="num">${p.out != null ? p.out : ''}</td>
+	<td class="num">${p.out || ''}</td>
 	
 
 	<td class="num">☐</td>
