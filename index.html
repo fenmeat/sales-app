@@ -2545,6 +2545,8 @@
 	}
 
 async function renderCashUp(route, totalValue) {
+	state.cashUpSalesValue = totalValue;
+	state.cashUpCreditNotCollected = null;
 	document.getElementById('mainContent').innerHTML = `
 		<div class="route-summary">
 			<div>
@@ -2559,6 +2561,22 @@ async function renderCashUp(route, totalValue) {
 
 		<div id="zohoBox" style="padding:16px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin:12px 0;">
 			Loading Zoho figures...
+		</div>
+
+		<div id="commissionBox" style="padding:16px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin:12px 0;">
+			<h3 style="margin-bottom:10px;">Sales Commission</h3>
+			<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;">
+				<span style="font-weight:600;">Sales Person</span>
+				<input type="text" id="salesPersonInput" placeholder="Enter name" autocomplete="off"
+					style="width:160px;padding:8px;font-size:15px;text-align:right;border:1px solid var(--border);border-radius:6px;"
+					oninput="updateCommissionDisplay()">
+			</div>
+			<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;color:var(--muted);">
+				<span>Credit Not Collected</span><span id="creditNotCollectedVal">Loading...</span>
+			</div>
+			<div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;font-size:16px;">
+				<span>Commission (0.7%)</span><span id="commissionVal">—</span>
+			</div>
 		</div>
 
 		<div id="denomBox" style="padding:16px;"></div>
@@ -2626,6 +2644,38 @@ async function renderCashUp(route, totalValue) {
 		document.getElementById('zohoBox').innerHTML = `<div style="color:var(--red);">⚠️ Could not load Zoho data: ${err.message}</div>`;
 	}
 
+	// Fetch Credit Not Collected from Zoho for the commission calculation (added 10 July 2026)
+	try {
+		const cncUrl = `${SCRIPT_URL}?action=getCreditNotCollected&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+		const cncResp = await fetch(cncUrl);
+		const cncData = await cncResp.json();
+		if (cncData.status === 'ok') {
+			state.cashUpCreditNotCollected = Number(cncData.creditNotCollected) || 0;
+			const cncCount = Number(cncData.invoiceCount) || 0;
+			document.getElementById('creditNotCollectedVal').textContent = `R ${state.cashUpCreditNotCollected.toLocaleString('en-ZA', {minimumFractionDigits:2})} (${cncCount} invoice${cncCount === 1 ? '' : 's'})`;
+		} else {
+			state.cashUpCreditNotCollected = 0;
+			document.getElementById('creditNotCollectedVal').textContent = 'Unavailable — R 0.00 used';
+		}
+	} catch (err) {
+		state.cashUpCreditNotCollected = 0;
+		document.getElementById('creditNotCollectedVal').textContent = 'Unavailable — R 0.00 used';
+	}
+	updateCommissionDisplay();
+
+	// Prefill Sales Person from any previously saved commission entry (added 10 July 2026)
+	try {
+		const commUrl = `${SCRIPT_URL}?action=getCommissionLog&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+		const commResp = await fetch(commUrl);
+		const commData = await commResp.json();
+		if (commData.status === 'ok' && commData.found && commData.data.SALESPERSON) {
+			const spEl = document.getElementById('salesPersonInput');
+			if (spEl) spEl.value = commData.data.SALESPERSON;
+		}
+	} catch (e) {
+		// No connection - leave Sales Person blank, don't block the app
+	}
+
 	// Apply any previously saved Cash Up counts so they persist (added 25 June 2026)
 	try {
 		const cuUrl = `${SCRIPT_URL}?action=getCashUpLog&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
@@ -2674,6 +2724,22 @@ function updateCashTotal() {
 	}
 }
 
+// Recalculates and displays the commission figure whenever Sales Person changes
+// or Credit Not Collected finishes loading. Formula: (Sales Value - Credit Not
+// Collected) x 0.7% — commission itself is calculated-only, never hand-edited.
+function updateCommissionDisplay() {
+	const commissionEl = document.getElementById('commissionVal');
+	if (!commissionEl) return;
+	const creditNotCollected = state.cashUpCreditNotCollected;
+	if (creditNotCollected === null || creditNotCollected === undefined) {
+		commissionEl.textContent = '—';
+		return;
+	}
+	const salesValue = state.cashUpSalesValue || 0;
+	const commission = (salesValue - creditNotCollected) * 0.007;
+	commissionEl.textContent = `R ${commission.toLocaleString('en-ZA', {minimumFractionDigits:2})}`;
+}
+
 async function saveCashUp(totalValue) {
 	const denoms = [
 		{key:'r200', value:200}, {key:'r100', value:100}, {key:'r50', value:50},
@@ -2717,7 +2783,37 @@ async function saveCashUp(totalValue) {
 		});
 		const data = await resp.json();
 		if (data.status === 'ok') {
-			showToast(`✅ Cash Up saved — Difference: R ${cashDifference.toLocaleString('en-ZA', {minimumFractionDigits:2})}`, 'success');
+			let toastMsg = `✅ Cash Up saved — Difference: R ${cashDifference.toLocaleString('en-ZA', {minimumFractionDigits:2})}`;
+
+			const salesPersonEl = document.getElementById('salesPersonInput');
+			const salesPerson = salesPersonEl ? salesPersonEl.value.trim() : '';
+			if (salesPerson) {
+				const creditNotCollected = state.cashUpCreditNotCollected || 0;
+				const commission = (totalValue - creditNotCollected) * 0.007;
+				try {
+					await fetch(SCRIPT_URL, {
+						method: 'POST',
+						headers: {'Content-Type': 'text/plain'},
+						body: JSON.stringify({
+							action: 'writeCommissionLog',
+							sheetId: NEW_SHEET_ID,
+							date: state.date,
+							route: state.activeRoute,
+							commission: {
+								salesPerson: salesPerson,
+								salesValue: totalValue,
+								creditNotCollected: creditNotCollected,
+								commission: commission
+							}
+						})
+					});
+					toastMsg += ` | Commission: R ${commission.toLocaleString('en-ZA', {minimumFractionDigits:2})}`;
+				} catch (e) {
+					// Commission save failed silently — Cash Up itself already saved successfully
+				}
+			}
+
+			showToast(toastMsg, 'success');
 		} else {
 			showToast(`❌ ${data.message}`, 'error');
 		}
