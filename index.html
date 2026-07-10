@@ -272,6 +272,7 @@
 
 	.mode-btn.active.evening { background: var(--blue); color: white; }
 	.mode-btn.active.cashup { background: var(--orange); color: white; }
+	.mode-btn.active.commission { background: #8E44AD; color: white; }
 	
 
 	
@@ -1004,6 +1005,7 @@
 
 	<button class="mode-btn evening" id="btnEvening" onclick="setMode('evening')">🌙 EVENING — Capture IN</button>
 	<button class="mode-btn cashup" id="btnCashUp" onclick="setMode('cashup')">💰 CASH UP</button>
+	<button class="mode-btn commission" id="btnCommission" onclick="setMode('commission')">🧾 COMMISSION</button>
 	
 
 	</div>
@@ -1886,7 +1888,10 @@
 
 	document.getElementById('btnEvening').className = `mode-btn evening ${mode === 'evening' ? 'active' : ''}`;
 	document.getElementById('btnCashUp').className = `mode-btn cashup ${mode === 'cashup' ? 'active' : ''}`;
-	
+	document.getElementById('btnCommission').className = `mode-btn commission ${mode === 'commission' ? 'active' : ''}`;
+
+	// Commission is a weekly view across all routes, not per-route — hide the route tabs for it
+	document.getElementById('routeTabs').style.display = (mode === 'commission') ? 'none' : '';
 
 	renderContent();
 	
@@ -1909,6 +1914,12 @@
 
 	function renderContent() {
 	
+
+	// Commission is a weekly view across all routes, not tied to state.activeRoute
+	if (state.mode === 'commission') {
+	renderCommission();
+	return;
+	}
 
 	const route = state.routes.find(r => r.name === state.activeRoute);
 	
@@ -3058,6 +3069,155 @@ async function saveCashUp(totalValue) {
 	
 
 	
+
+// ═══════════════════════════════════════════════════════════════════
+// WEEKLY COMMISSION — added 10 July 2026
+// Not tied to a route; summarises COMMISSION_LOG entries by salesperson
+// across a Mon-Fri work week, and lets Alex look up past weeks.
+// ═══════════════════════════════════════════════════════════════════
+
+// Mirrors the backend's getWeekEndingFriday() so the default week shown
+// on screen always matches what the backend will actually group by.
+function getWeekEndingFridayJS(dateStr) {
+	const d = new Date(dateStr + 'T12:00:00');
+	const dow = d.getDay(); // 0=Sun...6=Sat
+	let diffToFriday;
+	if (dow >= 1 && dow <= 5) {
+		diffToFriday = 5 - dow;
+	} else {
+		diffToFriday = (dow === 6) ? -1 : 5;
+	}
+	d.setDate(d.getDate() + diffToFriday);
+	const yyyy = d.getFullYear();
+	const mm = String(d.getMonth()+1).padStart(2,'0');
+	const dd = String(d.getDate()).padStart(2,'0');
+	return `${yyyy}-${mm}-${dd}`;
+}
+
+function renderCommission() {
+	const defaultWeekEnding = getWeekEndingFridayJS(state.date || new Date().toISOString().split('T')[0]);
+
+	document.getElementById('mainContent').innerHTML = `
+		<div class="summary-card">
+			<div class="summary-title">🧾 Weekly Commission</div>
+			<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+				<label style="font-size:13px;font-weight:600;">Week Ending (Friday):</label>
+				<input type="date" id="commissionWeekInput" value="${defaultWeekEnding}"
+					style="padding:8px;border:1px solid var(--border);border-radius:6px;font-size:14px;">
+			</div>
+			<div class="action-bar" style="margin-bottom:0;">
+				<button class="btn btn-primary" onclick="calculateWeekCommissionClick()">🧮 Calculate Week's Commission</button>
+			</div>
+		</div>
+
+		<div id="commissionResults"></div>
+
+		<div class="summary-card">
+			<div class="summary-title">📅 Past Weeks</div>
+			<div id="commissionHistory">
+				<button class="btn btn-secondary" onclick="loadCommissionHistory()">Show Past Weeks</button>
+			</div>
+		</div>
+	`;
+}
+
+// If the picked date is not a Friday, snap it to the Friday of that same Mon-Fri week
+function snapToFridayIfNeeded(dateStr) {
+	return getWeekEndingFridayJS(dateStr);
+}
+
+async function calculateWeekCommissionClick() {
+	const raw = document.getElementById('commissionWeekInput').value;
+	if (!raw) {
+		showToast('⚠️ Pick a week ending date first', 'error');
+		return;
+	}
+	const weekEnding = snapToFridayIfNeeded(raw);
+	document.getElementById('commissionWeekInput').value = weekEnding;
+
+	document.getElementById('commissionResults').innerHTML = `<div class="loading"><div class="spinner"></div>Calculating...</div>`;
+
+	try {
+		const resp = await fetch(SCRIPT_URL, {
+			method: 'POST',
+			headers: {'Content-Type': 'text/plain'},
+			body: JSON.stringify({
+				action: 'calculateWeekCommission',
+				sheetId: NEW_SHEET_ID,
+				weekEnding: weekEnding
+			})
+		});
+		const data = await resp.json();
+		if (data.status === 'ok') {
+			renderCommissionResults(weekEnding, data.results);
+		} else {
+			document.getElementById('commissionResults').innerHTML = `<div class="summary-card" style="color:var(--red);">❌ ${data.message}</div>`;
+		}
+	} catch (err) {
+		document.getElementById('commissionResults').innerHTML = `<div class="summary-card" style="color:var(--red);">❌ Could not calculate: ${err.message}</div>`;
+	}
+}
+
+function renderCommissionResults(weekEnding, results) {
+	const box = document.getElementById('commissionResults');
+	if (!results || results.length === 0) {
+		box.innerHTML = `<div class="summary-card">No commission entries saved for week ending ${weekEnding} yet — save Cash Up with a Sales Person on each route first.</div>`;
+		return;
+	}
+	const grandTotal = results.reduce((s, r) => s + r.totalCommission, 0);
+	box.innerHTML = `
+		<div class="summary-card">
+			<div class="summary-title">Week Ending ${weekEnding}</div>
+			${results.map(r => `
+				<div class="summary-row">
+					<span>${r.salesperson} <span style="color:var(--muted);font-size:11px;">(${r.routeCount} route${r.routeCount === 1 ? '' : 's'})</span></span>
+					<span class="summary-total">R ${r.totalCommission.toLocaleString('en-ZA', {minimumFractionDigits:2})}</span>
+				</div>
+			`).join('')}
+			<div class="summary-row" style="border-top:2px solid var(--dark);margin-top:6px;padding-top:10px;font-weight:800;">
+				<span>Total</span>
+				<span class="summary-total">R ${grandTotal.toLocaleString('en-ZA', {minimumFractionDigits:2})}</span>
+			</div>
+		</div>
+	`;
+}
+
+async function loadCommissionHistory() {
+	const box = document.getElementById('commissionHistory');
+	box.innerHTML = `<div class="loading"><div class="spinner"></div>Loading...</div>`;
+	try {
+		const resp = await fetch(`${SCRIPT_URL}?action=getWeeklyCommission&sheetId=${NEW_SHEET_ID}`);
+		const data = await resp.json();
+		const weeks = data.weeks || [];
+		if (weeks.length === 0) {
+			box.innerHTML = `<div style="color:var(--muted);">No past weeks calculated yet.</div>`;
+			return;
+		}
+		box.innerHTML = weeks.map(w => `
+			<div class="summary-row" style="cursor:pointer;" onclick="viewCommissionWeek('${w.weekEnding}')">
+				<span>Week Ending ${w.weekEnding}</span>
+				<span class="summary-total">R ${w.totalCommission.toLocaleString('en-ZA', {minimumFractionDigits:2})}</span>
+			</div>
+		`).join('');
+	} catch (err) {
+		box.innerHTML = `<div style="color:var(--red);">Could not load history: ${err.message}</div>`;
+	}
+}
+
+async function viewCommissionWeek(weekEnding) {
+	document.getElementById('commissionWeekInput').value = weekEnding;
+	document.getElementById('commissionResults').innerHTML = `<div class="loading"><div class="spinner"></div>Loading week ${weekEnding}...</div>`;
+	try {
+		const resp = await fetch(`${SCRIPT_URL}?action=getWeeklyCommission&weekEnding=${weekEnding}&sheetId=${NEW_SHEET_ID}`);
+		const data = await resp.json();
+		if (data.status === 'ok') {
+			renderCommissionResults(weekEnding, data.results);
+		}
+	} catch (err) {
+		document.getElementById('commissionResults').innerHTML = `<div class="summary-card" style="color:var(--red);">❌ Could not load week: ${err.message}</div>`;
+	}
+	window.scrollTo({top: 0, behavior: 'smooth'});
+}
 
 	// ═══════════════════════════════════════════════════════════════════
 	
