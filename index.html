@@ -2758,7 +2758,18 @@ async function viewCommissionWeek(weekEnding) {
 	</div>
 	</div>
 
-	<script>window.print(); window.close();<\/script>
+	<script>
+	(function() {
+	function doPrint() { window.print(); window.close(); }
+	var imgs = Array.prototype.slice.call(document.images);
+	var pending = imgs.filter(function(img){ return !img.complete; });
+	if (pending.length === 0) { doPrint(); return; }
+	var done = false, remaining = pending.length;
+	function checkDone() { remaining--; if (remaining <= 0 && !done) { done = true; doPrint(); } }
+	pending.forEach(function(img){ img.addEventListener('load', checkDone); img.addEventListener('error', checkDone); });
+	setTimeout(function(){ if (!done) { done = true; doPrint(); } }, 1000);
+	})();
+	<\/script>
 	</body></html>
 	`);
 	}
@@ -2916,8 +2927,14 @@ async function viewCommissionWeek(weekEnding) {
 	root.style.transform = 'scale(' + scale + ')';
 	root.style.width = (100 / scale) + '%';
 	}
-	window.print();
-	window.close();
+	function doPrint() { window.print(); window.close(); }
+	var imgs = Array.prototype.slice.call(document.images);
+	var pending = imgs.filter(function(img){ return !img.complete; });
+	if (pending.length === 0) { doPrint(); return; }
+	var done = false, remaining = pending.length;
+	function checkDone() { remaining--; if (remaining <= 0 && !done) { done = true; doPrint(); } }
+	pending.forEach(function(img){ img.addEventListener('load', checkDone); img.addEventListener('error', checkDone); });
+	setTimeout(function(){ if (!done) { done = true; doPrint(); } }, 1000);
 	})();
 	<\/script>
 	</body></html>
@@ -3054,7 +3071,18 @@ async function viewCommissionWeek(weekEnding) {
 	</div>
 	
 
-	<script>window.print(); window.close();<\/script>
+	<script>
+	(function() {
+	function doPrint() { window.print(); window.close(); }
+	var imgs = Array.prototype.slice.call(document.images);
+	var pending = imgs.filter(function(img){ return !img.complete; });
+	if (pending.length === 0) { doPrint(); return; }
+	var done = false, remaining = pending.length;
+	function checkDone() { remaining--; if (remaining <= 0 && !done) { done = true; doPrint(); } }
+	pending.forEach(function(img){ img.addEventListener('load', checkDone); img.addEventListener('error', checkDone); });
+	setTimeout(function(){ if (!done) { done = true; doPrint(); } }, 1000);
+	})();
+	<\/script>
 	
 
 	</body></html>
