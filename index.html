@@ -505,6 +505,22 @@
 	// ═══════════════════════════════════════════════════════════════════
 	
 
+	// FORMAT HELPER — added 22 July 2026 (thousand separator fix). Some browsers/OS
+	// combos silently ignore toLocaleString('en-ZA') grouping (no error, no fallback
+	// comma, just no separator at all), which is what caused the Cash Up screen to
+	// show "R 30767" instead of "R 30 767". This manual implementation (same regex
+	// approach already used server-side in Code.gs's formatRandServer) is deterministic
+	// across every browser, so all currency displays now use this instead.
+	function formatRand(n, decimals) {
+		decimals = (decimals === undefined) ? 0 : decimals;
+		const num = Number(n) || 0;
+		const isNeg = num < 0;
+		const fixed = Math.abs(num).toFixed(decimals);
+		const parts = fixed.split('.');
+		parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+		return (isNeg ? '-' : '') + parts.join('.');
+	}
+
 	const PRODUCTS = [
 	
 
@@ -1595,7 +1611,7 @@
 	<div class="totals">
 	
 
-	<div class="total-val">R ${totalValue.toLocaleString('en-ZA')}</div>
+	<div class="total-val">R ${formatRand(totalValue)}</div>
 	
 
 	<div>Sales Value</div>
@@ -2002,7 +2018,7 @@
 	if (totalValEl) {
 	
 
-	totalValEl.textContent = `R ${totalValue.toLocaleString('en-ZA')}`;
+	totalValEl.textContent = `R ${formatRand(totalValue)}`;
 	
 
 	}
@@ -2076,7 +2092,7 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 				<div class="route-day">📅 ${route.day} — ${state.date}</div>
 			</div>
 			<div class="totals">
-				<div class="total-val">R ${totalValue.toLocaleString('en-ZA')}</div>
+				<div class="total-val">R ${formatRand(totalValue)}</div>
 				<div>Stock Sales Value</div>
 			</div>
 		</div>
@@ -2139,11 +2155,29 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 			state.cashUpZoho = data.data;
 			document.getElementById('zohoBox').innerHTML = `
 				<h3 style="margin-bottom:10px;">Zoho Figures (${state.date})</h3>
-				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Zoho Total Sales</span><b>R ${Number(data.data.zohoTotalSales).toLocaleString('en-ZA')}</b></div>
-				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Cash (Zoho)</span><b>R ${Number(data.data.cashTotal).toLocaleString('en-ZA')}</b></div>
-				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Shop2Shop</span><b>R ${Number(data.data.shop2shopTotal).toLocaleString('en-ZA')}</b></div>
-				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>New Credit Today</span><b>R ${Number(data.data.newCreditToday).toLocaleString('en-ZA')}</b></div>
-				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Credit Collected Today</span><b>R ${Number(data.data.creditCollectedToday).toLocaleString('en-ZA')}</b></div>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Zoho Total Sales</span><b>R ${formatRand(Number(data.data.zohoTotalSales))}</b></div>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Cash (Zoho)</span><b>R ${formatRand(Number(data.data.cashTotal))}</b></div>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Shop2Shop</span><b>R ${formatRand(Number(data.data.shop2shopTotal))}</b></div>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>New Credit Today</span><b>R ${formatRand(Number(data.data.newCreditToday))}</b></div>
+				<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Credit Collected Today</span><b>R ${formatRand(Number(data.data.creditCollectedToday))}</b></div>
+				${(function() {
+					// ADDED 22 July 2026 — Stock Sales Value vs Zoho Total Sales variance.
+					// Zoho > Stock: invoiced but not yet delivered/captured here.
+					// Stock > Zoho: delivered/sold here but not yet invoiced in Zoho.
+					const zohoSales = Number(data.data.zohoTotalSales) || 0;
+					const variance = Math.round((totalValue - zohoSales) * 100) / 100;
+					let label, color;
+					if (variance > 0) { label = 'DELIVERED NOT INVOICED'; color = 'var(--blue)'; }
+					else if (variance < 0) { label = 'INVOICED NOT DELIVERED'; color = 'var(--red)'; }
+					else { label = 'MATCHED'; color = 'var(--green)'; }
+					return `
+					<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center;padding-bottom:2px;">
+						<span>Stock vs Zoho Variance</span>
+						<b style="color:${color};">R ${formatRand(variance, 2)}</b>
+					</div>
+					<div style="text-align:right;font-size:11px;color:${color};font-weight:600;">${label}</div>
+					`;
+				})()}
 			`;
 		} else {
 			state.cashUpZoho = null;
@@ -2218,9 +2252,9 @@ function updateCashTotal() {
 		const qty = Number(document.getElementById(`denom_${d.key}`).value) || 0;
 		const sub = qty * d.value;
 		total += sub;
-		document.getElementById(`sub_${d.key}`).textContent = `R ${sub.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+		document.getElementById(`sub_${d.key}`).textContent = `R ${formatRand(sub, 2)}`;
 	});
-	document.getElementById('cashCountedTotal').textContent = `R ${total.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+	document.getElementById('cashCountedTotal').textContent = `R ${formatRand(total, 2)}`;
 
 	const zoho = state.cashUpZoho;
 	const diffEl = document.getElementById('cashDiffValue');
@@ -2228,7 +2262,7 @@ function updateCashTotal() {
 		const expectedCash = Number(zoho.cashTotal) || 0;
 		const shop2shop = Number(zoho.shop2shopTotal) || 0; // informational only, not used in cash diff
 		const diff = total - expectedCash; // Counted Cash vs Zoho Cash (fixed 25 June 2026)
-		diffEl.textContent = `R ${diff.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})} ${diff >= 0 ? '(Over)' : '(Short)'}`;
+		diffEl.textContent = `R ${formatRand(diff, 2)} ${diff >= 0 ? '(Over)' : '(Short)'}`;
 		diffEl.style.color = diff === 0 ? 'var(--green)' : (diff > 0 ? 'var(--blue)' : 'var(--red)');
 	} else {
 		diffEl.textContent = '—';
@@ -2251,8 +2285,8 @@ function updateCommissionDisplay() {
 		const pool = Math.round(itemsSold * 5 * 100) / 100;
 		const each = Math.round((pool / 2) * 100) / 100;
 		const poolEl = document.getElementById('commissionPoolVal');
-		if (poolEl) poolEl.textContent = `R ${pool.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
-		commissionEl.textContent = `R ${each.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})} each`;
+		if (poolEl) poolEl.textContent = `R ${formatRand(pool, 2)}`;
+		commissionEl.textContent = `R ${formatRand(each, 2)} each`;
 		return;
 	}
 	const currentEl = document.getElementById('currentCreditInput');
@@ -2262,11 +2296,11 @@ function updateCommissionDisplay() {
 	const overdueCredit = Math.max(0, Math.round((totalCredit - currentCredit) * 100) / 100);
 
 	const overdueDisplayEl = document.getElementById('overdueCreditDisplay');
-	if (overdueDisplayEl) overdueDisplayEl.textContent = `R ${overdueCredit.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+	if (overdueDisplayEl) overdueDisplayEl.textContent = `R ${formatRand(overdueCredit, 2)}`;
 
 	const salesValue = state.cashUpSalesValue || 0;
 	const commission = Math.round((salesValue - overdueCredit) * 0.007 * 100) / 100;
-	commissionEl.textContent = `R ${commission.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+	commissionEl.textContent = `R ${formatRand(commission, 2)}`;
 }
 
 
@@ -2313,7 +2347,7 @@ async function saveCashUp(totalValue) {
 		});
 		const data = await resp.json();
 		if (data.status === 'ok') {
-			let toastMsg = `✅ Cash Up saved — Difference: R ${cashDifference.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+			let toastMsg = `✅ Cash Up saved — Difference: R ${formatRand(cashDifference, 2)}`;
 
 			// Added 22 July 2026 -- flat-rate routes (Riversdale/Oudtshoorn/Stilbaai) save
 			// TWO commission entries (one per chosen sales person), each getting half the
@@ -2346,7 +2380,7 @@ async function saveCashUp(totalValue) {
 								})
 							});
 						}
-						toastMsg += ` | Commission: R ${each.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})} each (${sp1} & ${sp2})`;
+						toastMsg += ` | Commission: R ${formatRand(each, 2)} each (${sp1} & ${sp2})`;
 					} catch (e) {
 						// Commission save failed silently — Cash Up itself already saved successfully
 					}
@@ -2380,7 +2414,7 @@ async function saveCashUp(totalValue) {
 							}
 						})
 					});
-					toastMsg += ` | Commission: R ${commission.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+					toastMsg += ` | Commission: R ${formatRand(commission, 2)}`;
 				} catch (e) {
 					// Commission save failed silently — Cash Up itself already saved successfully
 				}
@@ -2490,7 +2524,7 @@ async function saveCashUp(totalValue) {
 
 	
 
-	if (!confirm(`Save sales for ${state.activeRoute}?\n\nTotal Sold: ${totalSold} bags\nValue: R ${totalValue.toLocaleString('en-ZA')}`)) return;
+	if (!confirm(`Save sales for ${state.activeRoute}?\n\nTotal Sold: ${totalSold} bags\nValue: R ${formatRand(totalValue)}`)) return;
 	
 
 	
@@ -2513,7 +2547,15 @@ async function saveCashUp(totalValue) {
 	const salesRows = products
 	
 
-	.filter(p => (p.out - p.inQty) > 0)
+	// FIXED 22 July 2026 — was previously .filter(p => (p.out - p.inQty) > 0), which
+	// dropped any product where everything was returned (sold=0) from SALES_LOG
+	// entirely. On reload, applySalesLogOverride found no matching row for that
+	// product and silently left it at the default inQty:0 — so a fully-returned
+	// item (e.g. Chicken Steak: OUT=4, IN=4, sold=0) came back showing IN=0 after
+	// closing and reopening the app, making it look like all 4 had sold. Filtering
+	// on p.out > 0 instead saves a row for every loaded product, including sold=0
+	// ones, so the reload calculation (out - sold) reconstructs IN correctly.
+	.filter(p => p.out > 0)
 	
 
 	.map(p => ({
@@ -2596,7 +2638,7 @@ async function saveCashUp(totalValue) {
 	if (data.status === 'ok') {
 	
 
-	showToast(`✅ Saved! ${salesRows.length} products — R ${totalValue.toLocaleString('en-ZA')}`, 'success');
+	showToast(`✅ Saved! ${salesRows.length} products — R ${formatRand(totalValue)}`, 'success');
 	
 
 	} else {
@@ -2734,12 +2776,12 @@ function renderCommissionResults(weekEnding, results) {
 			${results.map(r => `
 				<div class="summary-row">
 					<span>${r.salesperson} <span style="color:var(--muted);font-size:11px;">(${r.routeCount} route${r.routeCount === 1 ? '' : 's'})</span></span>
-					<span class="summary-total">R ${r.totalCommission.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+					<span class="summary-total">R ${formatRand(r.totalCommission, 2)}</span>
 				</div>
 			`).join('')}
 			<div class="summary-row" style="border-top:2px solid var(--dark);margin-top:6px;padding-top:10px;font-weight:800;">
 				<span>Total</span>
-				<span class="summary-total">R ${grandTotal.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+				<span class="summary-total">R ${formatRand(grandTotal, 2)}</span>
 			</div>
 		</div>
 	`;
@@ -2759,7 +2801,7 @@ async function loadCommissionHistory() {
 		box.innerHTML = weeks.map(w => `
 			<div class="summary-row" style="cursor:pointer;" onclick="viewCommissionWeek('${w.weekEnding}')">
 				<span>Week Ending ${w.weekEnding}</span>
-				<span class="summary-total">R ${w.totalCommission.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}</span>
+				<span class="summary-total">R ${formatRand(w.totalCommission, 2)}</span>
 			</div>
 		`).join('');
 	} catch (err) {
