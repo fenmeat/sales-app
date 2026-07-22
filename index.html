@@ -1080,6 +1080,9 @@
 	
 	// Apply any saved Evening Capture IN override so captured sales persist (added 25 June 2026)
 	await applySalesLogOverride(route.name);
+	// Restore Morning Load tick marks from localStorage so they survive a page
+	// refresh mid-load (added 22 July 2026).
+	restoreCheckedState(route.name);
 	
 	
 
@@ -1399,6 +1402,9 @@
 	
 
 	const totalValue = products.reduce((s, p) => s + (p.out - p.inQty) * p.price, 0);
+	// Added 22 July 2026 -- flat-rate commission (R5/item, excl. Six Gun 200g) for
+	// RIVERSDALE / OUDTSHOORN / STILBAAI needs a total items-sold count.
+	const itemsSoldExclS02 = products.reduce((s, p) => s + (p.code === 'S02' ? 0 : (p.out - p.inQty)), 0);
 	
 
 	
@@ -1410,7 +1416,7 @@
 	} else if (state.mode === 'evening') {
 	renderEvening(route, products, totalOut, totalIn, totalSold, totalValue);
 	} else {
-	renderCashUp(route, totalValue);
+	renderCashUp(route, totalValue, itemsSoldExclS02);
 	}
 	
 
@@ -1853,10 +1859,35 @@
 
 	}
 
-	// Tick box for Morning Load — visual loading checklist only (not saved to the
-	// backend; matches the same idea as the ✓ column on the printed paper list)
+	// Tick box for Morning Load — visual loading checklist. Persisted to
+	// localStorage (added 22 July 2026) keyed by date+route, since staff need
+	// the ticks to survive a page refresh while physically loading a truck.
+	function loadCheckStorageKey(routeName) {
+		return 'fenmeat_loadChecked_' + state.date + '_' + routeName;
+	}
+	function saveCheckedState(routeName) {
+		try {
+			const checkedCodes = state.routeData[routeName].products.filter(p => p.checked).map(p => p.code);
+			localStorage.setItem(loadCheckStorageKey(routeName), JSON.stringify(checkedCodes));
+		} catch (e) {
+			// localStorage unavailable/full - ticks just won't persist, don't block the app
+		}
+	}
+	function restoreCheckedState(routeName) {
+		try {
+			const raw = localStorage.getItem(loadCheckStorageKey(routeName));
+			if (!raw) return;
+			const checkedCodes = JSON.parse(raw);
+			state.routeData[routeName].products = state.routeData[routeName].products.map(p =>
+				checkedCodes.includes(p.code) ? { ...p, checked: true } : p
+			);
+		} catch (e) {
+			// No saved ticks or bad data - leave unchecked, don't block the app
+		}
+	}
 	function toggleChecked(idx, checked) {
 	state.routeData[state.activeRoute].products[idx].checked = checked;
+	saveCheckedState(state.activeRoute);
 	}
 	
 
@@ -1979,8 +2010,65 @@
 
 	}
 
-async function renderCashUp(route, totalValue) {
+async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 	state.cashUpSalesValue = totalValue;
+	state.cashUpItemsSold = itemsSoldExclS02 || 0;
+	// Added 22 July 2026 -- RIVERSDALE / OUDTSHOORN / STILBAAI use a flat R5-per-item
+	// (excl. Six Gun 200g) commission split 50/50 between two chosen sales people,
+	// instead of the usual 0.7%-of-sales-value single-person commission.
+	const FLAT_RATE_ROUTES = ['RIVERSDALE', 'OUDTSHOORN', 'STILBAAI'];
+	const SALES_PEOPLE = ['Tapiz', 'Mosa', 'Albert'];
+	const isFlatRate = FLAT_RATE_ROUTES.includes(route.name.toUpperCase());
+	state.cashUpFlatRate = isFlatRate;
+	function spOptionsHtml(selectedVal) {
+		return '<option value="">Select...</option>' + SALES_PEOPLE.map(function(name) {
+			return '<option value="' + name + '"' + (name === selectedVal ? ' selected' : '') + '>' + name + '</option>';
+		}).join('');
+	}
+	const commissionBoxHtml = isFlatRate ? `
+		<h3 style="margin-bottom:10px;">Sales Commission (R5 per item, excl. Six Gun 200g)</h3>
+		<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;color:var(--muted);">
+			<span>Items Sold (excl. Six Gun 200g)</span><span id="itemsSoldDisplay">${itemsSoldExclS02 || 0}</span>
+		</div>
+		<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;color:var(--muted);">
+			<span>Total Commission Pool</span><span id="commissionPoolVal">R 0.00</span>
+		</div>
+		<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;">
+			<span style="font-weight:600;">Sales Person 1</span>
+			<select id="salesPerson1Select" style="width:160px;padding:8px;font-size:15px;text-align:right;border:1px solid var(--border);border-radius:6px;" onchange="updateCommissionDisplay()">${spOptionsHtml('')}</select>
+		</div>
+		<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;">
+			<span style="font-weight:600;">Sales Person 2</span>
+			<select id="salesPerson2Select" style="width:160px;padding:8px;font-size:15px;text-align:right;border:1px solid var(--border);border-radius:6px;" onchange="updateCommissionDisplay()">${spOptionsHtml('')}</select>
+		</div>
+		<div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;font-size:16px;">
+			<span>Commission (each)</span><span id="commissionVal">—</span>
+		</div>
+	` : `
+		<h3 style="margin-bottom:10px;">Sales Commission</h3>
+		<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;">
+			<span style="font-weight:600;">Sales Person</span>
+			<select id="salesPersonInput" style="width:160px;padding:8px;font-size:15px;text-align:right;border:1px solid var(--border);border-radius:6px;" onchange="updateCommissionDisplay()">${spOptionsHtml('')}</select>
+		</div>
+		<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;">
+			<span style="font-size:13px;color:var(--muted);">Current Credit for Today</span>
+			<input type="number" id="currentCreditInput" placeholder="0.00" min="0" step="0.01"
+				style="width:120px;padding:7px 8px;font-size:14px;text-align:right;border:1px solid var(--border);border-radius:6px;"
+				oninput="updateCommissionDisplay()">
+		</div>
+		<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;">
+			<span style="font-size:13px;color:var(--muted);">Total Credit Outstanding</span>
+			<input type="number" id="totalCreditInput" placeholder="0.00" min="0" step="0.01"
+				style="width:120px;padding:7px 8px;font-size:14px;text-align:right;border:1px solid var(--border);border-radius:6px;"
+				oninput="updateCommissionDisplay()">
+		</div>
+		<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;font-size:13px;color:var(--muted);">
+			<span>Overdue Credit (from Age Analysis)</span><span id="overdueCreditDisplay">R 0.00</span>
+		</div>
+		<div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;font-size:16px;">
+			<span>Commission (0.7%)</span><span id="commissionVal">—</span>
+		</div>
+	`;
 	document.getElementById('mainContent').innerHTML = `
 		<div class="route-summary">
 			<div>
@@ -1998,31 +2086,7 @@ async function renderCashUp(route, totalValue) {
 		</div>
 
 		<div id="commissionBox" style="padding:16px;background:var(--card);border:1px solid var(--border);border-radius:8px;margin:12px 0;">
-			<h3 style="margin-bottom:10px;">Sales Commission</h3>
-			<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;">
-				<span style="font-weight:600;">Sales Person</span>
-				<input type="text" id="salesPersonInput" placeholder="Enter name" autocomplete="off"
-					style="width:160px;padding:8px;font-size:15px;text-align:right;border:1px solid var(--border);border-radius:6px;"
-					oninput="updateCommissionDisplay()">
-			</div>
-			<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;">
-				<span style="font-size:13px;color:var(--muted);">Current Credit for Today</span>
-				<input type="number" id="currentCreditInput" placeholder="0.00" min="0" step="0.01"
-					style="width:120px;padding:7px 8px;font-size:14px;text-align:right;border:1px solid var(--border);border-radius:6px;"
-					oninput="updateCommissionDisplay()">
-			</div>
-			<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;">
-				<span style="font-size:13px;color:var(--muted);">Total Credit Outstanding</span>
-				<input type="number" id="totalCreditInput" placeholder="0.00" min="0" step="0.01"
-					style="width:120px;padding:7px 8px;font-size:14px;text-align:right;border:1px solid var(--border);border-radius:6px;"
-					oninput="updateCommissionDisplay()">
-			</div>
-			<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;font-size:13px;color:var(--muted);">
-				<span>Overdue Credit (from Age Analysis)</span><span id="overdueCreditDisplay">R 0.00</span>
-			</div>
-			<div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;font-size:16px;">
-				<span>Commission (0.7%)</span><span id="commissionVal">—</span>
-			</div>
+			${commissionBoxHtml}
 		</div>
 
 		<div id="denomBox" style="padding:16px;"></div>
@@ -2099,15 +2163,23 @@ async function renderCashUp(route, totalValue) {
 		const commResp = await fetch(commUrl);
 		const commData = await commResp.json();
 		if (commData.status === 'ok' && commData.found) {
-			const spEl = document.getElementById('salesPersonInput');
-			if (spEl && commData.data.SALESPERSON) spEl.value = commData.data.SALESPERSON;
-			const currentEl = document.getElementById('currentCreditInput');
-			if (currentEl && commData.data.CURRENT_CREDIT !== undefined && commData.data.CURRENT_CREDIT !== '') {
-				currentEl.value = commData.data.CURRENT_CREDIT;
-			}
-			const totalEl = document.getElementById('totalCreditInput');
-			if (totalEl && commData.data.TOTAL_CREDIT_OUTSTANDING !== undefined && commData.data.TOTAL_CREDIT_OUTSTANDING !== '') {
-				totalEl.value = commData.data.TOTAL_CREDIT_OUTSTANDING;
+			if (isFlatRate) {
+				const rows = commData.rows || [];
+				const sp1El = document.getElementById('salesPerson1Select');
+				const sp2El = document.getElementById('salesPerson2Select');
+				if (sp1El && rows[0] && rows[0].SALESPERSON) sp1El.value = rows[0].SALESPERSON;
+				if (sp2El && rows[1] && rows[1].SALESPERSON) sp2El.value = rows[1].SALESPERSON;
+			} else {
+				const spEl = document.getElementById('salesPersonInput');
+				if (spEl && commData.data.SALESPERSON) spEl.value = commData.data.SALESPERSON;
+				const currentEl = document.getElementById('currentCreditInput');
+				if (currentEl && commData.data.CURRENT_CREDIT !== undefined && commData.data.CURRENT_CREDIT !== '') {
+					currentEl.value = commData.data.CURRENT_CREDIT;
+				}
+				const totalEl = document.getElementById('totalCreditInput');
+				if (totalEl && commData.data.TOTAL_CREDIT_OUTSTANDING !== undefined && commData.data.TOTAL_CREDIT_OUTSTANDING !== '') {
+					totalEl.value = commData.data.TOTAL_CREDIT_OUTSTANDING;
+				}
 			}
 			updateCommissionDisplay();
 		}
@@ -2172,6 +2244,17 @@ function updateCashTotal() {
 function updateCommissionDisplay() {
 	const commissionEl = document.getElementById('commissionVal');
 	if (!commissionEl) return;
+	// Added 22 July 2026 -- RIVERSDALE / OUDTSHOORN / STILBAAI: R5 per item sold
+	// (excl. Six Gun 200g), split 50/50 between the two chosen sales people.
+	if (state.cashUpFlatRate) {
+		const itemsSold = state.cashUpItemsSold || 0;
+		const pool = Math.round(itemsSold * 5 * 100) / 100;
+		const each = Math.round((pool / 2) * 100) / 100;
+		const poolEl = document.getElementById('commissionPoolVal');
+		if (poolEl) poolEl.textContent = `R ${pool.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+		commissionEl.textContent = `R ${each.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})} each`;
+		return;
+	}
 	const currentEl = document.getElementById('currentCreditInput');
 	const totalEl = document.getElementById('totalCreditInput');
 	const currentCredit = currentEl ? (Number(currentEl.value) || 0) : 0;
@@ -2232,6 +2315,43 @@ async function saveCashUp(totalValue) {
 		if (data.status === 'ok') {
 			let toastMsg = `✅ Cash Up saved — Difference: R ${cashDifference.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
 
+			// Added 22 July 2026 -- flat-rate routes (Riversdale/Oudtshoorn/Stilbaai) save
+			// TWO commission entries (one per chosen sales person), each getting half the
+			// R5-per-item pool, instead of the usual single-person 0.7%-of-sales entry.
+			if (state.cashUpFlatRate) {
+				const sp1El = document.getElementById('salesPerson1Select');
+				const sp2El = document.getElementById('salesPerson2Select');
+				const sp1 = sp1El ? sp1El.value : '';
+				const sp2 = sp2El ? sp2El.value : '';
+				if (sp1 && sp2) {
+					const itemsSold = state.cashUpItemsSold || 0;
+					const pool = Math.round(itemsSold * 5 * 100) / 100;
+					const each = Math.round((pool / 2) * 100) / 100;
+					try {
+						for (const sp of [sp1, sp2]) {
+							await fetch(SCRIPT_URL, {
+								method: 'POST',
+								headers: {'Content-Type': 'text/plain'},
+								body: JSON.stringify({
+									action: 'writeCommissionLog',
+									sheetId: NEW_SHEET_ID,
+									date: state.date,
+									route: state.activeRoute,
+									commission: {
+										salesPerson: sp,
+										salesValue: itemsSold,
+										commissionValue: each,
+										commissionMode: 'FLAT_RATE'
+									}
+								})
+							});
+						}
+						toastMsg += ` | Commission: R ${each.toLocaleString('en-ZA', {minimumFractionDigits:2, maximumFractionDigits:2})} each (${sp1} & ${sp2})`;
+					} catch (e) {
+						// Commission save failed silently — Cash Up itself already saved successfully
+					}
+				}
+			} else {
 			const salesPersonEl = document.getElementById('salesPersonInput');
 			const salesPerson = salesPersonEl ? salesPersonEl.value.trim() : '';
 			if (salesPerson) {
@@ -2264,6 +2384,7 @@ async function saveCashUp(totalValue) {
 				} catch (e) {
 					// Commission save failed silently — Cash Up itself already saved successfully
 				}
+			}
 			}
 
 			showToast(toastMsg, 'success');
