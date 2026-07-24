@@ -359,20 +359,6 @@
 	.no-print { display: none !important; }
 	body { background: white; }
 	.product-row { break-inside: avoid; }
-	.fen-intro-overlay {
-	  position: fixed;
-	  inset: 0;
-	  z-index: 999999;
-	  background: #0B0F14;
-	  display: flex;
-	  align-items: center;
-	  justify-content: center;
-	}
-	.fen-intro-overlay video {
-	  width: 100%;
-	  height: 100%;
-	  object-fit: cover;
-	}
 	}
 	</style>
 	
@@ -381,8 +367,8 @@
 	
 
 	<body>
-	<div id="fenIntroOverlay" class="fen-intro-overlay">
-	  <video id="fenIntroVideo" autoplay muted playsinline webkit-playsinline src="intro.mp4"></video>
+	<div id="fenIntroOverlay" style="position:fixed !important;top:0 !important;left:0 !important;right:0 !important;bottom:0 !important;width:100vw !important;height:100vh !important;z-index:2147483647 !important;background:#0B0F14 !important;margin:0 !important;padding:0 !important;display:flex !important;align-items:center !important;justify-content:center !important;overflow:hidden !important;">
+	  <video id="fenIntroVideo" autoplay muted playsinline webkit-playsinline src="intro.mp4" style="position:absolute !important;top:0 !important;left:0 !important;width:100% !important;height:100% !important;object-fit:cover !important;"></video>
 	</div>
 	<script>
 	  (function() {
@@ -393,7 +379,6 @@
 	    }
 	    if (v) {
 	      v.addEventListener('ended', removeOverlay);
-	      // Safety fallback in case video fails to load/play on a device
 	      setTimeout(removeOverlay, 11000);
 	    } else {
 	      removeOverlay();
