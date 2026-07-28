@@ -2175,24 +2175,32 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 	// new date with no CASH_UP_LOG row yet) triggers a fresh Zoho API pull.
 	let cuDataFound = null;
 	state.causesChecked = {};
-	try {
-		const cuUrl = `${SCRIPT_URL}?action=getCashUpLog&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
-		const cuResp = await fetch(cuUrl);
-		const cuData = await cuResp.json();
-		if (cuData.status === 'ok' && cuData.found) {
-			cuDataFound = cuData.data;
-			const fieldMap = {r200:'R200_QTY', r100:'R100_QTY', r50:'R50_QTY', r20:'R20_QTY', r10:'R10_QTY', r5:'R5_QTY', r2:'R2_QTY', r1:'R1_QTY', r050:'R0.50_QTY'};
-			Object.keys(fieldMap).forEach(key => {
-				const val = cuData.data[fieldMap[key]];
-				const el = document.getElementById(`denom_${key}`);
-				if (el && val !== undefined && val !== '') el.value = val;
-			});
-			if (cuData.data.CAUSES_CHECKED_JSON) {
-				try { state.causesChecked = JSON.parse(cuData.data.CAUSES_CHECKED_JSON) || {}; } catch (e) { state.causesChecked = {}; }
-			}
+
+	// Speed fix (28 July 2026) — getCashUpLog and getCommissionLog are independent of
+	// each other (different sheets, no shared data), so firing them together instead of
+	// one after another cuts a full Apps Script round trip off every Cash Up screen open.
+	// The Zoho live pull still waits for the Cash Up result below, since it genuinely is
+	// conditional on it (skipped entirely if a saved snapshot is found).
+	const cuUrl = `${SCRIPT_URL}?action=getCashUpLog&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+	const commUrl = `${SCRIPT_URL}?action=getCommissionLog&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
+
+	const [cuResult, commResult] = await Promise.all([
+		fetch(cuUrl).then(r => r.json()).catch(() => null),
+		fetch(commUrl).then(r => r.json()).catch(() => null)
+	]);
+
+	if (cuResult && cuResult.status === 'ok' && cuResult.found) {
+		const cuData = cuResult;
+		cuDataFound = cuData.data;
+		const fieldMap = {r200:'R200_QTY', r100:'R100_QTY', r50:'R50_QTY', r20:'R20_QTY', r10:'R10_QTY', r5:'R5_QTY', r2:'R2_QTY', r1:'R1_QTY', r050:'R0.50_QTY'};
+		Object.keys(fieldMap).forEach(key => {
+			const val = cuData.data[fieldMap[key]];
+			const el = document.getElementById(`denom_${key}`);
+			if (el && val !== undefined && val !== '') el.value = val;
+		});
+		if (cuData.data.CAUSES_CHECKED_JSON) {
+			try { state.causesChecked = JSON.parse(cuData.data.CAUSES_CHECKED_JSON) || {}; } catch (e) { state.causesChecked = {}; }
 		}
-	} catch (e) {
-		// No connection - keep counts at 0, don't block the app
 	}
 
 	try {
@@ -2234,10 +2242,8 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 
 	// Prefill Sales Person, Current Credit, and Total Credit from any previously saved commission entry (added 10 July 2026)
 	try {
-		const commUrl = `${SCRIPT_URL}?action=getCommissionLog&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
-		const commResp = await fetch(commUrl);
-		const commData = await commResp.json();
-		if (commData.status === 'ok' && commData.found) {
+		if (commResult && commResult.status === 'ok' && commResult.found) {
+			const commData = commResult;
 			if (isFlatRate) {
 				const rows = commData.rows || [];
 				const sp1El = document.getElementById('salesPerson1Select');
@@ -2261,7 +2267,7 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 			updateCommissionDisplay();
 		}
 	} catch (e) {
-		// No connection - leave Sales Person and credit fields blank, don't block the app
+		// Unexpected data shape - leave Sales Person and credit fields blank, don't block the app
 	}
 
 	updateCashTotal();
