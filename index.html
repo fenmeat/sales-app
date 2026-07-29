@@ -2213,7 +2213,10 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 				cashTotal: cuDataFound.ZOHO_CASH,
 				shop2shopTotal: cuDataFound.ZOHO_SHOP2SHOP,
 				newCreditToday: cuDataFound.NEW_CREDIT_TODAY,
-				creditCollectedToday: cuDataFound.CREDIT_COLLECTED_TODAY
+				creditCollectedToday: cuDataFound.CREDIT_COLLECTED_TODAY,
+				// ADDED 29 July 2026 -- Cash Sales / Credit Collected in Cash split
+				cashSalesToday: cuDataFound.ZOHO_CASH_SALES,
+				creditCollectedInCash: cuDataFound.ZOHO_CREDIT_COLLECTED_CASH
 			};
 			document.getElementById('zohoBox').innerHTML = renderZohoBoxHtml(state.cashUpZoho);
 		} else {
@@ -2284,10 +2287,21 @@ function renderZohoBoxHtml(zoho) {
 	if (variance > 0) { label = 'DELIVERED NOT INVOICED'; color = 'var(--blue)'; }
 	else if (variance < 0) { label = 'INVOICED NOT DELIVERED'; color = 'var(--red)'; }
 	else { label = 'MATCHED'; color = 'var(--green)'; }
+	// ADDED 29 July 2026 -- Cash Sales / Credit Collected in Cash split. Older saved
+	// rows (from before this migration) won't have these two fields -- fall back to
+	// the single combined "Cash (Zoho)" line for those instead of showing blank/zero.
+	const hasCashSplit = zoho.cashSalesToday !== undefined && zoho.cashSalesToday !== '' &&
+		zoho.creditCollectedInCash !== undefined && zoho.creditCollectedInCash !== '';
+	const cashSplitHtml = hasCashSplit ? `
+		<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Cash Sales</span><b>R ${formatRand(Number(zoho.cashSalesToday))}</b></div>
+		<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Credit Collected in Cash</span><b>R ${formatRand(Number(zoho.creditCollectedInCash))}</b></div>
+	` : `
+		<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Cash (Zoho)</span><b>R ${formatRand(Number(zoho.cashTotal))}</b></div>
+	`;
 	return `
 		<h3 style="margin-bottom:10px;">Zoho Figures (${state.date})</h3>
 		<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Zoho Total Sales</span><b>R ${formatRand(zohoSales)}</b></div>
-		<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Cash (Zoho)</span><b>R ${formatRand(Number(zoho.cashTotal))}</b></div>
+		${cashSplitHtml}
 		<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Shop2Shop</span><b>R ${formatRand(Number(zoho.shop2shopTotal))}</b></div>
 		<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>New Credit Today</span><b>R ${formatRand(Number(zoho.newCreditToday))}</b></div>
 		<div style="display:flex;justify-content:space-between;padding:4px 0;"><span>Credit Collected Today</span><b>R ${formatRand(Number(zoho.creditCollectedToday))}</b></div>
@@ -2619,6 +2633,9 @@ async function saveCashUp(totalValue) {
 					zohoShop2Shop: shop2shop,
 					newCreditToday: Number(zoho.newCreditToday) || 0,
 					creditCollectedToday: Number(zoho.creditCollectedToday) || 0,
+					// ADDED 29 July 2026 -- Cash Sales / Credit Collected in Cash split
+					cashSalesToday: Number(zoho.cashSalesToday) || 0,
+					creditCollectedInCash: Number(zoho.creditCollectedInCash) || 0,
 					...counts,
 					cashCountedTotal,
 					cashDifference,
