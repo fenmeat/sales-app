@@ -2463,6 +2463,7 @@ const REPORT_I18N = {
 		heading: 'Delivery & Cash Report',
 		route: 'Route',
 		date: 'Date',
+		salesPerson: 'Sales Person',
 		cashShort: (amt) => `Cash was short by R${amt} today.`,
 		cashOver: (amt) => `Cash was over by R${amt} today — more cash was counted than expected.`,
 		cashMatched: 'Cash matched exactly today. Well done.',
@@ -2484,6 +2485,7 @@ const REPORT_I18N = {
 		heading: 'Ingxelo Yemveliso Nemali',
 		route: 'Uhambo',
 		date: 'Umhla',
+		salesPerson: 'Umthengisi',
 		cashShort: (amt) => `Imali ishoti nge-R${amt} namhlanje.`,
 		cashOver: (amt) => `Imali igqithile nge-R${amt} namhlanje — kubaliwe imali engaphezulu kunelindelekileyo.`,
 		cashMatched: 'Imali ihambelana ngokupheleleyo namhlanje. Enkosi ngomsebenzi wakho olungileyo.',
@@ -2600,6 +2602,20 @@ async function shareCausesPdf() {
 	const cashDiff = state.cashUpLastDiff || 0;
 	const stockDiff = getStockDifference();
 
+	// ADDED 3 Aug 2026 -- Sales Person name(s) for the report header. Flat-rate
+	// routes (Riversdale/Oudtshoorn/Stilbaai) have two salespeople splitting
+	// the pool, so both names are joined; standard routes have one dropdown.
+	let salesPersonDisplay = '';
+	if (state.cashUpFlatRate) {
+		const sp1El = document.getElementById('salesPerson1Select');
+		const sp2El = document.getElementById('salesPerson2Select');
+		const names = [sp1El && sp1El.value, sp2El && sp2El.value].filter(Boolean);
+		salesPersonDisplay = names.join(' & ');
+	} else {
+		const spEl = document.getElementById('salesPersonInput');
+		salesPersonDisplay = (spEl && spEl.value) || '';
+	}
+
 	showToast('📄 Building report...', '');
 
 	// Pull fresh per-product Zoho invoiced quantities for this route/date
@@ -2638,6 +2654,7 @@ async function shareCausesPdf() {
 	doc.setFontSize(10.5);
 	doc.text(`${T.route}: ${route}`, 40, y += 22);
 	doc.text(`${T.date}: ${date}`, 40, y += 16);
+	if (salesPersonDisplay) doc.text(`${T.salesPerson}: ${salesPersonDisplay}`, 40, y += 16);
 	y += 10;
 
 	function wrapped(text, indent, size) {
