@@ -2423,6 +2423,86 @@ const CAUSE_LISTS = {
 	]
 };
 
+// ADDED 29 July 2026 -- isiXhosa translations of CAUSE_LISTS, same index
+// positions as the English versions above (cashShort_0, cashShort_1, etc.)
+// so a single 'checked' state works for both languages. NOTE: these are
+// AI-generated isiXhosa translations -- Alex should have a Xhosa-speaking
+// staff member sanity-check the wording at least once, since this text
+// affects real wage-deduction conversations with the sales reps.
+const CAUSE_LISTS_XH = {
+	cashShort: [
+		'I-invoyisi ibhalwe njenge-Cash, kodwa umthengi ubhatale nge-Credit/Shop2Shop',
+		'Ityala liqokelelwe kodwa alibhalwanga kwi-Cash Up',
+		'Ushintyo lunikwe ngokungachanekanga',
+		'Imali ilahlekile okanye ibiwe',
+		'Impazamo yokubala iinoti/iindibano (ukubala okungachanekanga kwiphepha)',
+		'I-invoyisi ye-Zoho beyingekafakwa xa kusenziwa umahluko'
+	],
+	cashOver: [
+		'Umthengi ubhatale ngaphezulu kwesixa se-invoyisi (ushintyo alunikwanga)',
+		'Ukuqokelelwa kwetyala kubaliwe kabini ngempazamo'
+	],
+	stockDiff: [
+		'I-invoyisi isekwi-Drafts kwi-Zoho — ayigcinwanga njenge "Sent"',
+		'Isitokhwe sishiywe nomthengi kodwa akwenziwanga invoyisi',
+		'Isampuli/impahla ebuyisiweyo ayibhalwanga',
+		'Isitokhwe sibalwe ngokungachanekanga xa silayishwa (Ekuseni) okanye xa kubuyiswa (Ngokuhlwa)',
+		'Ukwaphuka/ukonakala akubhalwanga',
+		'Isitokhwe sibiwe okanye silahlekile'
+	]
+};
+
+// ADDED 29 July 2026 -- plain-language, translatable strings for the
+// detailed feedback report shared with sales reps (see shareCausesPdf).
+// Kept separate from CAUSE_LISTS because these are full sentences with
+// dynamic values (product name, quantities) rather than fixed checklist
+// items. Again: isiXhosa wording here is AI-generated and worth a native
+// speaker's review before relying on it for wage-deduction conversations.
+const REPORT_I18N = {
+	en: {
+		heading: 'Delivery & Cash Report',
+		route: 'Route',
+		date: 'Date',
+		cashShort: (amt) => `Cash was short by R${amt} today.`,
+		cashOver: (amt) => `Cash was over by R${amt} today — more cash was counted than expected.`,
+		cashMatched: 'Cash matched exactly today. Well done.',
+		stockIntro: 'There is a difference between what was recorded as sold and what Zoho shows as invoiced. See the product list below.',
+		stockMatched: 'Stock and Zoho invoices matched exactly today. Well done.',
+		productHeader: 'Products to check',
+		deliveredNotInvoiced: (name, sold, zoho, diff) =>
+			`${name}: You recorded ${sold} sold, but only ${zoho} is invoiced in Zoho. ${diff} item(s) may still need an invoice, or were given away without one — please check.`,
+		invoicedNotDelivered: (name, sold, zoho, diff) =>
+			`${name}: Zoho shows ${zoho} invoiced, but only ${sold} is recorded as sold. ${diff} item(s) may have been left with a customer without being counted, or the stock count may be wrong — please check.`,
+		causesHeaderShort: 'Possible reasons the cash was short',
+		causesHeaderOver: 'Possible reasons the cash was over',
+		causesHeaderStock: 'Possible reasons for the stock difference',
+		alreadyChecked: 'Already checked by Alex — not the reason:',
+		stillToCheck: 'Please check if this could be the reason:',
+		footer: 'Please check these and let Alex know what you find. This helps avoid a wrong deduction from your pay.'
+	},
+	xh: {
+		heading: 'Ingxelo Yemveliso Nemali',
+		route: 'Uhambo',
+		date: 'Umhla',
+		cashShort: (amt) => `Imali ishoti nge-R${amt} namhlanje.`,
+		cashOver: (amt) => `Imali igqithile nge-R${amt} namhlanje — kubaliwe imali engaphezulu kunelindelekileyo.`,
+		cashMatched: 'Imali ihambelana ngokupheleleyo namhlanje. Enkosi ngomsebenzi wakho olungileyo.',
+		stockIntro: 'Kukho umahluko phakathi kwento ebhalwe njengethengisiweyo nento ebonisa i-Zoho njenge-invoyisiweyo. Jonga uluhlu lweemveliso ngezantsi.',
+		stockMatched: 'Isitokhwe kunye ne-invoyisi ze-Zoho zihambelana ngokupheleleyo namhlanje. Enkosi.',
+		productHeader: 'Iimveliso ekufuneka zijongwe',
+		deliveredNotInvoiced: (name, sold, zoho, diff) =>
+			`${name}: Ubhale phantsi ukuba kuthengisiwe ${sold}, kodwa yi-${zoho} kuphela e-invoyisiweyo kwi-Zoho. ${diff} isenokuba isafuna i-invoyisi, okanye yanikwa umthengi ngaphandle kwe-invoyisi — nceda ujonge.`,
+		invoicedNotDelivered: (name, sold, zoho, diff) =>
+			`${name}: I-Zoho ibonisa ukuba i-invoyisiwe ${zoho}, kodwa yi-${sold} kuphela ebhalwe njengethengisiweyo. ${diff} isenokuba ishiywe nomthengi ngaphandle kokubalwa, okanye ukubalwa kwesitokhwe kwakungachananga — nceda ujonge.`,
+		causesHeaderShort: 'Izizathu ezinokubangela ukuba imali ishoti',
+		causesHeaderOver: 'Izizathu ezinokubangela ukuba imali igqithe',
+		causesHeaderStock: 'Izizathu ezinokubangela umahluko wesitokhwe',
+		alreadyChecked: 'Sele ijongiwe ngu-Alex — asiyiyo ingxaki:',
+		stillToCheck: 'Nceda ujonge ukuba oku kusenokuba yingxaki:',
+		footer: 'Nceda ujonge ezi zinto uze uxelele u-Alex oko ukufumeneyo. Oku kunceda ukuphepha ukutsalwa kwemali okungachananga kumvuzo wakho.'
+	}
+};
+
 function getStockDifference() {
 	const zoho = state.cashUpZoho || {};
 	return Math.round(((state.cashUpSalesValue || 0) - (Number(zoho.zohoTotalSales) || 0)) * 100) / 100;
@@ -2458,14 +2538,28 @@ function updateCausesSection() {
 		box.innerHTML = '';
 		return;
 	}
+	if (!state.reportLang) state.reportLang = 'en';
 	box.style.display = 'block';
 	box.innerHTML = `
 		<div style="padding:16px;background:var(--card);border:1px solid var(--border);border-radius:8px;">
 			<h3 style="margin-bottom:6px;">Difference Causes</h3>
-			<div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Tick off anything you've already checked — the salesman will see this on the PDF.</div>
+			<div style="font-size:12px;color:var(--muted);margin-bottom:12px;">Tick off anything you've already checked — this is for your own reference and is not sent to the sales rep.</div>
 			${sections}
-			<div style="text-align:right;margin-top:8px;">
-				<button class="btn btn-secondary" style="font-size:13px;padding:8px 14px;" onclick="shareCausesPdf()">📄 Share Causes PDF</button>
+			<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border);">
+				<div style="font-size:12px;color:var(--muted);margin-bottom:6px;">Report language for the PDF you send to the sales rep:</div>
+				<div style="display:flex;gap:16px;align-items:center;">
+					<label style="font-size:14px;display:flex;align-items:center;gap:6px;">
+						<input type="radio" name="reportLang" value="en" ${state.reportLang !== 'xh' ? 'checked' : ''} onchange="state.reportLang='en';">
+						English
+					</label>
+					<label style="font-size:14px;display:flex;align-items:center;gap:6px;">
+						<input type="radio" name="reportLang" value="xh" ${state.reportLang === 'xh' ? 'checked' : ''} onchange="state.reportLang='xh';">
+						isiXhosa
+					</label>
+				</div>
+			</div>
+			<div style="text-align:right;margin-top:12px;">
+				<button class="btn btn-secondary" style="font-size:13px;padding:8px 14px;" onclick="shareCausesPdf()">📄 Share Report PDF</button>
 			</div>
 		</div>
 	`;
@@ -2476,11 +2570,29 @@ function toggleCause(id, checked) {
 	state.causesChecked[id] = checked;
 }
 
+// REWRITTEN 29 July 2026 -- now produces a plain-language, product-level
+// report for the SALES REP (not the technical checklist Alex sees on
+// screen -- that stays exactly as-is above). Two changes from the old
+// version:
+//   1. Pulls fresh per-product Zoho invoiced quantities (same
+//      getZohoItemSales backend action the Evening screen already uses)
+//      and lists out, product by product, exactly which items were
+//      delivered-but-not-invoiced or invoiced-but-not-delivered -- instead
+//      of just a single unexplained Rand total.
+//   2. Every sentence comes from REPORT_I18N, so the whole PDF can be
+//      generated in English or isiXhosa via the toggle above the button
+//      (state.reportLang). The on-screen checklist itself is unchanged
+//      and is not shown to the rep -- only a plain summary of what Alex
+//      has already ruled out vs what still needs checking.
 async function shareCausesPdf() {
 	if (typeof window.jspdf === 'undefined') {
 		showToast('⚠️ PDF library not loaded — check internet connection and try again', 'error');
 		return;
 	}
+	const lang = state.reportLang === 'xh' ? 'xh' : 'en';
+	const T = REPORT_I18N[lang];
+	const causeList = lang === 'xh' ? CAUSE_LISTS_XH : CAUSE_LISTS;
+
 	const { jsPDF } = window.jspdf;
 	const doc = new jsPDF({ unit: 'pt', format: 'a4' });
 	const route = state.activeRoute;
@@ -2488,49 +2600,146 @@ async function shareCausesPdf() {
 	const cashDiff = state.cashUpLastDiff || 0;
 	const stockDiff = getStockDifference();
 
+	showToast('📄 Building report...', '');
+
+	// Pull fresh per-product Zoho invoiced quantities for this route/date
+	// (same endpoint the Evening screen's ZOHO column already calls), so
+	// the report can name exact products rather than one lump Rand figure.
+	let zohoMap = {};
+	try {
+		const url = `${SCRIPT_URL}?action=getZohoItemSales&route=${encodeURIComponent(route)}&date=${date}&sheetId=${NEW_SHEET_ID}`;
+		const resp = await fetch(url);
+		const data = await resp.json();
+		if (data.status === 'ok') {
+			(data.products || []).forEach(p => { zohoMap[p.code] = p.zohoQty; });
+		}
+	} catch (e) {
+		// No connection -- report will still generate, just without the
+		// product-level breakdown (falls back to the Rand total only).
+	}
+
+	const products = (state.routeData[route] && state.routeData[route].products) || [];
+	const productDiffs = [];
+	products.forEach(p => {
+		const sold = p.out - p.inQty;
+		if (!zohoMap.hasOwnProperty(p.code)) return;
+		const zohoQty = zohoMap[p.code];
+		if (sold === zohoQty) return;
+		productDiffs.push({ name: p.name, sold, zoho: zohoQty, diff: Math.abs(sold - zohoQty), deliveredNotInvoiced: sold > zohoQty });
+	});
+
 	let y = 50;
 	doc.setFontSize(20);
 	doc.setTextColor(0, 60, 255);
 	doc.text('FenMeat', 40, y);
 	doc.setTextColor(20, 20, 20);
 	doc.setFontSize(13);
-	doc.text('Cash Up Difference Report', 40, y += 26);
+	doc.text(T.heading, 40, y += 26);
 	doc.setFontSize(10.5);
-	doc.text(`Route: ${route}`, 40, y += 22);
-	doc.text(`Date: ${date}`, 40, y += 16);
-	doc.text(`Cash Difference: R ${cashDiff.toFixed(2)} ${cashDiff < 0 ? '(Short)' : (cashDiff > 0 ? '(Over)' : '')}`, 40, y += 16);
-	doc.text(`Stock Difference: R ${stockDiff.toFixed(2)}`, 40, y += 16);
-	y += 14;
+	doc.text(`${T.route}: ${route}`, 40, y += 22);
+	doc.text(`${T.date}: ${date}`, 40, y += 16);
+	y += 10;
 
-	function section(title, key, list) {
-		doc.setFontSize(12.5);
+	function wrapped(text, indent, size) {
+		doc.setFontSize(size || 10.5);
+		const lines = doc.splitTextToSize(text, 500 - (indent - 40));
+		lines.forEach(line => { doc.text(line, indent, y += 15); });
+	}
+	function heading(text) {
 		doc.setFont(undefined, 'bold');
-		doc.text(title, 40, y += 20);
+		doc.setFontSize(12.5);
+		doc.text(text, 40, y += 22);
 		doc.setFont(undefined, 'normal');
-		doc.setFontSize(10.5);
-		list.forEach((text, idx) => {
-			const id = key + '_' + idx;
-			const checked = state.causesChecked && state.causesChecked[id];
-			const marker = checked ? '[x]' : '[ ]';
-			const lines = doc.splitTextToSize(`${marker} ${text}`, 500);
-			lines.forEach(line => { doc.text(line, 50, y += 15); });
-		});
 	}
 
-	if (cashDiff < -0.005) section('Possible Causes — Cash Short', 'cashShort', CAUSE_LISTS.cashShort);
-	if (cashDiff > 0.005) section('Possible Causes — Cash Over', 'cashOver', CAUSE_LISTS.cashOver);
-	if (Math.abs(stockDiff) > 0.005) section('Possible Causes — Stock Difference', 'stockDiff', CAUSE_LISTS.stockDiff);
+	// --- Cash section ---
+	heading(cashDiff < -0.005 ? T.causesHeaderShort : (cashDiff > 0.005 ? T.causesHeaderOver : ''));
+	if (cashDiff < -0.005) wrapped(T.cashShort(Math.abs(cashDiff).toFixed(2)), 40);
+	else if (cashDiff > 0.005) wrapped(T.cashOver(cashDiff.toFixed(2)), 40);
+	else wrapped(T.cashMatched, 40);
+
+	if (Math.abs(cashDiff) > 0.005) {
+		const key = cashDiff < 0 ? 'cashShort' : 'cashOver';
+		const list = causeList[key];
+		const checkedItems = [], uncheckedItems = [];
+		list.forEach((text, idx) => {
+			const id = key + '_' + idx;
+			(state.causesChecked && state.causesChecked[id] ? checkedItems : uncheckedItems).push(text);
+		});
+		if (uncheckedItems.length) {
+			y += 6;
+			doc.setFont(undefined, 'bold');
+			wrapped(T.stillToCheck, 40, 10.5);
+			doc.setFont(undefined, 'normal');
+			uncheckedItems.forEach(t => wrapped('• ' + t, 50));
+		}
+		if (checkedItems.length) {
+			y += 6;
+			doc.setFont(undefined, 'bold');
+			wrapped(T.alreadyChecked, 40, 10.5);
+			doc.setFont(undefined, 'normal');
+			checkedItems.forEach(t => wrapped('• ' + t, 50));
+		}
+	}
+
+	// --- Stock section ---
+	y += 10;
+	heading(T.causesHeaderStock);
+	if (Math.abs(stockDiff) > 0.005) {
+		wrapped(T.stockIntro, 40);
+		if (productDiffs.length) {
+			y += 4;
+			doc.setFont(undefined, 'bold');
+			wrapped(T.productHeader, 40, 11);
+			doc.setFont(undefined, 'normal');
+			productDiffs.forEach(pd => {
+				const sentence = pd.deliveredNotInvoiced
+					? T.deliveredNotInvoiced(pd.name, pd.sold, pd.zoho, pd.diff)
+					: T.invoicedNotDelivered(pd.name, pd.sold, pd.zoho, pd.diff);
+				wrapped('• ' + sentence, 50);
+			});
+		}
+		const key = 'stockDiff';
+		const list = causeList[key];
+		const checkedItems = [], uncheckedItems = [];
+		list.forEach((text, idx) => {
+			const id = key + '_' + idx;
+			(state.causesChecked && state.causesChecked[id] ? checkedItems : uncheckedItems).push(text);
+		});
+		if (uncheckedItems.length) {
+			y += 6;
+			doc.setFont(undefined, 'bold');
+			wrapped(T.stillToCheck, 40, 10.5);
+			doc.setFont(undefined, 'normal');
+			uncheckedItems.forEach(t => wrapped('• ' + t, 50));
+		}
+		if (checkedItems.length) {
+			y += 6;
+			doc.setFont(undefined, 'bold');
+			wrapped(T.alreadyChecked, 40, 10.5);
+			doc.setFont(undefined, 'normal');
+			checkedItems.forEach(t => wrapped('• ' + t, 50));
+		}
+	} else {
+		wrapped(T.stockMatched, 40);
+	}
+
+	y += 20;
+	doc.setFont(undefined, 'italic');
+	wrapped(T.footer, 40, 10);
+	doc.setFont(undefined, 'normal');
 
 	const blob = doc.output('blob');
-	const fileName = `FenMeat_${route}_${date}_Causes.pdf`;
+	const langSuffix = lang === 'xh' ? 'XH' : 'EN';
+	const fileName = `FenMeat_${route}_${date}_Report_${langSuffix}.pdf`;
 	const pdfFile = new File([blob], fileName, { type: 'application/pdf' });
 
 	if (navigator.canShare && navigator.canShare({ files: [pdfFile] })) {
 		try {
 			await navigator.share({
 				files: [pdfFile],
-				title: 'FenMeat Cash Up Causes',
-				text: `Cash Up causes for ${route} — ${date}`
+				title: 'FenMeat Report',
+				text: `${T.heading} — ${route} — ${date}`
 			});
 			return;
 		} catch (e) {
