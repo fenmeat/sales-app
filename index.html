@@ -2203,6 +2203,23 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 		}
 	}
 
+	// FIX (5 August 2026) -- Difference Causes ticks used to reset whenever the
+	// app was closed/reopened without pressing "Save Cash Up" again, because
+	// they only lived in state.causesChecked until that explicit save. Now
+	// mirrored to localStorage on every tick (see toggleCause), keyed by
+	// date+route -- same pattern already used for Morning Load tick marks.
+	// Restored here as an overlay on top of whatever was last actually saved
+	// to CASH_UP_LOG, so a not-yet-saved tick survives a close/reopen too.
+	try {
+		const rawCauses = localStorage.getItem(causesCheckedStorageKey(state.date, route.name));
+		if (rawCauses) {
+			const parsedCauses = JSON.parse(rawCauses);
+			if (parsedCauses && typeof parsedCauses === 'object') state.causesChecked = parsedCauses;
+		}
+	} catch (e) {
+		// localStorage unavailable/bad data -- fall back to whatever was loaded above
+	}
+
 	try {
 		if (cuDataFound && cuDataFound.ZOHO_TOTAL_SALES !== undefined && cuDataFound.ZOHO_TOTAL_SALES !== '') {
 			// Use the Zoho snapshot saved the last time Cash Up was saved for this
@@ -2567,9 +2584,22 @@ function updateCausesSection() {
 	`;
 }
 
+// Difference Causes checklist -- localStorage key, mirrors loadCheckStorageKey's
+// date+route pattern (see Morning Load tick marks) so ticks survive a
+// close/reopen even if Alex never presses "Save Cash Up" again afterward.
+function causesCheckedStorageKey(date, routeName) {
+	return 'fenmeat_causesChecked_' + date + '_' + routeName;
+}
+
 function toggleCause(id, checked) {
 	if (!state.causesChecked) state.causesChecked = {};
 	state.causesChecked[id] = checked;
+	try {
+		const routeName = state.activeRoute;
+		localStorage.setItem(causesCheckedStorageKey(state.date, routeName), JSON.stringify(state.causesChecked));
+	} catch (e) {
+		// localStorage unavailable/full -- ticks just won't persist, don't block the app
+	}
 }
 
 // REWRITTEN 29 July 2026 -- now produces a plain-language, product-level
@@ -2644,36 +2674,195 @@ async function shareCausesPdf() {
 		productDiffs.push({ name: p.name, sold, zoho: zohoQty, diff: Math.abs(sold - zohoQty), deliveredNotInvoiced: sold > zohoQty });
 	});
 
-	let y = 50;
-	doc.setFontSize(20);
-	doc.setTextColor(0, 60, 255);
-	doc.text('FenMeat', 40, y);
-	doc.setTextColor(20, 20, 20);
-	doc.setFontSize(13);
-	doc.text(T.heading, 40, y += 26);
-	doc.setFontSize(10.5);
-	doc.text(`${T.route}: ${route}`, 40, y += 22);
-	doc.text(`${T.date}: ${date}`, 40, y += 16);
-	if (salesPersonDisplay) doc.text(`${T.salesPerson}: ${salesPersonDisplay}`, 40, y += 16);
-	y += 10;
+	// REDESIGNED 5 August 2026 -- report was plain black-on-white text with no
+	// visual hierarchy (Alex: "hard to read, doesn't look professional"). Now
+	// uses a branded header band, a route/date/sales-person info card, colour
+	// tagged section headings, real drawn checkboxes (not relying on unicode
+	// glyph support in jsPDF's default font), coloured status dots on the
+	// per-product stock lines, page-break handling for long reports, and a
+	// page-numbered footer -- matching the Elevated Precision palette already
+	// used across the app (Royal Blue #003CFF / #0026B3, functional colours
+	// for success/warning/danger). HEADER_LOGO_B64 is the same PNG constant
+	// already embedded in this file for the on-screen app header (defined
+	// near the top of index.html); its natural aspect ratio is 1600x390.
+	const PAGE_W = doc.internal.pageSize.getWidth();
+	const PAGE_H = doc.internal.pageSize.getHeight();
+	const MARGIN = 40;
+	const CONTENT_W = PAGE_W - MARGIN * 2;
+	const BRAND = [0, 60, 255];
+	const BRAND_DEEP = [0, 38, 179];
+	const INK = [30, 32, 40];
+	const MUTED = [110, 116, 130];
+	const BORDER = [221, 225, 234];
+	const CARD_BG = [246, 247, 250];
+	const SUCCESS = [29, 138, 92];
+	const WARNING = [193, 120, 14];
+	const DANGER = [178, 58, 58];
+	const FOOTER_SAFE = 60;
 
-	function wrapped(text, indent, size) {
-		doc.setFontSize(size || 10.5);
-		const lines = doc.splitTextToSize(text, 500 - (indent - 40));
-		lines.forEach(line => { doc.text(line, indent, y += 15); });
+	let y = 0;
+
+	function setColor(c) { doc.setTextColor(c[0], c[1], c[2]); }
+	function setFillC(c) { doc.setFillColor(c[0], c[1], c[2]); }
+	function setDrawC(c) { doc.setDrawColor(c[0], c[1], c[2]); }
+
+	function drawHeaderBand() {
+		setFillC(BRAND);
+		doc.rect(0, 0, PAGE_W, 84, 'F');
+		setFillC(BRAND_DEEP);
+		doc.rect(0, 84, PAGE_W, 3, 'F');
+		try {
+			doc.addImage(HEADER_LOGO_B64, 'PNG', MARGIN, 22, 98.5, 24);
+		} catch (e) {
+			doc.setFont(undefined, 'bold');
+			doc.setFontSize(20);
+			setColor([255, 255, 255]);
+			doc.text('FenMeat', MARGIN, 42);
+		}
+		doc.setFont(undefined, 'bold');
+		doc.setFontSize(13);
+		setColor([255, 255, 255]);
+		doc.text(T.heading, MARGIN, 66);
+		doc.setFont(undefined, 'normal');
+		setColor(INK);
 	}
-	function heading(text) {
+
+	function drawInfoCard() {
+		const cardH = 44;
+		setFillC(CARD_BG);
+		setDrawC(BORDER);
+		doc.setLineWidth(0.75);
+		doc.roundedRect(MARGIN, y, CONTENT_W, cardH, 5, 5, 'FD');
+		const cols = [
+			{ label: T.route, value: route },
+			{ label: T.date, value: date },
+			{ label: T.salesPerson, value: salesPersonDisplay || '—' }
+		];
+		const colW = CONTENT_W / cols.length;
+		cols.forEach((c, i) => {
+			const cx = MARGIN + i * colW + 14;
+			doc.setFont(undefined, 'bold');
+			doc.setFontSize(7.5);
+			setColor(MUTED);
+			doc.text(String(c.label).toUpperCase(), cx, y + 16);
+			doc.setFont(undefined, 'bold');
+			doc.setFontSize(11);
+			setColor(INK);
+			const valLines = doc.splitTextToSize(String(c.value), colW - 20);
+			doc.text(valLines[0], cx, y + 32);
+		});
+		doc.setFont(undefined, 'normal');
+		y += cardH + 22;
+	}
+
+	function newPage() {
+		doc.addPage();
+		y = MARGIN;
+		doc.setFont(undefined, 'bold');
+		doc.setFontSize(9);
+		setColor(MUTED);
+		doc.text(`${T.heading} — ${route} — ${date}`, MARGIN, y);
+		setDrawC(BORDER);
+		doc.setLineWidth(0.5);
+		doc.line(MARGIN, y + 6, PAGE_W - MARGIN, y + 6);
+		doc.setFont(undefined, 'normal');
+		setColor(INK);
+		y += 22;
+	}
+
+	function checkSpace(h) {
+		if (y + h > PAGE_H - FOOTER_SAFE) newPage();
+	}
+
+	function paragraph(text, size) {
+		doc.setFont(undefined, 'normal');
+		doc.setFontSize(size || 10.5);
+		setColor(INK);
+		const lines = doc.splitTextToSize(text, CONTENT_W);
+		lines.forEach(line => {
+			checkSpace(15);
+			doc.text(line, MARGIN, y + 11);
+			y += 15;
+		});
+	}
+
+	function sectionHeading(text, color) {
+		if (!text) return;
+		checkSpace(26);
+		setFillC(color);
+		doc.roundedRect(MARGIN, y, 8, 8, 1.5, 1.5, 'F');
 		doc.setFont(undefined, 'bold');
 		doc.setFontSize(12.5);
-		doc.text(text, 40, y += 22);
+		setColor(color);
+		doc.text(text, MARGIN + 14, y + 7.5);
 		doc.setFont(undefined, 'normal');
+		setColor(INK);
+		y += 22;
 	}
 
+	function drawCheckbox(cx, cyTop, checked) {
+		const s = 8;
+		const cyBox = cyTop - s + 2;
+		if (checked) {
+			setFillC(SUCCESS);
+			setDrawC(SUCCESS);
+			doc.roundedRect(cx, cyBox, s, s, 1.5, 1.5, 'FD');
+			doc.setDrawColor(255, 255, 255);
+			doc.setLineWidth(1.1);
+			doc.line(cx + 1.6, cyBox + 4.3, cx + 3.3, cyBox + 6.2);
+			doc.line(cx + 3.3, cyBox + 6.2, cx + 6.5, cyBox + 1.8);
+		} else {
+			doc.setFillColor(255, 255, 255);
+			setDrawC(MUTED);
+			doc.setLineWidth(1);
+			doc.roundedRect(cx, cyBox, s, s, 1.5, 1.5, 'FD');
+		}
+		doc.setLineWidth(0.75);
+	}
+
+	function checklistGroup(label, items, checked) {
+		if (!items.length) return;
+		checkSpace(18);
+		doc.setFont(undefined, 'bold');
+		doc.setFontSize(8);
+		setColor(MUTED);
+		doc.text(String(label).toUpperCase(), MARGIN, y + 7);
+		doc.setFont(undefined, 'normal');
+		setColor(INK);
+		y += 15;
+		const textIndent = MARGIN + 16;
+		const textWidth = CONTENT_W - 16;
+		items.forEach(t => {
+			doc.setFontSize(10);
+			const lines = doc.splitTextToSize(t, textWidth);
+			checkSpace(lines.length * 13 + 4);
+			drawCheckbox(MARGIN, y + 11, checked);
+			lines.forEach((line, li) => {
+				doc.text(line, textIndent, y + 11);
+				y += 13;
+			});
+			y += 2;
+		});
+		y += 4;
+	}
+
+	function statusDot(color) {
+		setFillC(color);
+		doc.circle(MARGIN + 4, y + 6.5, 3, 'F');
+	}
+
+	// ---------- Draw ----------
+	drawHeaderBand();
+	y = 108;
+	drawInfoCard();
+
 	// --- Cash section ---
-	heading(cashDiff < -0.005 ? T.causesHeaderShort : (cashDiff > 0.005 ? T.causesHeaderOver : ''));
-	if (cashDiff < -0.005) wrapped(T.cashShort(Math.abs(cashDiff).toFixed(2)), 40);
-	else if (cashDiff > 0.005) wrapped(T.cashOver(cashDiff.toFixed(2)), 40);
-	else wrapped(T.cashMatched, 40);
+	const cashColor = cashDiff < -0.005 ? DANGER : (cashDiff > 0.005 ? WARNING : SUCCESS);
+	const cashHeading = cashDiff < -0.005 ? T.causesHeaderShort : (cashDiff > 0.005 ? T.causesHeaderOver : '');
+	sectionHeading(cashHeading, cashColor);
+	if (cashDiff < -0.005) paragraph(T.cashShort(Math.abs(cashDiff).toFixed(2)));
+	else if (cashDiff > 0.005) paragraph(T.cashOver(cashDiff.toFixed(2)));
+	else paragraph(T.cashMatched);
 
 	if (Math.abs(cashDiff) > 0.005) {
 		const key = cashDiff < 0 ? 'cashShort' : 'cashOver';
@@ -2683,38 +2872,47 @@ async function shareCausesPdf() {
 			const id = key + '_' + idx;
 			(state.causesChecked && state.causesChecked[id] ? checkedItems : uncheckedItems).push(text);
 		});
-		if (uncheckedItems.length) {
-			y += 6;
-			doc.setFont(undefined, 'bold');
-			wrapped(T.stillToCheck, 40, 10.5);
-			doc.setFont(undefined, 'normal');
-			uncheckedItems.forEach(t => wrapped('• ' + t, 50));
-		}
-		if (checkedItems.length) {
-			y += 6;
-			doc.setFont(undefined, 'bold');
-			wrapped(T.alreadyChecked, 40, 10.5);
-			doc.setFont(undefined, 'normal');
-			checkedItems.forEach(t => wrapped('• ' + t, 50));
-		}
+		y += 4;
+		checklistGroup(T.stillToCheck, uncheckedItems, false);
+		checklistGroup(T.alreadyChecked, checkedItems, true);
 	}
 
 	// --- Stock section ---
-	y += 10;
-	heading(T.causesHeaderStock);
+	checkSpace(30);
+	y += 8;
+	setDrawC(BORDER);
+	doc.setLineWidth(0.5);
+	doc.line(MARGIN, y, PAGE_W - MARGIN, y);
+	y += 16;
+	sectionHeading(T.causesHeaderStock, BRAND);
 	if (Math.abs(stockDiff) > 0.005) {
-		wrapped(T.stockIntro, 40);
+		paragraph(T.stockIntro);
 		if (productDiffs.length) {
-			y += 4;
+			checkSpace(18);
 			doc.setFont(undefined, 'bold');
-			wrapped(T.productHeader, 40, 11);
+			doc.setFontSize(9.5);
+			setColor(MUTED);
+			doc.text(String(T.productHeader).toUpperCase(), MARGIN, y + 7);
 			doc.setFont(undefined, 'normal');
+			setColor(INK);
+			y += 17;
+			const textIndent = MARGIN + 14;
+			const textWidth = CONTENT_W - 14;
 			productDiffs.forEach(pd => {
 				const sentence = pd.deliveredNotInvoiced
 					? T.deliveredNotInvoiced(pd.name, pd.sold, pd.zoho, pd.diff)
 					: T.invoicedNotDelivered(pd.name, pd.sold, pd.zoho, pd.diff);
-				wrapped('• ' + sentence, 50);
+				doc.setFontSize(10);
+				const lines = doc.splitTextToSize(sentence, textWidth);
+				checkSpace(lines.length * 13 + 4);
+				statusDot(pd.deliveredNotInvoiced ? BRAND : DANGER);
+				lines.forEach(line => {
+					doc.text(line, textIndent, y + 11);
+					y += 13;
+				});
+				y += 2;
 			});
+			y += 4;
 		}
 		const key = 'stockDiff';
 		const list = causeList[key];
@@ -2723,28 +2921,43 @@ async function shareCausesPdf() {
 			const id = key + '_' + idx;
 			(state.causesChecked && state.causesChecked[id] ? checkedItems : uncheckedItems).push(text);
 		});
-		if (uncheckedItems.length) {
-			y += 6;
-			doc.setFont(undefined, 'bold');
-			wrapped(T.stillToCheck, 40, 10.5);
-			doc.setFont(undefined, 'normal');
-			uncheckedItems.forEach(t => wrapped('• ' + t, 50));
-		}
-		if (checkedItems.length) {
-			y += 6;
-			doc.setFont(undefined, 'bold');
-			wrapped(T.alreadyChecked, 40, 10.5);
-			doc.setFont(undefined, 'normal');
-			checkedItems.forEach(t => wrapped('• ' + t, 50));
-		}
+		checklistGroup(T.stillToCheck, uncheckedItems, false);
+		checklistGroup(T.alreadyChecked, checkedItems, true);
 	} else {
-		wrapped(T.stockMatched, 40);
+		paragraph(T.stockMatched);
 	}
 
-	y += 20;
+	y += 10;
+	checkSpace(30);
+	setDrawC(BORDER);
+	doc.setLineWidth(0.5);
+	doc.line(MARGIN, y, PAGE_W - MARGIN, y);
+	y += 14;
 	doc.setFont(undefined, 'italic');
-	wrapped(T.footer, 40, 10);
+	doc.setFontSize(9);
+	setColor(MUTED);
+	const footerLines = doc.splitTextToSize(T.footer, CONTENT_W);
+	footerLines.forEach(line => {
+		checkSpace(13);
+		doc.text(line, MARGIN, y + 9);
+		y += 13;
+	});
 	doc.setFont(undefined, 'normal');
+	setColor(INK);
+
+	// ---------- Page numbers (finalize across all pages) ----------
+	const totalPages = doc.internal.getNumberOfPages();
+	for (let p = 1; p <= totalPages; p++) {
+		doc.setPage(p);
+		setDrawC(BORDER);
+		doc.setLineWidth(0.5);
+		doc.line(MARGIN, PAGE_H - 34, PAGE_W - MARGIN, PAGE_H - 34);
+		doc.setFont(undefined, 'normal');
+		doc.setFontSize(8);
+		setColor(MUTED);
+		doc.text('FenMeat Sales App', MARGIN, PAGE_H - 22);
+		doc.text(`${p} / ${totalPages}`, PAGE_W - MARGIN, PAGE_H - 22, { align: 'right' });
+	}
 
 	const blob = doc.output('blob');
 	const langSuffix = lang === 'xh' ? 'XH' : 'EN';
