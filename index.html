@@ -2671,6 +2671,18 @@ async function shareCausesPdf() {
 	const PAGE_H = doc.internal.pageSize.getHeight();
 	const MARGIN = 40;
 	const CONTENT_W = PAGE_W - MARGIN * 2;
+	// FIXED 5 August 2026 -- HEADER_LOGO_B64 is a "3D bevel" logo (blue FEN +
+	// white/grey MEAT with drop-shadow bevels) designed to sit on the app's
+	// dark Charcoal->Steel header background (see .header CSS, ~line 53) --
+	// NOT on solid Royal Blue. Placed directly on Royal Blue (the original
+	// version of this redesign), the blue FEN lettering disappeared into the
+	// backdrop and the grey bevel shading on MEAT read as a pixelated mess
+	// (confirmed via Alex's screenshot of the live PDF). CHARCOAL/STEEL here
+	// match the on-screen header's CSS variables exactly (--charcoal:#12141C,
+	// --steel:#262B38), so the PDF header is now the same treatment as every
+	// other header in the app, and the logo renders correctly again.
+	const CHARCOAL = [18, 20, 28];
+	const STEEL = [38, 43, 56];
 	const BRAND = [0, 60, 255];
 	const BRAND_DEEP = [0, 38, 179];
 	const INK = [30, 32, 40];
@@ -2689,22 +2701,34 @@ async function shareCausesPdf() {
 	function setDrawC(c) { doc.setDrawColor(c[0], c[1], c[2]); }
 
 	function drawHeaderBand() {
+		const headerH = 88;
+		// Soft vertical gradient CHARCOAL -> STEEL (jsPDF has no native
+		// gradient fill, so this is faked with thin interpolated bands --
+		// same visual direction as the on-screen header's CSS gradient).
+		const bands = 28;
+		for (let i = 0; i < bands; i++) {
+			const t = i / (bands - 1);
+			const r = Math.round(CHARCOAL[0] + (STEEL[0] - CHARCOAL[0]) * t);
+			const g = Math.round(CHARCOAL[1] + (STEEL[1] - CHARCOAL[1]) * t);
+			const b = Math.round(CHARCOAL[2] + (STEEL[2] - CHARCOAL[2]) * t);
+			doc.setFillColor(r, g, b);
+			const bandH = headerH / bands;
+			doc.rect(0, i * bandH, PAGE_W, bandH + 0.5, 'F');
+		}
 		setFillC(BRAND);
-		doc.rect(0, 0, PAGE_W, 84, 'F');
-		setFillC(BRAND_DEEP);
-		doc.rect(0, 84, PAGE_W, 3, 'F');
+		doc.rect(0, headerH, PAGE_W, 3, 'F');
 		try {
-			doc.addImage(HEADER_LOGO_B64, 'PNG', MARGIN, 22, 98.5, 24);
+			doc.addImage(HEADER_LOGO_B64, 'PNG', MARGIN, 24, 114.9, 28);
 		} catch (e) {
 			doc.setFont(undefined, 'bold');
 			doc.setFontSize(20);
 			setColor([255, 255, 255]);
-			doc.text('FenMeat', MARGIN, 42);
+			doc.text('FenMeat', MARGIN, 46);
 		}
 		doc.setFont(undefined, 'bold');
 		doc.setFontSize(13);
 		setColor([255, 255, 255]);
-		doc.text(T.heading, MARGIN, 66);
+		doc.text(T.heading, MARGIN, 70);
 		doc.setFont(undefined, 'normal');
 		setColor(INK);
 	}
@@ -2835,7 +2859,7 @@ async function shareCausesPdf() {
 
 	// ---------- Draw ----------
 	drawHeaderBand();
-	y = 108;
+	y = 112;
 	drawInfoCard();
 
 	// --- Cash section ---
@@ -2927,18 +2951,26 @@ async function shareCausesPdf() {
 	doc.setFont(undefined, 'normal');
 	setColor(INK);
 
-	// ---------- Page numbers (finalize across all pages) ----------
+	// ---------- Footer bar (finalize across all pages) ----------
+	// FIXED 5 August 2026 -- a thin grey rule + tiny muted text left a large,
+	// unbalanced blank gap at the bottom of short reports (nothing anchoring
+	// the page). Replaced with a solid Charcoal footer bar mirroring the
+	// header, which bookends the page and reads as a deliberately finished
+	// document rather than content that simply ran out partway down the page.
 	const totalPages = doc.internal.getNumberOfPages();
+	const footerH = 26;
 	for (let p = 1; p <= totalPages; p++) {
 		doc.setPage(p);
-		setDrawC(BORDER);
-		doc.setLineWidth(0.5);
-		doc.line(MARGIN, PAGE_H - 34, PAGE_W - MARGIN, PAGE_H - 34);
+		setFillC(CHARCOAL);
+		doc.rect(0, PAGE_H - footerH, PAGE_W, footerH, 'F');
+		setFillC(BRAND);
+		doc.rect(0, PAGE_H - footerH, PAGE_W, 2, 'F');
 		doc.setFont(undefined, 'normal');
 		doc.setFontSize(8);
-		setColor(MUTED);
-		doc.text('FenMeat Sales App', MARGIN, PAGE_H - 22);
-		doc.text(`${p} / ${totalPages}`, PAGE_W - MARGIN, PAGE_H - 22, { align: 'right' });
+		setColor([201, 205, 214]);
+		doc.text('FenMeat Sales App', MARGIN, PAGE_H - footerH / 2 + 3);
+		doc.text(`${p} / ${totalPages}`, PAGE_W - MARGIN, PAGE_H - footerH / 2 + 3, { align: 'right' });
+		setColor(INK);
 	}
 
 	const blob = doc.output('blob');
