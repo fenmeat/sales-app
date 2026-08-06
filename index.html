@@ -2734,11 +2734,11 @@ async function shareCausesPdf() {
 	}
 
 	function drawInfoCard() {
-		const cardH = 44;
+		const cardH = 50;
 		setFillC(CARD_BG);
 		setDrawC(BORDER);
 		doc.setLineWidth(0.75);
-		doc.roundedRect(MARGIN, y, CONTENT_W, cardH, 5, 5, 'FD');
+		doc.roundedRect(MARGIN, y, CONTENT_W, cardH, 6, 6, 'FD');
 		const cols = [
 			{ label: T.route, value: route },
 			{ label: T.date, value: date },
@@ -2746,19 +2746,44 @@ async function shareCausesPdf() {
 		];
 		const colW = CONTENT_W / cols.length;
 		cols.forEach((c, i) => {
-			const cx = MARGIN + i * colW + 14;
+			const cx = MARGIN + i * colW + 18;
 			doc.setFont(undefined, 'bold');
-			doc.setFontSize(7.5);
+			doc.setFontSize(8);
 			setColor(MUTED);
-			doc.text(String(c.label).toUpperCase(), cx, y + 16);
+			doc.text(String(c.label).toUpperCase(), cx, y + 19);
 			doc.setFont(undefined, 'bold');
-			doc.setFontSize(11);
+			doc.setFontSize(12.5);
 			setColor(INK);
-			const valLines = doc.splitTextToSize(String(c.value), colW - 20);
-			doc.text(valLines[0], cx, y + 32);
+			const valLines = doc.splitTextToSize(String(c.value), colW - 24);
+			doc.text(valLines[0], cx, y + 37);
+			if (i > 0) {
+				setDrawC(BORDER);
+				doc.setLineWidth(0.75);
+				doc.line(MARGIN + i * colW, y + 12, MARGIN + i * colW, y + cardH - 12);
+			}
 		});
 		doc.setFont(undefined, 'normal');
-		y += cardH + 22;
+		y += cardH + 30;
+	}
+
+	// REDESIGNED 5 August 2026 -- Alex: "rest of the document looks like a
+	// cheap copy and paste attempt (headings are crammed etc.)". The whole
+	// body below the header/info card was rebuilt around real bordered/tinted
+	// CARDS (measure content height first, then draw the card, then draw
+	// content inside it with generous internal padding) instead of loose
+	// text with only small fixed gaps -- this is what was actually causing
+	// the cramped feel, not the header. Product lines and checklist rows are
+	// bounded in count (max ~31 products, max ~6 causes per category) so
+	// precomputing a card's full height up front is safe and never risks an
+	// unbounded/never-fitting box.
+	const PAD = 16;
+
+	function tint(c, amt) {
+		return [
+			Math.round(c[0] + (255 - c[0]) * amt),
+			Math.round(c[1] + (255 - c[1]) * amt),
+			Math.round(c[2] + (255 - c[2]) * amt)
+		];
 	}
 
 	function newPage() {
@@ -2770,91 +2795,171 @@ async function shareCausesPdf() {
 		doc.text(`${T.heading} — ${route} — ${date}`, MARGIN, y);
 		setDrawC(BORDER);
 		doc.setLineWidth(0.5);
-		doc.line(MARGIN, y + 6, PAGE_W - MARGIN, y + 6);
+		doc.line(MARGIN, y + 8, PAGE_W - MARGIN, y + 8);
 		doc.setFont(undefined, 'normal');
 		setColor(INK);
-		y += 22;
+		y += 26;
 	}
 
 	function checkSpace(h) {
 		if (y + h > PAGE_H - FOOTER_SAFE) newPage();
 	}
 
-	function paragraph(text, size) {
-		doc.setFont(undefined, 'normal');
-		doc.setFontSize(size || 10.5);
-		setColor(INK);
-		const lines = doc.splitTextToSize(text, CONTENT_W);
-		lines.forEach(line => {
-			checkSpace(15);
-			doc.text(line, MARGIN, y + 11);
-			y += 15;
-		});
+	// Wraps text against the CURRENTLY SET font/size, matching jsPDF's own
+	// metric-dependent splitTextToSize behaviour -- callers must setFont/
+	// setFontSize before calling this (measure and draw use the same font
+	// state so wrapping is identical both times).
+	function wrapAt(text, width) {
+		return doc.splitTextToSize(text, width);
 	}
 
 	function sectionHeading(text, color) {
 		if (!text) return;
-		checkSpace(26);
+		checkSpace(30);
 		setFillC(color);
-		doc.roundedRect(MARGIN, y, 8, 8, 1.5, 1.5, 'F');
+		doc.roundedRect(MARGIN, y, 5, 15, 1.5, 1.5, 'F');
 		doc.setFont(undefined, 'bold');
-		doc.setFontSize(12.5);
-		setColor(color);
-		doc.text(text, MARGIN + 14, y + 7.5);
+		doc.setFontSize(13.5);
+		setColor(INK);
+		doc.text(text, MARGIN + 13, y + 11.5);
 		doc.setFont(undefined, 'normal');
 		setColor(INK);
-		y += 22;
+		y += 30;
+	}
+
+	// A short tinted callout card for the one-sentence explanation at the
+	// top of each section (e.g. "Cash was over by R2023.00..."). Always
+	// bounded to a couple of lines, so height is safe to precompute.
+	function calloutCard(text, color) {
+		doc.setFont(undefined, 'normal');
+		doc.setFontSize(10.5);
+		const innerW = CONTENT_W - PAD * 2 - 5;
+		const lines = wrapAt(text, innerW);
+		const leading = 15;
+		const cardH = PAD * 2 - 4 + lines.length * leading;
+		checkSpace(cardH + 8);
+		setFillC(tint(color, 0.92));
+		setDrawC(tint(color, 0.72));
+		doc.setLineWidth(0.75);
+		doc.roundedRect(MARGIN, y, CONTENT_W, cardH, 6, 6, 'FD');
+		setFillC(color);
+		doc.rect(MARGIN, y, 4, cardH, 'F');
+		setColor(INK);
+		let ty = y + PAD - 4;
+		lines.forEach(line => {
+			ty += leading;
+			doc.text(line, MARGIN + PAD + 5, ty);
+		});
+		y += cardH + 16;
 	}
 
 	function drawCheckbox(cx, cyTop, checked) {
-		const s = 8;
+		const s = 9;
 		const cyBox = cyTop - s + 2;
 		if (checked) {
 			setFillC(SUCCESS);
 			setDrawC(SUCCESS);
-			doc.roundedRect(cx, cyBox, s, s, 1.5, 1.5, 'FD');
+			doc.roundedRect(cx, cyBox, s, s, 2, 2, 'FD');
 			doc.setDrawColor(255, 255, 255);
-			doc.setLineWidth(1.1);
-			doc.line(cx + 1.6, cyBox + 4.3, cx + 3.3, cyBox + 6.2);
-			doc.line(cx + 3.3, cyBox + 6.2, cx + 6.5, cyBox + 1.8);
+			doc.setLineWidth(1.2);
+			doc.line(cx + 1.8, cyBox + 4.6, cx + 3.6, cyBox + 6.4);
+			doc.line(cx + 3.6, cyBox + 6.4, cx + 7.2, cyBox + 2);
 		} else {
 			doc.setFillColor(255, 255, 255);
-			setDrawC(MUTED);
+			setDrawC(BORDER);
 			doc.setLineWidth(1);
-			doc.roundedRect(cx, cyBox, s, s, 1.5, 1.5, 'FD');
+			doc.roundedRect(cx, cyBox, s, s, 2, 2, 'FD');
 		}
 		doc.setLineWidth(0.75);
 	}
 
-	function checklistGroup(label, items, checked) {
+	// A tinted checklist card, grouped ("still to check" / "already
+	// checked"). Total height is precomputed from the bounded item list so
+	// the whole card is checked/paginated as one unit -- never splits a
+	// checkbox row awkwardly across a page break.
+	function checklistCard(label, items, checked, accentColor) {
 		if (!items.length) return;
-		checkSpace(18);
+		const textIndent = PAD + 18;
+		const innerW = CONTENT_W - textIndent - PAD;
+		doc.setFontSize(10);
+		const rowLeading = 14.5;
+		let itemsH = 0;
+		const wrapped = items.map(t => {
+			const lines = wrapAt(t, innerW);
+			itemsH += lines.length * rowLeading + 6;
+			return lines;
+		});
+		const labelH = 22;
+		const cardH = PAD + labelH + itemsH + PAD - 6;
+		checkSpace(cardH + 8);
+		setFillC(checked ? tint(SUCCESS, 0.95) : [250, 250, 251]);
+		setDrawC(BORDER);
+		doc.setLineWidth(0.75);
+		doc.roundedRect(MARGIN, y, CONTENT_W, cardH, 6, 6, 'FD');
 		doc.setFont(undefined, 'bold');
-		doc.setFontSize(8);
-		setColor(MUTED);
-		doc.text(String(label).toUpperCase(), MARGIN, y + 7);
+		doc.setFontSize(8.5);
+		setColor(checked ? SUCCESS : MUTED);
+		doc.text(String(label).toUpperCase(), MARGIN + PAD, y + PAD + 2);
 		doc.setFont(undefined, 'normal');
 		setColor(INK);
-		y += 15;
-		const textIndent = MARGIN + 16;
-		const textWidth = CONTENT_W - 16;
-		items.forEach(t => {
+		let iy = y + PAD + labelH;
+		wrapped.forEach(lines => {
+			drawCheckbox(MARGIN + PAD, iy + 10, checked);
 			doc.setFontSize(10);
-			const lines = doc.splitTextToSize(t, textWidth);
-			checkSpace(lines.length * 13 + 4);
-			drawCheckbox(MARGIN, y + 11, checked);
-			lines.forEach((line, li) => {
-				doc.text(line, textIndent, y + 11);
-				y += 13;
+			lines.forEach(line => {
+				doc.text(line, MARGIN + textIndent, iy + 10);
+				iy += rowLeading;
 			});
-			y += 2;
+			iy += 6;
 		});
-		y += 4;
+		y += cardH + 16;
 	}
 
-	function statusDot(color) {
-		setFillC(color);
-		doc.circle(MARGIN + 4, y + 6.5, 3, 'F');
+	// One product-diff row: bold product name + figures on the first line,
+	// a lighter explanatory line below, and a light divider under each row.
+	// Individually paginated (checkSpace per row) since the product count is
+	// data-driven and can genuinely run long on a bad day.
+	function productRow(pd, isLast) {
+		const sentence = pd.deliveredNotInvoiced
+			? T.deliveredNotInvoiced(pd.name, pd.sold, pd.zoho, pd.diff)
+			: T.invoicedNotDelivered(pd.name, pd.sold, pd.zoho, pd.diff);
+		const colonIdx = sentence.indexOf(':');
+		const title = colonIdx > -1 ? sentence.slice(0, colonIdx) : pd.name;
+		const rest = colonIdx > -1 ? sentence.slice(colonIdx + 1).trim() : sentence;
+		const textIndent = 16;
+		const innerW = CONTENT_W - textIndent;
+		doc.setFont(undefined, 'bold');
+		doc.setFontSize(10.5);
+		const titleLines = wrapAt(title, innerW);
+		doc.setFont(undefined, 'normal');
+		doc.setFontSize(9.5);
+		const restLines = wrapAt(rest, innerW);
+		const rowH = titleLines.length * 14 + restLines.length * 13 + 12;
+		checkSpace(rowH + 4);
+		setFillC(pd.deliveredNotInvoiced ? BRAND : DANGER);
+		doc.circle(MARGIN + 4, y + 9, 3, 'F');
+		doc.setFont(undefined, 'bold');
+		doc.setFontSize(10.5);
+		setColor(INK);
+		let ty = y;
+		titleLines.forEach(line => {
+			doc.text(line, MARGIN + textIndent, ty + 10);
+			ty += 14;
+		});
+		doc.setFont(undefined, 'normal');
+		doc.setFontSize(9.5);
+		setColor(MUTED);
+		restLines.forEach(line => {
+			doc.text(line, MARGIN + textIndent, ty + 9);
+			ty += 13;
+		});
+		setColor(INK);
+		y = ty + 8;
+		if (!isLast) {
+			setDrawC(BORDER);
+			doc.setLineWidth(0.5);
+			doc.line(MARGIN + textIndent, y - 4, PAGE_W - MARGIN, y - 4);
+		}
 	}
 
 	// ---------- Draw ----------
@@ -2866,9 +2971,9 @@ async function shareCausesPdf() {
 	const cashColor = cashDiff < -0.005 ? DANGER : (cashDiff > 0.005 ? WARNING : SUCCESS);
 	const cashHeading = cashDiff < -0.005 ? T.causesHeaderShort : (cashDiff > 0.005 ? T.causesHeaderOver : '');
 	sectionHeading(cashHeading, cashColor);
-	if (cashDiff < -0.005) paragraph(T.cashShort(Math.abs(cashDiff).toFixed(2)));
-	else if (cashDiff > 0.005) paragraph(T.cashOver(cashDiff.toFixed(2)));
-	else paragraph(T.cashMatched);
+	if (cashDiff < -0.005) calloutCard(T.cashShort(Math.abs(cashDiff).toFixed(2)), DANGER);
+	else if (cashDiff > 0.005) calloutCard(T.cashOver(cashDiff.toFixed(2)), WARNING);
+	else calloutCard(T.cashMatched, SUCCESS);
 
 	if (Math.abs(cashDiff) > 0.005) {
 		const key = cashDiff < 0 ? 'cashShort' : 'cashOver';
@@ -2878,47 +2983,33 @@ async function shareCausesPdf() {
 			const id = key + '_' + idx;
 			(state.causesChecked && state.causesChecked[id] ? checkedItems : uncheckedItems).push(text);
 		});
-		y += 4;
-		checklistGroup(T.stillToCheck, uncheckedItems, false);
-		checklistGroup(T.alreadyChecked, checkedItems, true);
+		checklistCard(T.stillToCheck, uncheckedItems, false, cashColor);
+		checklistCard(T.alreadyChecked, checkedItems, true, cashColor);
 	}
 
 	// --- Stock section ---
-	checkSpace(30);
-	y += 8;
+	checkSpace(34);
+	y += 6;
 	setDrawC(BORDER);
 	doc.setLineWidth(0.5);
 	doc.line(MARGIN, y, PAGE_W - MARGIN, y);
-	y += 16;
+	y += 22;
 	sectionHeading(T.causesHeaderStock, BRAND);
 	if (Math.abs(stockDiff) > 0.005) {
-		paragraph(T.stockIntro);
+		calloutCard(T.stockIntro, BRAND);
 		if (productDiffs.length) {
-			checkSpace(18);
+			checkSpace(20);
 			doc.setFont(undefined, 'bold');
-			doc.setFontSize(9.5);
+			doc.setFontSize(9);
 			setColor(MUTED);
-			doc.text(String(T.productHeader).toUpperCase(), MARGIN, y + 7);
+			doc.text(String(T.productHeader).toUpperCase(), MARGIN, y + 6);
 			doc.setFont(undefined, 'normal');
 			setColor(INK);
-			y += 17;
-			const textIndent = MARGIN + 14;
-			const textWidth = CONTENT_W - 14;
-			productDiffs.forEach(pd => {
-				const sentence = pd.deliveredNotInvoiced
-					? T.deliveredNotInvoiced(pd.name, pd.sold, pd.zoho, pd.diff)
-					: T.invoicedNotDelivered(pd.name, pd.sold, pd.zoho, pd.diff);
-				doc.setFontSize(10);
-				const lines = doc.splitTextToSize(sentence, textWidth);
-				checkSpace(lines.length * 13 + 4);
-				statusDot(pd.deliveredNotInvoiced ? BRAND : DANGER);
-				lines.forEach(line => {
-					doc.text(line, textIndent, y + 11);
-					y += 13;
-				});
-				y += 2;
+			y += 18;
+			productDiffs.forEach((pd, idx) => {
+				productRow(pd, idx === productDiffs.length - 1);
 			});
-			y += 4;
+			y += 10;
 		}
 		const key = 'stockDiff';
 		const list = causeList[key];
@@ -2927,18 +3018,18 @@ async function shareCausesPdf() {
 			const id = key + '_' + idx;
 			(state.causesChecked && state.causesChecked[id] ? checkedItems : uncheckedItems).push(text);
 		});
-		checklistGroup(T.stillToCheck, uncheckedItems, false);
-		checklistGroup(T.alreadyChecked, checkedItems, true);
+		checklistCard(T.stillToCheck, uncheckedItems, false, BRAND);
+		checklistCard(T.alreadyChecked, checkedItems, true, BRAND);
 	} else {
-		paragraph(T.stockMatched);
+		calloutCard(T.stockMatched, SUCCESS);
 	}
 
-	y += 10;
-	checkSpace(30);
+	checkSpace(40);
+	y += 6;
 	setDrawC(BORDER);
 	doc.setLineWidth(0.5);
 	doc.line(MARGIN, y, PAGE_W - MARGIN, y);
-	y += 14;
+	y += 18;
 	doc.setFont(undefined, 'italic');
 	doc.setFontSize(9);
 	setColor(MUTED);
