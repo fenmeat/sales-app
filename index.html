@@ -2082,6 +2082,24 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 		<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;font-size:13px;color:var(--muted);">
 			<span>Overdue Credit (from Age Analysis)</span><span id="overdueCreditDisplay">R 0.00</span>
 		</div>
+		<div id="cashShortfallRow" style="display:none;align-items:center;justify-content:space-between;padding:6px 0;font-size:13px;color:var(--red);border-top:1px solid var(--border);margin-top:6px;">
+			<span>Cash Shortfall</span>
+			<span style="display:flex;align-items:center;gap:10px;">
+				<span id="cashShortfallVal">R 0.00</span>
+				<label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--text);cursor:pointer;">
+					<input type="checkbox" id="cashShortfallResolved" onchange="updateCommissionDisplay()"> Resolved
+				</label>
+			</span>
+		</div>
+		<div id="stockShortfallRow" style="display:none;align-items:center;justify-content:space-between;padding:6px 0;font-size:13px;color:var(--red);">
+			<span>Stock Shortfall</span>
+			<span style="display:flex;align-items:center;gap:10px;">
+				<span id="stockShortfallVal">R 0.00</span>
+				<label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:600;color:var(--text);cursor:pointer;">
+					<input type="checkbox" id="stockShortfallResolved" onchange="updateCommissionDisplay()"> Resolved
+				</label>
+			</span>
+		</div>
 		<div style="display:flex;justify-content:space-between;padding:8px 0;font-weight:700;font-size:16px;">
 			<span>Commission (0.7%)</span><span id="commissionVal">—</span>
 		</div>
@@ -2265,6 +2283,15 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 					totalEl.value = commData.data.TOTAL_CREDIT_OUTSTANDING;
 					formatCreditInputOnBlur(totalEl);
 				}
+				// ADDED 6 August 2026 -- Cash Shortfall / Stock Shortfall "Resolved"
+				// checkboxes prefill from the last saved COMMISSION_LOG row, so
+				// reopening a date/route shows whatever Alex last confirmed --
+				// blank/undefined (pre-migration rows, or a shortfall that never
+				// applied that day) is treated as unresolved (unchecked).
+				const cashResolvedEl = document.getElementById('cashShortfallResolved');
+				if (cashResolvedEl) cashResolvedEl.checked = commData.data.CASH_SHORTFALL_RESOLVED === true;
+				const stockResolvedEl = document.getElementById('stockShortfallResolved');
+				if (stockResolvedEl) stockResolvedEl.checked = commData.data.STOCK_SHORTFALL_RESOLVED === true;
 			}
 			updateCommissionDisplay();
 		}
@@ -2378,6 +2405,10 @@ function updateCashTotal() {
 		state.cashUpLastDiff = 0;
 	}
 	if (typeof updateCausesSection === 'function') updateCausesSection();
+	// ADDED 6 August 2026 -- Cash Shortfall (Sales Commission box) is derived
+	// from state.cashUpLastDiff, which this function just updated -- refresh
+	// the commission display so it stays live as denomination counts change.
+	if (typeof updateCommissionDisplay === 'function') updateCommissionDisplay();
 }
 
 // ADDED 23 July 2026 -- Refresh button on the Cash Up screen. Re-runs the same
@@ -2415,10 +2446,16 @@ const CAUSE_LISTS = {
 	stockDiff: [
 		'Invoice still in Zoho Drafts — not saved as "Sent"',
 		'Stock left with customer but no invoice created',
-		'Sample/return product not recorded',
 		'Stock miscounted at load (Morning Load) or Evening Returns',
-		'Breakage/spoilage not recorded',
-		'Stock stolen or lost'
+		'Stock stolen or lost',
+		// ADDED 6 August 2026 -- root cause Alex identified from real cases
+		// (Braai Wors -1 alone; Cheese Russian -1 / Cheese Vienna +1 together
+		// as a product swap): staff not checking what was physically handed
+		// over against the invoice before leaving the customer. Removed
+		// "Sample/return product not recorded" and "Breakage/spoilage not
+		// recorded" -- Alex confirmed these are not realistic causes given
+		// how the route actually operates.
+		'Product delivered didn\'t match the invoice — stock not checked against invoice before handover'
 	]
 };
 
@@ -2444,10 +2481,10 @@ const CAUSE_LISTS_XH = {
 	stockDiff: [
 		'I-invoyisi isekwi-Drafts kwi-Zoho — ayigcinwanga njenge "Sent"',
 		'Isitokhwe sishiywe nomthengi kodwa akwenziwanga invoyisi',
-		'Isampuli/impahla ebuyisiweyo ayibhalwanga',
 		'Isitokhwe sibalwe ngokungachanekanga xa silayishwa (Ekuseni) okanye xa kubuyiswa (Ngokuhlwa)',
-		'Ukwaphuka/ukonakala akubhalwanga',
-		'Isitokhwe sibiwe okanye silahlekile'
+		'Isitokhwe sibiwe okanye silahlekile',
+		// ADDED 6 August 2026 -- see matching English-list comment above.
+		'Impahla ehanjisiweyo ayivumelani ne-invoyisi — isitokhwe asizange sijongwe ngokuchasene ne-invoyisi ngaphambi kokunikezelwa'
 	]
 };
 
@@ -3136,8 +3173,47 @@ function updateCommissionDisplay() {
 	const overdueDisplayEl = document.getElementById('overdueCreditDisplay');
 	if (overdueDisplayEl) overdueDisplayEl.textContent = `R ${formatRand(overdueCredit, 2)}`;
 
+	// ADDED 6 August 2026 -- Cash Shortfall / Stock Shortfall deductions.
+	// Alex: cash short, or a net stock VALUE shortfall (not unit count),
+	// gets deducted from commission -- usually caused by staff not checking
+	// what was delivered against the invoice. Cash Shortfall reuses the
+	// existing Cash Difference figure (state.cashUpLastDiff) when it's
+	// short (negative). Stock Shortfall reuses the existing Stock vs Zoho
+	// Variance figure (getStockDifference()) ONLY when it's Blue/positive
+	// (Delivered not Invoiced = stock physically left worth more than what
+	// was invoiced) -- Red/negative (Invoiced not Delivered) is explicitly
+	// ignored per Alex's instruction. Both rows stay hidden unless their
+	// shortfall is actually nonzero, and each has its own "Resolved"
+	// checkbox -- once Alex ticks it (after the rep sorts out the mistake),
+	// that shortfall's deduction becomes R0, both in this display and in
+	// what gets saved to COMMISSION_LOG when Save Cash Up is pressed.
+	const cashDiffForShortfall = state.cashUpLastDiff || 0;
+	const cashShortfall = cashDiffForShortfall < -0.005 ? Math.round(Math.abs(cashDiffForShortfall) * 100) / 100 : 0;
+	const stockDiffForShortfall = typeof getStockDifference === 'function' ? getStockDifference() : 0;
+	const stockShortfall = stockDiffForShortfall > 0.005 ? Math.round(stockDiffForShortfall * 100) / 100 : 0;
+
+	const cashShortfallRow = document.getElementById('cashShortfallRow');
+	const cashShortfallValEl = document.getElementById('cashShortfallVal');
+	const cashShortfallResolvedEl = document.getElementById('cashShortfallResolved');
+	if (cashShortfallRow) {
+		cashShortfallRow.style.display = cashShortfall > 0 ? 'flex' : 'none';
+		if (cashShortfallValEl) cashShortfallValEl.textContent = `R ${formatRand(cashShortfall, 2)}`;
+	}
+
+	const stockShortfallRow = document.getElementById('stockShortfallRow');
+	const stockShortfallValEl = document.getElementById('stockShortfallVal');
+	const stockShortfallResolvedEl = document.getElementById('stockShortfallResolved');
+	if (stockShortfallRow) {
+		stockShortfallRow.style.display = stockShortfall > 0 ? 'flex' : 'none';
+		if (stockShortfallValEl) stockShortfallValEl.textContent = `R ${formatRand(stockShortfall, 2)}`;
+	}
+
+	const cashShortfallDeduction = (cashShortfallResolvedEl && cashShortfallResolvedEl.checked) ? 0 : cashShortfall;
+	const stockShortfallDeduction = (stockShortfallResolvedEl && stockShortfallResolvedEl.checked) ? 0 : stockShortfall;
+
 	const salesValue = state.cashUpSalesValue || 0;
-	const commission = Math.round((salesValue - overdueCredit) * 0.007 * 100) / 100;
+	const baseCommission = (salesValue - overdueCredit) * 0.007;
+	const commission = Math.max(0, Math.round((baseCommission - cashShortfallDeduction - stockShortfallDeduction) * 100) / 100);
 	commissionEl.textContent = `R ${formatRand(commission, 2)}`;
 }
 
@@ -3236,7 +3312,24 @@ async function saveCashUp(totalValue) {
 				const currentCredit = parseCreditValue(currentEl);
 				const totalCredit = parseCreditValue(totalEl);
 				const overdueCredit = Math.max(0, Math.round((totalCredit - currentCredit) * 100) / 100);
-				const commission = Math.round((totalValue - overdueCredit) * 0.007 * 100) / 100;
+
+				// ADDED 6 August 2026 -- Cash Shortfall / Stock Shortfall, same
+				// source figures and Resolved checkboxes as updateCommissionDisplay()
+				// (see that function for the reasoning). Server-side (writeCommissionLog
+				// in Code.gs) recomputes Commission from these independently, same as
+				// it already does for Overdue Credit -- this client-side commission
+				// value is only for the toast message.
+				const cashShortfallForSave = cashDifference < -0.005 ? Math.round(Math.abs(cashDifference) * 100) / 100 : 0;
+				const stockDiffForSave = typeof getStockDifference === 'function' ? getStockDifference() : 0;
+				const stockShortfallForSave = stockDiffForSave > 0.005 ? Math.round(stockDiffForSave * 100) / 100 : 0;
+				const cashShortfallResolvedEl = document.getElementById('cashShortfallResolved');
+				const stockShortfallResolvedEl = document.getElementById('stockShortfallResolved');
+				const cashShortfallResolved = !!(cashShortfallResolvedEl && cashShortfallResolvedEl.checked);
+				const stockShortfallResolved = !!(stockShortfallResolvedEl && stockShortfallResolvedEl.checked);
+				const cashShortfallDeduction = cashShortfallResolved ? 0 : cashShortfallForSave;
+				const stockShortfallDeduction = stockShortfallResolved ? 0 : stockShortfallForSave;
+
+				const commission = Math.max(0, Math.round(((totalValue - overdueCredit) * 0.007 - cashShortfallDeduction - stockShortfallDeduction) * 100) / 100);
 				try {
 					await fetch(SCRIPT_URL, {
 						method: 'POST',
@@ -3252,11 +3345,19 @@ async function saveCashUp(totalValue) {
 								currentCredit: currentCredit,
 								totalCreditOutstanding: totalCredit,
 								creditNotCollected: overdueCredit,
-								commission: commission
+								commission: commission,
+								cashShortfall: cashShortfallForSave,
+								cashShortfallResolved: cashShortfallResolved,
+								stockShortfall: stockShortfallForSave,
+								stockShortfallResolved: stockShortfallResolved
 							}
 						})
 					});
-					toastMsg += ` | Commission: R ${formatRand(commission, 2)}`;
+					let commMsg = ` | Commission: R ${formatRand(commission, 2)}`;
+					if (cashShortfallDeduction > 0 || stockShortfallDeduction > 0) {
+						commMsg += ` (after R ${formatRand(cashShortfallDeduction + stockShortfallDeduction, 2)} shortfall deduction)`;
+					}
+					toastMsg += commMsg;
 				} catch (e) {
 					// Commission save failed silently — Cash Up itself already saved successfully
 				}
