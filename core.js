@@ -108,6 +108,37 @@ const HEADER_LOGO_B64 = 'iVBORw0KGgoAAAANSUhEUgAABkAAAAGGCAYAAAAjGk2AAAEAAElEQVR
 	{code:'O03', name:'CHICKEN LIVERS', price:155},
 	
 
+	// DC Meat resale items (added 15 Aug 2026) — bought-in products resold
+	// alongside FenMeat's own range, not produced in-house.
+	{code:'D01', name:'FRENCH POLONY BULK', price:74.61},
+	
+
+	{code:'D02', name:'BACON & EGG LOAF', price:16.50},
+	
+
+	{code:'D03', name:'RUSSIAN LOAF', price:16.50},
+	
+
+	{code:'D04', name:'LIVER SPREAD', price:13.96},
+	
+
+	{code:'D05', name:'VALUE POLONY HAMPER', price:177.17},
+	
+
+	{code:'D06', name:'SANDWICH HAM', price:21.58},
+	
+
+	// Brito's resale items (added 24 Aug 2026) — bought-in products resold
+	// alongside FenMeat's own range, not produced in-house.
+	{code:'B01', name:'SUPER BRAAIWORS BOX', price:136.40},
+	
+
+	{code:'B02', name:'LUNCH BOX HAMPER', price:86.30},
+	
+
+	{code:'B03', name:'STEWING PORK PIECES 2KG', price:50.16},
+	
+
 	];
 	function getRoutesForDate(dateStr) {
 	
