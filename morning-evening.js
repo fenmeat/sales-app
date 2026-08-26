@@ -563,7 +563,12 @@ async function loadForecastData() {
 	async function loadZohoItemSales(routeName) {
 	try {
 	const url = `${SCRIPT_URL}?action=getZohoItemSales&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
-	const resp = await fetch(url);
+	// cache: 'no-store' added 26 August 2026 — this endpoint's data changes
+	// throughout the day as invoices are created, but a plain fetch() to the
+	// same URL can be served from the browser's HTTP cache even after a full
+	// page reload, showing stale (possibly empty/zero) Zoho quantities. See
+	// Master Context Doc Section 4 for the real incident this fixed.
+	const resp = await fetch(url, { cache: 'no-store' });
 	const data = await resp.json();
 	if (data.status !== 'ok') return;
 	const zohoMap = {};
