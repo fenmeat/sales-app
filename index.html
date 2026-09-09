@@ -1,145 +1,62 @@
 <!DOCTYPE html>
-	
-
-	<html lang="en">
-	
-
-	<head>
-	
-
-	<meta charset="UTF-8">
-	
-
-	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-	
-
-	<title>FenMeat Sales App</title>
-	<link rel="preconnect" href="https://fonts.googleapis.com">
-	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-	<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-	<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-	
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>FenMeat Sales App</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
 <link rel="stylesheet" href="styles.css">
-	
+</head>
 
-	</head>
-	
+<body>
 
-	<body>
-	
-
-	
-
-	
-
-	<!-- HEADER -->
-	
-
-	<div class="header no-print">
-	
-
+<!-- HEADER -->
+<div class="header no-print">
 	<div style="display:flex;align-items:center;gap:14px;">
-	<img class="header-logo" id="headerLogoImg" src="" alt="FenMeat">
-	<div class="header-divider"></div>
-	<div class="header-app-name">Sales</div>
+		<img class="header-logo" id="headerLogoImg" src="" alt="FenMeat">
+		<div class="header-divider"></div>
+		<div class="header-app-name">Sales</div>
 	</div>
-	
-
 	<div class="header-right" id="connectionStatus">⚪ Connecting...</div>
-	
+</div>
 
-	</div>
-	
-
-	
-
-	
-
-	<!-- DATE BAR -->
-	
-
-	<div class="date-bar no-print">
-	
-
+<!-- DATE BAR -->
+<div class="date-bar no-print">
 	<label>📅 Date:</label>
-	
-
 	<input type="date" id="dateInput" onchange="onDateChange()">
-	
+</div>
 
-	</div>
-	
-
-	
-
-	
-
-	<!-- MODE TOGGLE -->
-	
-
-	<div class="mode-bar no-print">
-	
-
+<!-- MODE TOGGLE -->
+<div class="mode-bar no-print">
 	<button class="mode-btn morning active" id="btnMorning" onclick="setMode('morning')">🌅 MORNING — Load OUT</button>
-	
-
 	<button class="mode-btn evening" id="btnEvening" onclick="setMode('evening')">🌙 EVENING — Capture IN</button>
 	<button class="mode-btn cashup" id="btnCashUp" onclick="setMode('cashup')">💰 CASH UP</button>
 	<button class="mode-btn commission" id="btnCommission" onclick="setMode('commission')">🧾 COM</button>
-	
+	<button class="mode-btn stock" id="btnStock" onclick="setMode('stock')">📦 STOCK</button>
+</div>
 
-	</div>
-	
+<!-- ROUTE TABS -->
+<div class="route-tabs no-print" id="routeTabs"></div>
 
-	
-
-	
-
-	<!-- ROUTE TABS -->
-	
-
-	<div class="route-tabs no-print" id="routeTabs"></div>
-	
-
-	
-
-	
-
-	<!-- MAIN CONTENT -->
-	
-
-	<div class="content" id="mainContent">
-	
-
+<!-- MAIN CONTENT -->
+<div class="content" id="mainContent">
 	<div class="loading">
-	
-
-	<div class="spinner"></div>
-	
-
-	Select a date to begin
-	
-
+		<div class="spinner"></div>
+		Select a date to begin
 	</div>
-	
-
-	</div>
-	
-
-	
-
-	
+</div>
 
 <script src="core.js"></script>
 <script src="morning-evening.js"></script>
 <script src="cashup.js"></script>
 <script src="causes-pdf.js"></script>
 <script src="commission.js"></script>
+<script src="stock.js"></script>
 <script src="print.js"></script>
-	
 
-	</body>
-	
-
-	</html>
+</body>
+</html>
