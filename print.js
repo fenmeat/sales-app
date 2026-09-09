@@ -124,7 +124,11 @@ function printCashUp() {
 }
 
 function printMorningLoad() {
-	const products = state.routeData[state.activeRoute].products;
+	const allProducts = state.routeData[state.activeRoute].products;
+	// Stock toggle -- keep the printout consistent with the on-screen Morning
+	// Load list: hide anything marked out-of-stock this week. Same fail-open
+	// default as the screen (state.stockStatus[code] !== false).
+	const products = allProducts.filter(p => state.stockStatus[p.code] !== false);
 	const route = state.routes.find(r => r.name === state.activeRoute);
 
 	// Split into two columns to keep the whole list compact enough for one page
