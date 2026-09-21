@@ -1,3 +1,91 @@
+// ---------------------------------------------------------------------
+// STOCK FILTER HELPERS (shared by Morning, Evening and the print lists)
+// Added 21 Sep 2026. One source of truth: state.stockStatus[code] === false
+// means "no stock". Rows are only HIDDEN at render time -- a hidden product
+// stays in state.routeData[...].products with its OUT / IN / SOLD values, so
+// totals, Save Sales, Cash Up and the Stock-vs-Zoho variance never lose it.
+// ---------------------------------------------------------------------
+function isStockHidden(p) {
+	return !!state.stockStatus && state.stockStatus[p.code] === false;
+}
+
+// Server-side records for this route/date: a saved LOAD_LOG qty > 0, or a
+// saved SALES_LOG row. (Flags are set when the logs are loaded / saved.)
+function hasSavedRecord(p) {
+	return (Number(p.loadedQty) || 0) > 0 || p.hasSalesRow === true;
+}
+
+// A no-stock product that still has something worth reaching: saved records,
+// a Zoho invoice for this route/date, or returns already typed in.
+function isReachableHidden(p) {
+	return hasSavedRecord(p) || (Number(p.zohoQty) || 0) > 0 || (Number(p.inQty) || 0) > 0;
+}
+
+// Rows to show on the Evening screen / Evening print list. Each entry keeps
+// its ORIGINAL index into the full products array (element ids and
+// updateIn() address products by that index, never by list position).
+function eveningVisibleEntries(routeName) {
+	const rd = state.routeData[routeName];
+	const products = rd ? rd.products : [];
+	const showHidden = !!(state.eveningShowHidden && state.eveningShowHidden[routeName]);
+	return products
+		.map((p, originalIdx) => ({ p, originalIdx }))
+		.filter(({ p }) => !isStockHidden(p) || (showHidden && isReachableHidden(p)));
+}
+
+// A product that is no-stock and has NO saved record carries no real OUT --
+// its OUT is only the forecast. Park that number in suppressedOut and use 0,
+// so a hidden row can never leak a phantom sale into Evening totals or
+// Save Sales. When the product is marked in-stock again the forecast comes
+// back. Products WITH saved records are never touched.
+function applyStockSuppression(routeName) {
+	const rd = state.routeData[routeName];
+	if (!rd) return;
+	rd.products = rd.products.map(p => {
+		if (isStockHidden(p) && !hasSavedRecord(p) && p.out !== 0) {
+			return { ...p, suppressedOut: p.out, out: 0 };
+		}
+		if (!isStockHidden(p) && p.suppressedOut !== undefined) {
+			const { suppressedOut, ...rest } = p;
+			return { ...rest, out: suppressedOut };
+		}
+		return p;
+	});
+}
+
+function applyStockSuppressionAll() {
+	Object.keys(state.routeData).forEach(applyStockSuppression);
+}
+
+function toggleHiddenLoaded(routeName) {
+	if (!state.eveningShowHidden) state.eveningShowHidden = {};
+	state.eveningShowHidden[routeName] = !state.eveningShowHidden[routeName];
+	renderContent();
+}
+
+function hiddenBannerInner(routeName) {
+	const rd = state.routeData[routeName];
+	if (!rd) return '';
+	const n = rd.products.filter(p => isStockHidden(p) && isReachableHidden(p)).length;
+	if (n === 0) return '';
+	const showing = !!(state.eveningShowHidden && state.eveningShowHidden[routeName]);
+	const plural = n === 1 ? 'product' : 'products';
+	const text = showing
+		? `👁 Showing ${n} no-stock ${plural} that ${n === 1 ? 'has' : 'have'} records for this date.`
+		: `📦 ${n} no-stock ${plural} already loaded or recorded ${n === 1 ? 'is' : 'are'} hidden. Still counted in the totals.`;
+	return `
+		<div class="hidden-banner">
+			<div class="hidden-banner-text">${text}</div>
+			<button class="hidden-banner-btn" onclick="toggleHiddenLoaded('${routeName}')">${showing ? 'Hide' : 'Show'}</button>
+		</div>`;
+}
+
+function refreshHiddenBanner(routeName) {
+	if (state.mode !== 'evening' || routeName !== state.activeRoute) return;
+	const el = document.getElementById('hiddenBanner');
+	if (el) el.innerHTML = hiddenBannerInner(routeName);
+}
+
 async function loadStockStatus() {
 	// Stock toggle -- fetches the current weekly IN_STOCK Y/N flag for every
 	// product code, once per date-load (not per route -- it's not route-
@@ -61,6 +149,10 @@ async function loadForecastData() {
 		// Restore Morning Load tick marks from localStorage so they survive a page
 		// refresh mid-load (added 22 July 2026).
 		restoreCheckedState(route.name);
+
+		// Stock filter (21 Sep 2026): a no-stock product with no saved record
+		// carries no real OUT -- see applyStockSuppression().
+		applyStockSuppression(route.name);
 	}
 
 	state.forecastLoaded = true;
@@ -75,7 +167,7 @@ async function applyLoadLogOverride(routeName) {
 		if (data.found && data.products && data.products.length > 0) {
 			state.routeData[routeName].products = state.routeData[routeName].products.map(p => {
 				const saved = data.products.find(sp => sp.code === p.code);
-				return saved ? { ...p, out: saved.qty } : p;
+				return saved ? { ...p, out: saved.qty, loadedQty: Number(saved.qty) || 0 } : p;
 			});
 		}
 	} catch (e) {
@@ -93,7 +185,7 @@ async function applySalesLogOverride(routeName) {
 				const soldRow = data.products.find(sp => sp.code === p.code);
 				if (!soldRow) return p;
 				const inQty = Math.max(0, p.out - soldRow.sold);
-				return { ...p, inQty: inQty };
+				return { ...p, inQty: inQty, hasSalesRow: true };
 			});
 		}
 	} catch (e) {
@@ -191,6 +283,14 @@ function renderMorning(route, products, totalOut, totalValue) {
 }
 
 function renderEvening(route, products, totalOut, totalIn, totalSold, totalValue) {
+	// Stock filter (21 Sep 2026) -- same saved status as Morning Load. No-stock
+	// products leave the normal list; the ones that were already loaded (or have
+	// sales / Zoho records) stay reachable through the banner's Show button.
+	// Rows are only hidden here: totals above come from ALL products, so
+	// nothing is lost. Each row keeps its ORIGINAL index (element ids and
+	// updateIn() use it, never the position in this filtered list).
+	const entries = eveningVisibleEntries(route.name);
+
 	const html = `
 		<div class="route-summary">
 			<div>
@@ -218,6 +318,8 @@ function renderEvening(route, products, totalOut, totalIn, totalSold, totalValue
 			</div>
 		</div>
 
+		<div id="hiddenBanner">${hiddenBannerInner(route.name)}</div>
+
 		<div class="action-bar">
 			<button class="btn btn-secondary" onclick="printRoute()">🖨️ Print</button>
 			<button class="btn btn-success" onclick="saveSalesData()">💾 Save Sales</button>
@@ -231,14 +333,19 @@ function renderEvening(route, products, totalOut, totalIn, totalSold, totalValue
 				<div style="text-align:center">SOLD</div>
 				<div style="text-align:center">ZOHO</div>
 			</div>
-			${products.map((p, i) => {
+			${entries.map(({ p, originalIdx: i }) => {
 				const sold = p.out - p.inQty;
 				const soldClass = sold > 0 ? 'sold-positive' : sold < 0 ? 'sold-negative' : 'sold-zero';
+				const noStock = isStockHidden(p);
+				const tag = noStock
+					? `<div class="no-stock-tag">NO STOCK · ${(Number(p.loadedQty) || 0) > 0 ? 'LOADED' : 'RECORDS'}</div>`
+					: '';
 				return `
-				<div class="product-row evening-mode">
+				<div class="product-row evening-mode ${noStock ? 'no-stock-row' : ''}">
 					<div>
 						<div class="product-name">${p.name}</div>
 						<div class="product-code">${p.code}</div>
+						${tag}
 					</div>
 					<div class="out-display">${p.out}</div>
 					<div>
@@ -247,8 +354,8 @@ function renderEvening(route, products, totalOut, totalIn, totalSold, totalValue
 							oninput="updateIn(${i}, this.value)"
 							onfocus="this.select()">
 					</div>
-					<div class="sold-display ${soldClass}">${sold}</div>
-					<div class="zoho-display" id="zoho_${i}">–</div>
+					<div class="sold-display ${soldClass}" id="sold_${i}">${sold}</div>
+					<div class="zoho-display" id="zoho_${i}">${typeof p.zohoQty === 'number' ? p.zohoQty : '–'}</div>
 				</div>
 				`;
 			}).join('')}
@@ -277,11 +384,14 @@ async function loadZohoItemSales(routeName) {
 			const zohoQty = zohoMap.hasOwnProperty(p.code) ? zohoMap[p.code] : 0;
 			p.zohoQty = zohoQty;
 			const el = document.getElementById(`zoho_${i}`);
-			if (!el) return;
+			if (!el) return; // hidden (no-stock) rows have no element -- value is still stored above
 			const sold = p.out - p.inQty;
 			el.textContent = zohoQty;
 			el.className = `zoho-display ${zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
 		});
+		// A no-stock product invoiced in Zoho for this route/date is a record
+		// worth reaching -- update the banner now that the Zoho figures are in.
+		refreshHiddenBanner(routeName);
 	} catch (e) {
 		// No connection - leave ZOHO column blank, don't block the app
 	}
@@ -290,19 +400,7 @@ async function loadZohoItemSales(routeName) {
 function updateOut(idx, val) {
 	const v = parseInt(val) || 0;
 	state.routeData[state.activeRoute].products[idx].out = v;
-	// Update sold display if in evening mode
-	const soldEl = document.getElementById('mainContent').querySelectorAll('.sold-display')[idx];
-	if (soldEl) {
-		const p = state.routeData[state.activeRoute].products[idx];
-		const sold = p.out - p.inQty;
-		soldEl.textContent = sold;
-		soldEl.className = `sold-display ${sold > 0 ? 'sold-positive' : sold < 0 ? 'sold-negative' : 'sold-zero'}`;
-
-		const zohoEl = document.getElementById('mainContent').querySelectorAll('.zoho-display')[idx];
-		if (zohoEl && typeof p.zohoQty === 'number') {
-			zohoEl.className = `zoho-display ${p.zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
-		}
-	}
+	refreshSoldCells(idx);
 	updateTotals();
 }
 
@@ -340,23 +438,25 @@ function toggleChecked(idx, checked) {
 function updateIn(idx, val) {
 	const v = parseInt(val) || 0;
 	state.routeData[state.activeRoute].products[idx].inQty = v;
-	// Update sold display
-	const rows = document.querySelectorAll('.product-row.evening-mode');
-	if (rows[idx]) {
-		const p = state.routeData[state.activeRoute].products[idx];
-		const sold = p.out - p.inQty;
-		const soldEl = rows[idx].querySelector('.sold-display');
-		if (soldEl) {
-			soldEl.textContent = sold;
-			soldEl.className = `sold-display ${sold > 0 ? 'sold-positive' : sold < 0 ? 'sold-negative' : 'sold-zero'}`;
-
-			const zohoEl = rows[idx].querySelector('.zoho-display');
-			if (zohoEl && typeof p.zohoQty === 'number') {
-				zohoEl.className = `zoho-display ${p.zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
-			}
-		}
-	}
+	refreshSoldCells(idx);
 	updateTotals();
+}
+
+// Refresh the SOLD and ZOHO cells of ONE product by element id. (Replaces the
+// old positional lookups -- querySelectorAll(...)[idx] -- which broke as soon
+// as any row was filtered out of the list: list position != product index.)
+function refreshSoldCells(idx) {
+	const p = state.routeData[state.activeRoute].products[idx];
+	const sold = p.out - p.inQty;
+	const soldEl = document.getElementById(`sold_${idx}`);
+	if (soldEl) {
+		soldEl.textContent = sold;
+		soldEl.className = `sold-display ${sold > 0 ? 'sold-positive' : sold < 0 ? 'sold-negative' : 'sold-zero'}`;
+	}
+	const zohoEl = document.getElementById(`zoho_${idx}`);
+	if (zohoEl && typeof p.zohoQty === 'number') {
+		zohoEl.className = `zoho-display ${p.zohoQty === sold ? 'zoho-match' : 'zoho-mismatch'}`;
+	}
 }
 
 function updateTotals() {
@@ -387,10 +487,13 @@ async function confirmMorning() {
 	// found" as "not confirmed yet today" -- if we skipped these instead of
 	// zeroing them, Evening would fall back to their stale forecast quantity
 	// instead of showing the honest zero.
+	// EXCEPTION (21 Sep 2026): a no-stock product that was ALREADY loaded
+	// today (saved LOAD_LOG qty > 0) keeps that qty -- re-confirming the load
+	// must never wipe a real load, or its returns could not be captured.
 	const rows = products.map(p => ({
 		code: p.code,
 		name: p.name,
-		qty: state.stockStatus[p.code] === false ? 0 : p.out
+		qty: isStockHidden(p) ? ((Number(p.loadedQty) || 0) > 0 ? Number(p.loadedQty) : 0) : p.out
 	}));
 	const totalOut = rows.reduce((s, r) => s + r.qty, 0);
 	if (totalOut === 0) {
@@ -413,6 +516,9 @@ async function confirmMorning() {
 		});
 		const data = await resp.json();
 		if (data.status === 'ok') {
+			// Remember what is now saved, so a later no-stock flip in this same
+			// session still knows these products were already loaded.
+			products.forEach((p, i) => { p.loadedQty = rows[i].qty; });
 			showToast(`✅ ${state.activeRoute} load confirmed — ${totalOut} bags`, 'success');
 			setMode('evening');
 		} else {
@@ -479,6 +585,7 @@ async function saveSalesData() {
 		});
 		const data = await resp.json();
 		if (data.status === 'ok') {
+			products.forEach(p => { if (p.out > 0) p.hasSalesRow = true; });
 			showToast(`✅ Saved! ${salesRows.length} products — R ${formatRand(totalValue)}`, 'success');
 		} else {
 			throw new Error(data.message || 'Save failed');
