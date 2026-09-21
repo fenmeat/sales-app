@@ -68,6 +68,17 @@ const PRODUCTS = [
 	{code:'B03', name:'STEWING PORK PIECES 2KG', price:55.00},
 	{code:'B04', name:'SMOKED VIENNAS 5X280G', price:73.91},
 	{code:'B05', name:'RUSSIANS SHORT 1.085KG', price:47.83},
+
+	// Brito's resale batch 2 (added 21 Sep 2026) -- Zoho items 46-50, created in
+	// Zoho Books (org FEN) on 20 Sep 2026. Code = the item's Zoho SKU, name = the
+	// Zoho item name (numeric "NN. " prefix dropped), price = Zoho SALES rate
+	// (not purchase cost). Zoho's unit field is blank for all five, so each is
+	// sold per single box/pack. Brito's stock codes: PD508, PD563, PD340, PD344, PD102.
+	{code:'B06', name:"BRITO'S NYAMA CHOMA WORS BOX (10X400G)", price:155.00},
+	{code:'B07', name:"BRITO'S RODEO BURGER 20'S (20X85G)", price:70.00},
+	{code:'B08', name:"BRITO'S FRENCH POLONY SLICED 200G VP", price:11.00},
+	{code:'B09', name:"BRITO'S BACON & EGG SLICED 200G VP", price:15.00},
+	{code:'B10', name:"BRITO'S SANDWICH HAM SLICED 200G VP", price:21.00},
 ];
 
 function getRoutesForDate(dateStr) {
@@ -109,6 +120,11 @@ let state = {
 	mode: 'morning',
 	routes: [],
 	activeRoute: '',
+	// Stock toggle state (code -> boolean; missing/true = in stock, false = no stock)
+	stockStatus: {},
+	stockPendingChanges: {},
+	// Evening: per-route flag -- "show no-stock products that were already loaded"
+	eveningShowHidden: {},
 	// Per route data: { routeName: { products: [{code, name, price, out, in, forecast}] } }
 	routeData: {},
 	forecastLoaded: false,
@@ -155,6 +171,7 @@ function onDateChange() {
 	state.date = dateStr;
 	state.routes = getRoutesForDate(dateStr);
 	state.forecastLoaded = false;
+	state.eveningShowHidden = {};
 
 	if (state.routes.length === 0) {
 		document.getElementById('routeTabs').innerHTML = '';
