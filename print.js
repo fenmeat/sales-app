@@ -307,7 +307,10 @@ function printMorningLoad() {
 }
 
 function printRoute() {
-	const products = state.routeData[state.activeRoute].products;
+	// Evening print list follows exactly what the Evening screen shows
+	// (21 Sep 2026): no-stock products are left off, unless they were already
+	// loaded/recorded AND the "Show" option is switched on.
+	const products = eveningVisibleEntries(state.activeRoute).map(e => e.p);
 	const route = state.routes.find(r => r.name === state.activeRoute);
 
 	const printWin = window.open('', '_blank');
