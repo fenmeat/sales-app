@@ -91,6 +91,10 @@ async function saveStockStatus() {
 		if (data.status === 'ok') {
 			updates.forEach(u => { state.stockStatus[u.code] = u.inStock; });
 			state.stockPendingChanges = {};
+			// Keep every already-loaded route consistent with the new status
+			// (21 Sep 2026): park/restore forecast OUT for no-stock products that
+			// have no saved record. Products WITH records are never touched.
+			applyStockSuppressionAll();
 			showToast(`✅ Saved — ${data.updated} product(s) updated`, 'success');
 		} else {
 			showToast('⚠️ Save failed: ' + (data.message || 'unknown error'), 'error');
