@@ -130,7 +130,7 @@ let state = {
 	forecastLoaded: false,
 };
 
-window.onload = function() {
+document.addEventListener('DOMContentLoaded', function() {
 	// Set today's date
 	const today = new Date();
 	const yyyy = today.getFullYear();
@@ -139,24 +139,7 @@ window.onload = function() {
 	document.getElementById('dateInput').value = `${yyyy}-${mm}-${dd}`;
 	onDateChange();
 
-	// Test connection to Apps Script
-	testConnection();
-};
-
-async function testConnection() {
-	try {
-		const url = `${SCRIPT_URL}?action=ping&sheetId=${NEW_SHEET_ID}`;
-		const resp = await fetch(url);
-		const data = await resp.json();
-		if (data.status === 'ok') {
-			setStatus('🟢 Connected', 'green');
-		} else {
-			setStatus('🟡 Script connected', 'orange');
-		}
-	} catch(e) {
-		setStatus('🔴 Offline — using forecast data', 'red');
-	}
-}
+});
 
 function setStatus(msg, color) {
 	const el = document.getElementById('connectionStatus');
@@ -168,6 +151,14 @@ function onDateChange() {
 	const dateStr = document.getElementById('dateInput').value;
 	if (!dateStr) return;
 
+	if (state.loadController) state.loadController.abort();
+	state.loadController = new AbortController();
+	state.loadVersion = (state.loadVersion || 0) + 1;
+	state.routeData = {};
+	state.stockLoaded = false;
+	state.stockRequest = null;
+	state.stockError = false;
+	state.stockPendingChanges = {};
 	state.date = dateStr;
 	state.routes = getRoutesForDate(dateStr);
 	state.forecastLoaded = false;
@@ -181,6 +172,7 @@ function onDateChange() {
 				<strong>No routes today</strong><br>
 				<span style="color:var(--muted)">Routes run Monday to Friday only</span>
 			</div>`;
+		loadForecastData();
 		return;
 	}
 
@@ -230,12 +222,19 @@ function setMode(mode) {
 }
 
 function renderContent() {
+	state.viewVersion = (state.viewVersion || 0) + 1;
 	// Commission and Stock are views across all routes, not tied to state.activeRoute
 	if (state.mode === 'commission') {
 		renderCommission();
 		return;
 	}
 	if (state.mode === 'stock') {
+		if (!state.stockLoaded) {
+			document.getElementById('mainContent').innerHTML = state.stockError
+				? '<div class="loading">Stock could not be loaded.<button class="btn btn-secondary" onclick="retryStockLoad()">Retry</button></div>'
+				: '<div class="loading"><div class="spinner"></div>Loading stock...</div>';
+			return;
+		}
 		renderStock();
 		return;
 	}
@@ -244,6 +243,13 @@ function renderContent() {
 	if (!route) return;
 
 	const rData = state.routeData[state.activeRoute];
+	if (rData && rData.loadError) {
+		document.getElementById('mainContent').innerHTML = `<div class="loading" role="alert">
+			<strong>Could not load ${state.activeRoute}</strong>
+			<p>Check your connection and retry. Saved quantities have not been replaced with zeros.</p>
+			<button class="btn btn-secondary" onclick="retryRouteLoad()">Retry this route</button></div>`;
+		return;
+	}
 	if (!rData || !rData.products[0].loaded) {
 		document.getElementById('mainContent').innerHTML = `
 			<div class="loading">

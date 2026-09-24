@@ -1,4 +1,8 @@
 async function renderCashUp(route, totalValue, itemsSoldExclS02) {
+	const request = state.cashUpRequest = (state.cashUpRequest || 0) + 1;
+	const view = state.viewVersion, version = state.loadVersion;
+	const isCurrentView = () => request === state.cashUpRequest && view === state.viewVersion && version === state.loadVersion &&
+		state.activeRoute === route.name && state.mode === 'cashup';
 	state.cashUpSalesValue = totalValue;
 	state.cashUpItemsSold = itemsSoldExclS02 || 0;
 	// Added 22 July 2026 -- RIVERSDALE / OUDTSHOORN / STILBAAI use a flat R5-per-item
@@ -160,6 +164,8 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 		fetch(commUrl).then(r => r.json()).catch(() => null)
 	]);
 
+	if (!isCurrentView()) return;
+
 	if (cuResult && cuResult.status === 'ok' && cuResult.found) {
 		const cuData = cuResult;
 		cuDataFound = cuData.data;
@@ -211,6 +217,7 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 			const url = `${SCRIPT_URL}?action=getZohoSyncForRoute&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
 			const resp = await fetch(url);
 			const data = await resp.json();
+			if (!isCurrentView()) return;
 
 			if (data.status === 'ok' && data.found) {
 				state.cashUpZoho = data.data;
@@ -224,6 +231,7 @@ async function renderCashUp(route, totalValue, itemsSoldExclS02) {
 			}
 		}
 	} catch (err) {
+		if (!isCurrentView()) return;
 		state.cashUpZoho = null;
 		document.getElementById('zohoBox').innerHTML = `<div style="color:var(--red);">⚠️ Could not load Zoho data: ${err.message}</div>`;
 	}
