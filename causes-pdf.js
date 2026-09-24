@@ -167,11 +167,31 @@ function toggleCause(id, checked) {
 		// localStorage unavailable/full -- ticks just won't persist, don't block the app
 	}
 }
+let pdfLibraryPromise;
+function ensurePdfLibrary() {
+	if (window.jspdf) return Promise.resolve();
+	if (pdfLibraryPromise) return pdfLibraryPromise;
+	pdfLibraryPromise = new Promise((resolve, reject) => {
+		const script = document.createElement('script');
+		const fail = () => { clearTimeout(timer); script.remove(); pdfLibraryPromise = null; reject(new Error('PDF load failed')); };
+		const timer = setTimeout(fail, 20000);
+		script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+		script.onload = () => { clearTimeout(timer); if (window.jspdf) resolve(); else fail(); };
+		script.onerror = fail;
+		document.head.appendChild(script);
+	});
+	return pdfLibraryPromise;
+}
 async function shareCausesPdf() {
-	if (typeof window.jspdf === 'undefined') {
-		showToast('⚠️ PDF library not loaded — check internet connection and try again', 'error');
+	const view = state.viewVersion, version = state.loadVersion;
+	try {
+		if (!window.jspdf) showToast('Preparing PDF...', '');
+		await ensurePdfLibrary();
+	} catch (e) {
+		showToast('PDF could not load. Check your connection and try again.', 'error');
 		return;
 	}
+	if (view !== state.viewVersion || version !== state.loadVersion) return;
 	const lang = state.reportLang === 'xh' ? 'xh' : 'en';
 	const T = REPORT_I18N[lang];
 	const causeList = lang === 'xh' ? CAUSE_LISTS_XH : CAUSE_LISTS;

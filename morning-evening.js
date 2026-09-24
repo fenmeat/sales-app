@@ -86,138 +86,153 @@ function refreshHiddenBanner(routeName) {
 	if (el) el.innerHTML = hiddenBannerInner(routeName);
 }
 
-async function loadStockStatus() {
-	// Stock toggle -- fetches the current weekly IN_STOCK Y/N flag for every
-	// product code, once per date-load (not per route -- it's not route-
-	// specific). Populates state.stockStatus as a simple code -> boolean map.
-	// Defaults to visible (fail-open) if the fetch fails, matching the
-	// backend's own fail-safe default -- a connection hiccup should never
-	// silently hide products that are actually available.
-	if (!state.stockStatus) state.stockStatus = {};
-	try {
-		const url = `${SCRIPT_URL}?action=getStockStatus&sheetId=${NEW_SHEET_ID}`;
-		const resp = await fetch(url);
-		const data = await resp.json();
-		if (data.status === 'ok' && data.products) {
-			state.stockStatus = {};
-			data.products.forEach(p => { state.stockStatus[p.code] = p.inStock; });
-		}
-	} catch (e) {
-		// No connection - state.stockStatus stays as-is (empty on first load),
-		// everything defaults to visible since state.stockStatus[code] !== false.
+// Read-only requests have a deadline and are cancelled on date changes.
+// Never retry POSTs automatically: a timed-out save may already have succeeded.
+async function readAppData(action, params = {}, signal) {
+	const controller = new AbortController();
+	const abort = () => controller.abort();
+	if (signal) {
+		if (signal.aborted) abort();
+		else signal.addEventListener('abort', abort, { once: true });
 	}
+	const timer = setTimeout(abort, 45000);
+	try {
+		const query = new URLSearchParams({ action, sheetId: NEW_SHEET_ID, ...params });
+		const response = await fetch(`${SCRIPT_URL}?${query}`, { signal: controller.signal, cache: 'no-store' });
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		const data = await response.json();
+		if (!data || (data.status && data.status !== 'ok')) throw new Error('Read failed');
+		return data;
+	} finally {
+		clearTimeout(timer);
+		if (signal) signal.removeEventListener('abort', abort);
+	}
+}
+
+async function loadStockStatus(version = state.loadVersion, signal = state.loadController.signal) {
+	const data = await readAppData('getStockStatus', {}, signal);
+	if (!Array.isArray(data.products)) throw new Error('Missing stock data');
+	if (version !== state.loadVersion) return;
+	state.stockStatus = {};
+	data.products.forEach(p => { state.stockStatus[p.code] = p.inStock; });
+	state.stockLoaded = true;
+	state.stockError = false;
+}
+
+function startStockLoad(version, signal) {
+	if (state.stockRequest) return state.stockRequest;
+	// Share stock reads across retries as well as routes.
+	const request = loadStockStatus(version, signal).then(() => true, () => {
+		if (version === state.loadVersion) state.stockError = true;
+		return false;
+	}).finally(() => {
+		if (state.stockRequest === request) state.stockRequest = null;
+	});
+	state.stockRequest = request;
+	return request;
+}
+
+async function readForecast(routeName, date, signal) {
+	let data;
+	try {
+		data = await readAppData('getForecast', { route: routeName, date }, signal);
+		if (Array.isArray(data.products) && data.products.length) return data.products;
+	} catch (e) {
+		if (signal.aborted) throw e;
+	}
+	// Preserve the existing weekly FORECAST fallback; log reads remain mandatory.
+	data = await readAppData('getNewForecast', { route: routeName }, signal);
+	if (!Array.isArray(data.products)) throw new Error('Missing forecast data');
+	return data.products.map(p => ({ ...p, qty: Math.round(p.avg_qty) }));
+}
+
+function updateLoadStatus() {
+	const routes = Object.values(state.routeData);
+	const failed = state.stockError || routes.some(r => r.loadError);
+	const ready = routes.filter(r => r.products[0].loaded).length;
+	state.forecastLoaded = state.stockLoaded && ready === routes.length;
+	if (failed) setStatus('🟠 Some data unavailable — retry', 'orange');
+	else if (state.forecastLoaded) setStatus('🟢 Connected', 'green');
+	else setStatus(`⏳ Loading routes ${ready}/${routes.length}`, 'orange');
+}
+
+async function loadRouteData(routeName, date, version, signal, stockReady) {
+	try {
+		// Fetch in parallel, then APPLY in dependency order: forecast -> load -> sales.
+		const [forecast, load, sales, stockOk] = await Promise.all([
+			readForecast(routeName, date, signal),
+			readAppData('getLoadLog', { route: routeName, date }, signal),
+			readAppData('getSalesLog', { route: routeName, date }, signal),
+			stockReady
+		]);
+		if (version !== state.loadVersion || signal.aborted) return;
+		if (!stockOk || typeof load.found !== 'boolean' || typeof sales.found !== 'boolean' ||
+			(load.found && !Array.isArray(load.products)) || (sales.found && !Array.isArray(sales.products))) {
+			throw new Error('Incomplete route data');
+		}
+		const forecastByCode = new Map(forecast.map(p => [p.code, p]));
+		const loadByCode = new Map((load.found ? load.products : []).map(p => [p.code, p]));
+		const salesByCode = new Map((sales.found ? sales.products : []).map(p => [p.code, p]));
+		const quantity = value => {
+			const n = Number(value);
+			if (!Number.isFinite(n) || n < 0) throw new Error('Invalid quantity');
+			return n;
+		};
+		const products = PRODUCTS.map(p => {
+			const f = forecastByCode.get(p.code), l = loadByCode.get(p.code), s = salesByCode.get(p.code);
+			const forecastQty = f ? quantity(f.qty) : 0;
+			const out = l ? quantity(l.qty) : forecastQty;
+			return { ...p, forecast: forecastQty, out, inQty: s ? Math.max(0, out - quantity(s.sold)) : 0,
+				loaded: true, loadedQty: l ? out : 0, hasSalesRow: !!s };
+		});
+		state.routeData[routeName] = { products };
+		restoreCheckedState(routeName);
+		applyStockSuppression(routeName);
+	} catch (e) {
+		if (version !== state.loadVersion || signal.aborted) return;
+		state.routeData[routeName].loadError = true;
+	}
+	if (version !== state.loadVersion || signal.aborted) return;
+	updateLoadStatus();
+	// Another route finishing must not replace inputs the user is already editing.
+	if (routeName === state.activeRoute && !['stock', 'commission'].includes(state.mode)) renderContent();
 }
 
 async function loadForecastData() {
-	await loadStockStatus();
-
-	renderContent(); // Show loading state
-
-	for (const route of state.routes) {
-		try {
-			const url = `${SCRIPT_URL}?action=getForecast&route=${encodeURIComponent(route.name)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
-			const resp = await fetch(url);
-			const data = await resp.json();
-
-			if (data.products && data.products.length > 0) {
-				// Map forecast data to products
-				state.routeData[route.name].products = PRODUCTS.map(p => {
-					const f = data.products.find(fp => fp.code === p.code);
-					return {
-						...p,
-						out: f ? f.qty : 0,
-						forecast: f ? f.qty : 0,
-						inQty: 0,
-						loaded: true,
-					};
-				});
-			} else {
-				// Use FORECAST sheet averages from our new sheet as fallback
-				await loadFromNewForecastSheet(route.name);
-			}
-		} catch(e) {
-			// Fallback to new sheet direct
-			await loadFromNewForecastSheet(route.name);
-		}
-
-		// Apply any saved Morning Load override so confirmed loads persist (restored 23 June 2026)
-		await applyLoadLogOverride(route.name);
-
-		// Apply any saved Evening Capture IN override so captured sales persist (added 25 June 2026)
-		await applySalesLogOverride(route.name);
-
-		// Restore Morning Load tick marks from localStorage so they survive a page
-		// refresh mid-load (added 22 July 2026).
-		restoreCheckedState(route.name);
-
-		// Stock filter (21 Sep 2026): a no-stock product with no saved record
-		// carries no real OUT -- see applyStockSuppression().
-		applyStockSuppression(route.name);
-	}
-
-	state.forecastLoaded = true;
+	const { date, loadVersion: version, loadController } = state;
+	const signal = loadController.signal;
+	const stockReady = startStockLoad(version, signal);
+	updateLoadStatus();
 	renderContent();
+	stockReady.then(() => {
+		if (version === state.loadVersion) {
+			updateLoadStatus();
+			if (state.mode === 'stock') renderContent();
+		}
+	});
+	await Promise.all(state.routes.map(route => loadRouteData(route.name, date, version, signal, stockReady)));
 }
 
-async function applyLoadLogOverride(routeName) {
-	try {
-		const url = `${SCRIPT_URL}?action=getLoadLog&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
-		const resp = await fetch(url);
-		const data = await resp.json();
-		if (data.found && data.products && data.products.length > 0) {
-			state.routeData[routeName].products = state.routeData[routeName].products.map(p => {
-				const saved = data.products.find(sp => sp.code === p.code);
-				return saved ? { ...p, out: saved.qty, loadedQty: Number(saved.qty) || 0 } : p;
-			});
-		}
-	} catch (e) {
-		// No connection - keep forecast values, don't block the app
+async function retryStockLoad() {
+	state.stockError = false;
+	renderContent();
+	const version = state.loadVersion;
+	await startStockLoad(version, state.loadController.signal);
+	if (version === state.loadVersion) {
+		updateLoadStatus();
+		if (state.mode === 'stock') renderContent();
 	}
 }
 
-async function applySalesLogOverride(routeName) {
-	try {
-		const url = `${SCRIPT_URL}?action=getSalesLog&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
-		const resp = await fetch(url);
-		const data = await resp.json();
-		if (data.found && data.products && data.products.length > 0) {
-			state.routeData[routeName].products = state.routeData[routeName].products.map(p => {
-				const soldRow = data.products.find(sp => sp.code === p.code);
-				if (!soldRow) return p;
-				const inQty = Math.max(0, p.out - soldRow.sold);
-				return { ...p, inQty: inQty, hasSalesRow: true };
-			});
-		}
-	} catch (e) {
-		// No connection - keep default inQty, don't block the app
-	}
-}
-
-async function loadFromNewForecastSheet(routeName) {
-	try {
-		// Read from FORECAST sheet in new Master File
-		const url = `${SCRIPT_URL}?action=getNewForecast&route=${encodeURIComponent(routeName)}&sheetId=${NEW_SHEET_ID}`;
-		const resp = await fetch(url);
-		const data = await resp.json();
-
-		if (data.products && data.products.length > 0) {
-			state.routeData[routeName].products = PRODUCTS.map(p => {
-				const f = data.products.find(fp => fp.code === p.code);
-				const qty = f ? Math.round(f.avg_qty) : 0;
-				return { ...p, out: qty, forecast: qty, inQty: 0, loaded: true };
-			});
-		} else {
-			// Mark as loaded with zeros
-			state.routeData[routeName].products = PRODUCTS.map(p => ({
-				...p, out: 0, forecast: 0, inQty: 0, loaded: true
-			}));
-		}
-	} catch(e) {
-		// No connection - use zeros
-		state.routeData[routeName].products = PRODUCTS.map(p => ({
-			...p, out: 0, forecast: 0, inQty: 0, loaded: true
-		}));
-	}
+async function retryRouteLoad() {
+	const routeName = state.activeRoute;
+	const rd = state.routeData[routeName];
+	if (!rd || !rd.loadError) return;
+	delete rd.loadError;
+	renderContent();
+	const { date, loadVersion: version, loadController } = state;
+	const stockReady = state.stockLoaded ? Promise.resolve(true) : startStockLoad(version, loadController.signal);
+	await loadRouteData(routeName, date, version, loadController.signal, stockReady);
 }
 
 function renderMorning(route, products, totalOut, totalValue) {
@@ -367,6 +382,7 @@ function renderEvening(route, products, totalOut, totalIn, totalSold, totalValue
 }
 
 async function loadZohoItemSales(routeName) {
+	const version = state.loadVersion, view = state.viewVersion;
 	try {
 		const url = `${SCRIPT_URL}?action=getZohoItemSales&route=${encodeURIComponent(routeName)}&date=${state.date}&sheetId=${NEW_SHEET_ID}`;
 		// cache: 'no-store' added 26 August 2026 — this endpoint's data changes
@@ -376,7 +392,8 @@ async function loadZohoItemSales(routeName) {
 		// Master Context Doc Section 4 for the real incident this fixed.
 		const resp = await fetch(url, { cache: 'no-store' });
 		const data = await resp.json();
-		if (data.status !== 'ok') return;
+		if (data.status !== 'ok' || version !== state.loadVersion || view !== state.viewVersion ||
+			state.activeRoute !== routeName || state.mode !== 'evening') return;
 		const zohoMap = {};
 		(data.products || []).forEach(p => { zohoMap[p.code] = p.zohoQty; });
 		const products = state.routeData[routeName].products;
