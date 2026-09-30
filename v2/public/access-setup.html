@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Fen Meat · Restore saved access keys</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/access-setup.js"></script>
+</head>
+<body>
+  <header><div class="brand"><em>F</em>FEN MEAT <span>Sales V2 · Test</span></div></header>
+  <main class="signin">
+    <section class="welcome">
+      <p class="eyebrow">ACCESS RECOVERY</p>
+      <h1>Use the keys<br>you already saved.</h1>
+      <p>This page does not generate new keys. Signing in does not change your keys.</p>
+      <p>Keys become active only when you save them in the Cloudflare runtime secret.</p>
+      <p><a href="/">Return to the sales app</a></p>
+    </section>
+    <section class="signin-form">
+      <h2>Restore your saved keys</h2>
+      <p>Enter the original keys you wrote down, without quotation marks. Each key contains 64 letters and numbers.</p>
+      <label>Alex's saved key<input id="alex-key" type="password" autocomplete="off" spellcheck="false" required></label>
+      <label>Alinda's saved key<input id="alinda-key" type="password" autocomplete="off" spellcheck="false" required></label>
+      <button id="copy-saved-keys" type="button" class="primary">Copy saved keys for Cloudflare</button>
+      <p id="key-status" role="status" aria-live="polite"></p>
+      <div id="manual-copy" hidden><label>Copy this whole block<textarea id="key-json" readonly spellcheck="false"></textarea></label></div>
+      <h3>Next: activate these same keys</h3>
+      <ol>
+        <li>In Cloudflare, open <strong>fenmeat-sales-test → Settings → Runtime variables and secrets → Production</strong>.</li>
+        <li>Edit the <strong>APP_ACCESS_KEYS</strong> Secret. Replace its whole value with the copied block, then save/deploy.</li>
+        <li>Use your original Alex key to sign in and to connect the spreadsheet.</li>
+      </ol>
+      <p class="row-note">The copied block contains both personal passwords. Keep it private. This page keeps the entered keys only until you leave or reload it; it does not send or save them. Replacing the Cloudflare secret signs out sessions that used different keys. Sales records stay saved.</p>
+    </section>
+  </main>
+</body>
+</html>
