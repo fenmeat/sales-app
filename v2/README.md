@@ -18,6 +18,8 @@ The deploy uses only `v2/public` as public assets. Existing repository root file
 
 Cloudflare may label this Worker's selected branch as its production branch. Select `build/sales-v2-cloudflare`: the separate Worker and D1 database are both test resources. Do not select `main`. Disable builds for other branches during this setup so legacy branches are not accidentally deployed to this Worker.
 
+If the creation form does not show a branch selector, set the branch under Settings > Build > Branch control after creating the test Worker. The initial build may select the repository default branch and fail because `v2` exists only on the test branch. After saving the correct branch, push a new commit to `build/sales-v2-cloudflare` to start a fresh build; do not retry the old `main` commit. Keep Enable Preview builds off. A successful deployment still needs a live `/api/health` check before the D1 connection is considered verified.
+
 The initial page and `/api/health` are public and contain no business data. The endpoint only checks whether the five starting tables exist. All data-change methods and business-data paths are disabled. Staff authentication must be implemented before any business endpoints or imports become accessible.
 
 The five tables were created manually by Alex in the D1 console on 30 September 2026. `migrations/0001_initial.sql` records the same definitions for reproducible development. Deployment does not execute database migrations. The migration has not been remotely applied or marked as applied by this code.
