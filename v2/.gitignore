@@ -1,5 +1,5 @@
 node_modules/
 .wrangler/
-.dev.vars*
-.env*
-dist/
+.dev.vars
+public/domain.js
+public/forecast.js
