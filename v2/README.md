@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.3.0 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: automatic Zoho access and operational acceptance are pending.
+Pilot 0.3.1 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: automatic Zoho access and operational acceptance are pending.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -71,6 +71,7 @@ Approved together by the owner after review of Morning load, Evening returns and
 5. Availability column and Show all products toggle removed. Current catalogue availability controls the morning list; loaded products remain available for evening capture.
 6. Non-sale quantity/reason inputs removed. Existing saved adjustments are preserved, not erased or reinterpreted.
 7. Cash Count replaces cash/adjustment inputs. Shop2Shop, Card and EFT remain separate. Counted total feeds reconciliation and is validated on the server.
+8. Approved subsequently for all input boxes: entering or clicking an editable text, quantity, receipt or denomination field selects its entire current value for replacement. Includes login fields, search, salesperson, vehicle and route notes; works again after tab changes and Save/Reload. Date pickers, files, checkboxes and disabled/read-only fields retain their native behavior. Selecting alone does not alter or save data. Numeric constraints and keyboards are preserved.
 
 No database migration, access-key rotation, new integration, forecast algorithm change or production cutover is part of this update. Real data must not be included in this public repository. User operational acceptance remains outstanding.
 

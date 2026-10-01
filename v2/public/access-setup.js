@@ -1,3 +1,5 @@
+import './input-selection.js';
+
 const alex = document.querySelector('#alex-key');
 const alinda = document.querySelector('#alinda-key');
 const status = document.querySelector('#key-status');
