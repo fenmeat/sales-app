@@ -15,7 +15,7 @@ async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS 
 async function handle(request,env){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
- const assetPaths=new Set(['/','/index.html','/app.js','/styles.css','/demo.js','/domain.js','/forecast.js','/access-setup.html','/access-setup.js']);
+ const assetPaths=new Set(['/','/index.html','/app.js','/styles.css','/demo.js','/domain.js','/forecast.js','/access-setup.html','/access-setup.js','/input-selection.js']);
  if(assetPaths.has(path)&&['GET','HEAD'].includes(method)){const r=await env.ASSETS.fetch(request);return new Response(r.body,{status:r.status,headers:{...Object.fromEntries(r.headers),...headers}});}
  check(path.startsWith('/api/'),'Not found.',404);check(['GET','POST'].includes(method),'Method not allowed.',405);
  check(Object.keys(keys(env)).length>0,'Access is not configured. Use the setup instructions on the sign-in screen.',503);

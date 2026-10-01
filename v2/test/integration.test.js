@@ -1,7 +1,17 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import worker from '../src/worker.js';import {emptyRun,CASH_DENOMINATIONS} from '../src/domain.js';
+import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readdir,readFile} from 'node:fs/promises';import worker from '../src/worker.js';import {emptyRun,CASH_DENOMINATIONS} from '../src/domain.js';
 class D1 {constructor(){this.db=new DatabaseSync(':memory:');}prepare(sql){const db=this.db;let values=[];const stmt={bind(...v){values=v;return stmt;},async first(){return db.prepare(sql).get(...values)??null;},async all(){return {results:db.prepare(sql).all(...values)};},async run(){const r=db.prepare(sql).run(...values);return {meta:{changes:r.changes}};},sql,values:()=>values};return stmt;}async batch(statements){this.db.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());this.db.exec('COMMIT');return result;}catch(e){this.db.exec('ROLLBACK');throw e;}}}
 const key='test-only-local-key-012345678901234567890123456789';const origin='https://test.example';
 const catalog={products:[{code:'W01',name:'Braai wors',unit:'bag',price_cents:16000,available:true,active:true}],routes:[{code:'R07',name:'MOSSEL BAY',weekday:4}]};
+test('all shipped browser modules load through the Worker without signing in',async()=>{
+ const publicDir=new URL('../public/',import.meta.url);
+ const env={APP_ENV:'test',ASSETS:{async fetch(request){return new Response(await readFile(new URL(new URL(request.url).pathname.slice(1),publicDir)),{headers:{'Content-Type':'application/javascript'}});}}};
+ for(const file of (await readdir(publicDir)).filter(file=>file.endsWith('.js'))){
+  const response=await worker.fetch(new Request(origin+'/'+file),env);
+  assert.equal(response.status,200,file+' must be reachable before login');
+  assert.match(response.headers.get('content-type'),/javascript/);
+  assert.equal(await response.text(),await readFile(new URL(file,publicDir),'utf8'));
+ }
+});
 test('protected pilot: sign-in, save, idempotency, concurrent edit, reconciliation and close',async()=>{const env={APP_ENV:'test',DB:new D1(),APP_ACCESS_KEYS:JSON.stringify({alex:key})};let cookie='';async function call(path,body,extra={}){const r=await worker.fetch(new Request(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...extra},body:body?JSON.stringify(body):undefined}),env);return {r,data:await r.json()};}
  assert.equal((await call('/api/bootstrap')).r.status,401);assert.equal((await call('/api/login',{username:'alex',key:'wrong'})).r.status,401);
  const auth=await call('/api/login',{username:'alex',key});assert.equal(auth.r.status,200);cookie=auth.r.headers.get('set-cookie').split(';')[0];assert.match(auth.r.headers.get('set-cookie'),/HttpOnly; Secure; SameSite=Strict/);
