@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.2.0 implements the route-day workflow. It is not ready to replace the current operational system: automatic Zoho access is pending and Google report sync needs one-time activation.
+Pilot 0.3.0 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: automatic Zoho access and operational acceptance are pending.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -21,11 +21,11 @@ Rotating a person's key revokes their sessions. Hashed session tokens expire aft
 
 ## Daily workflow
 
-Morning suggestions, edited plans and actual loads are separate. Confirm what was physically loaded. Blank quantities mean unknown. Record evening returns and non-sale damage, samples or transfers with a reason. Stock sales equal loaded minus returned minus non-sale stock.
+Morning suggestions, edited plans and actual loads are separate. Confirm what was physically loaded. Blank quantities mean unknown. Record evening returns for loaded products. Stock sales equal loaded minus returned. Unavailable products are hidden from planning; any product already loaded remains visible for returns. Earlier saved non-sale adjustments remain intact and are shown as historical notes.
 
 Reconciliation compares every product with issued invoice quantities, excluding draft/void invoices. Invoiced products absent from the load still produce discrepancies. The pilot imports a complete checked JSON extract under **Reconcile**, with a downloadable example. This is a manual bridge, not automatic Zoho sync. Invoice quantities must use catalogue sales units.
 
-Expected cash = opening float + cash receipts received that day + other cash added − banked cash − approved expenses. Invoice allocation dates separate current sales receipts from old credit collected today. Unpaid invoices are not receipts. Shop2Shop, other card and EFT are matched separately. Include every receipt allocation exactly once. An omitted receipt cannot be detected from a receipt-only extract; unpaid cash-sale invoices and completeness need independent Zoho checks before sign-off.
+Expected cash is cash receipts received that day. Cash Count accepts whole-number quantities for R200 through 50c and calculates the counted total in integer cents. Counts are stored in the route revision and restored on reload. Opening float, banked cash, expenses and extra-cash inputs have been removed; earlier saved adjustments remain unchanged and are disclosed when present. Invoice allocation dates separate current sales receipts from old credit collected today. Unpaid invoices are not receipts. Shop2Shop, other card and EFT are matched separately. Include every receipt allocation exactly once. An omitted receipt cannot be detected from a receipt-only extract; unpaid cash-sale invoices and completeness need independent Zoho checks before sign-off.
 
 Closing requires confirmed returns, complete reconciliation, zero product/payment differences and no unallocated cash. Saves append actor/time revisions. Repeated save IDs are idempotent; stale revisions are rejected. Reopening requires a note and removes that day's verified training data until closed again.
 
@@ -59,3 +59,19 @@ Build copies shared domain/forecast modules into public assets. `check:deploy` b
 ## Pilot limits
 
 One combined route per day; online saves. No independent manager approval or staff roles. Weekdays are hints; Friday alternation is selected manually. Automatic Zoho sync, refunds/credit notes, multiple trips, offline capture, supplier ordering and commission remain outside this pilot. Review these acceptance items before replacing operational use.
+
+## Approved screen changes — 1 October 2026
+
+Approved together by the owner after review of Morning load, Evening returns and Cash-up. Implemented in the test branch only:
+
+1. Light-blue surfaces and dark-blue controls replace the green theme.
+2. **Print Stock Load & Return** prints an A4 staff sheet with route/date and Product / Out / Return only. Out comes from the saved route plan, even if there are unsaved on-screen edits; Return stays empty. Larger catalogues use two side-by-side tables on the same page. The ordinary Print action remains available.
+3. Forecast explanations and the provisional-history warning appear once in the footer.
+4. Capture rows become product cards on small screens; navigation and controls wrap. No horizontal capture scrolling.
+5. Availability column and Show all products toggle removed. Current catalogue availability controls the morning list; loaded products remain available for evening capture.
+6. Non-sale quantity/reason inputs removed. Existing saved adjustments are preserved, not erased or reinterpreted.
+7. Cash Count replaces cash/adjustment inputs. Shop2Shop, Card and EFT remain separate. Counted total feeds reconciliation and is validated on the server.
+
+No database migration, access-key rotation, new integration, forecast algorithm change or production cutover is part of this update. Real data must not be included in this public repository. User operational acceptance remains outstanding.
+
+Verification for 0.3.0: 20 domain/API tests pass; Worker deployment dry-run succeeds. Local Chromium checks at 320, 375, 390, 768, 834, 1024 and 1280 pixels found no horizontal overflow in Morning load, Evening returns, Cash-up or Reconcile. Browser checks verified saved-plan printing despite unsaved edits, empty Return cells, load/return confirmation, denomination arithmetic and Save/Reload retention. PDF inspection confirmed one A4 page for the staff sheet, including a 49-product stress case. These checks use synthetic quantities and do not reconcile actual business sales or certify the forecast.

@@ -8,6 +8,24 @@ export const roundQty = x => Math.round(x*1000)/1000;
 export const isQty = x => typeof x==='number' && Number.isFinite(x) && x>=0 && x<=100000 && Math.abs(x*1000-Math.round(x*1000))<0.00001;
 export const isMoney = x => Number.isSafeInteger(x) && x>=0 && x<=1000000000;
 export function cleanText(v, max=300) { check(typeof v==='string' && v.length<=max,'Text is missing or too long.'); return v.trim(); }
+// All money is integer cents; blank counts stay distinct from a counted zero.
+export const CASH_DENOMINATIONS = [20000,10000,5000,2000,1000,500,200,100,50];
+export function cashCountTotal(counts) {
+  if(counts==null)return null;
+  check(typeof counts==='object'&&!Array.isArray(counts),'Invalid cash count.');
+  check(Object.keys(counts).length===CASH_DENOMINATIONS.length&&CASH_DENOMINATIONS.every(d=>Object.hasOwn(counts,d)),'Capture all cash denominations.');
+  let total=0,entered=false;
+  for(const d of CASH_DENOMINATIONS){const n=counts[d];if(n===null)continue;check(Number.isSafeInteger(n)&&n>=0&&n<=100000,'Cash counts must be non-negative whole numbers.');entered=true;total+=d*n;}
+  check(isMoney(total),'Cash count is too large.');
+  return entered?total:null;
+}
+export function availableForLoad(item,products=[]) {
+  const current=products.find(p=>p.code===item.code);
+  return current?current.active&&current.available:item.available;
+}
+export function captureItems(run,evening,products=[]) {
+  return run.items.filter(i=>evening?i.loaded>0||i.returned>0:availableForLoad(i,products));
+}
 export function validateCatalog(c) {
   check(c && Array.isArray(c.products) && c.products.length>0 && c.products.length<=200 && Array.isArray(c.routes) && c.routes.length>0 && c.routes.length<=50,'Invalid product/route catalogue.');
   for(const list of [c.products,c.routes]) { const seen=new Set(); for(const p of list) { check(/^[A-Z0-9_-]{1,25}$/.test(p.code) && !seen.has(p.code),'Duplicate or invalid catalogue code.'); seen.add(p.code); cleanText(p.name,120); } }
@@ -16,7 +34,7 @@ export function validateCatalog(c) {
   return c;
 }
 export function emptyRun(date,route,products,forecasts={}) {
-  return {date,route,trip:1,phase:'plan',rep:'',vehicle:'',notes:'',items:products.filter(p=>p.active).map(p=>({code:p.code,name:p.name,unit:p.unit,price_cents:p.price_cents,available:p.available,forecast:forecasts[p.code]??null,planned:null,loaded:null,returned:null,sold_out:null,adjustment:0,adjustment_reason:''})),cash:{counted:null,float:0,banked:0,expenses:0,extra:0,adjustment_reason:'',shop2shop:null,card:null,eft:null},recon:null};
+  return {date,route,trip:1,phase:'plan',rep:'',vehicle:'',notes:'',items:products.filter(p=>p.active).map(p=>({code:p.code,name:p.name,unit:p.unit,price_cents:p.price_cents,available:p.available,forecast:forecasts[p.code]??null,planned:null,loaded:null,returned:null,sold_out:null,adjustment:0,adjustment_reason:''})),cash:{denominations:null,counted:null,float:0,banked:0,expenses:0,extra:0,adjustment_reason:'',shop2shop:null,card:null,eft:null},recon:null};
 }
 export function itemSales(item) {
   if(item.loaded===null||item.returned===null) return null;
@@ -32,7 +50,8 @@ export function summarise(run) {
   const receipts={cash:null,shop2shop:null,card:null,eft:null}; let currentCash=0,oldCash=0,unallocatedCash=0;
   if(comparison?.complete){for(const k of Object.keys(receipts))receipts[k]=0;for(const p of comparison.payments){receipts[p.method]+=p.cents;if(p.method==='cash'){if(!p.invoice_date)unallocatedCash+=p.cents;else if(p.invoice_date<run.date)oldCash+=p.cents;else currentCash+=p.cents;}}}
   const c=run.cash;const expected=receipts.cash===null?null:c.float+receipts.cash+c.extra-c.banked-c.expenses;
-  const cashVariance=expected===null||c.counted===null?null:c.counted-expected;
+  const counted=c.denominations==null?c.counted:cashCountTotal(c.denominations);
+  const cashVariance=expected===null||counted===null?null:counted-expected;
   const variances={cash:cashVariance,...Object.fromEntries(['shop2shop','card','eft'].map(k=>[k,receipts[k]===null||c[k]===null?null:c[k]-receipts[k]]))};
   return {items,receipts,currentCash,oldCash,unallocatedCash,expected,cashVariance,variances,stock_complete:items.every(i=>i.sold!==null),stock_matches:!!comparison?.complete&&items.every(i=>i.variance===0),cash_matches:Object.values(variances).every(v=>v===0),estimated_value_cents:items.every(i=>i.sold!==null)?Math.round(items.reduce((s,i)=>s+i.sold*i.price_cents,0)):null};
 }
@@ -51,10 +70,15 @@ export function validateRun(run, previous, action) {
   const seen=new Set();for(const i of run.items){check(!seen.has(i.code),'Duplicate product.');seen.add(i.code);check(isMoney(i.price_cents),'Invalid price.');for(const k of ['planned','loaded','returned']) check(i[k]===null||isQty(i[k]),'Enter a non-negative quantity, or leave it blank.');check(isQty(i.adjustment),'Invalid non-sale stock adjustment.');check(i.adjustment===0||cleanText(i.adjustment_reason).length>=3,'Explain each damage, sample or transfer adjustment.');check([true,false,null].includes(i.sold_out),'Invalid sold-out value.');if(i.loaded!==null&&i.returned!==null)check(i.returned+i.adjustment<=i.loaded,'Returns and non-sale stock cannot exceed the load.');if(i.sold_out===true)check(i.loaded>0&&i.returned===0,'Sold out requires a positive load and zero returns.');}
   cleanText(run.rep,80);cleanText(run.vehicle,40);cleanText(run.notes,1000);
   check(run.cash&&typeof run.cash==='object'&&!Array.isArray(run.cash),'Missing cash fields.');
-  for(const [k,v] of Object.entries(run.cash))if(k!=='adjustment_reason')check(v===null||isMoney(v),'Cash values must be non-negative cents.');
+  if(run.cash.denominations!=null)run.cash.counted=cashCountTotal(run.cash.denominations);
+  for(const [k,v] of Object.entries(run.cash))if(!['adjustment_reason','denominations'].includes(k))check(v===null||isMoney(v),'Cash values must be non-negative cents.');
   for(const k of ['counted','float','banked','expenses','extra','shop2shop','card','eft'])check(Object.hasOwn(run.cash,k),'Missing cash field.');
   check(['float','banked','expenses','extra'].every(k=>run.cash[k]!==null),'Float and cash adjustments require explicit amounts.');
   check(!(run.cash.banked||run.cash.expenses||run.cash.extra)||cleanText(run.cash.adjustment_reason).length>=3,'Explain cash banked, expenses or other cash added.');
+  for(const i of run.items){const prior=previous?.items.find(p=>p.code===i.code);check(i.adjustment===(prior?.adjustment??0),'Non-sale stock entry is no longer supported. Existing saved adjustments must be preserved.');}
+  for(const k of ['float','banked','expenses','extra'])check(run.cash[k]===(previous?.cash[k]??0),'Cash adjustments are no longer supported. Existing saved amounts must be preserved.');
+  // Hidden, never-loaded products must not block confirmation or imply unknown sales.
+  for(const i of run.items){if(!i.available&&i.loaded===null)i.loaded=0;if(i.loaded===0&&i.returned===null)i.returned=0;}
   if(run.recon)validateRecon(run.recon,run);
   if(previous){check(previous.date===run.date&&previous.route===run.route,'A saved run cannot change its date or route.');if(previous.phase==='closed')check(action==='reopen','Reopen this run before changing it.');if(previous.phase!=='closed')check(action!=='reopen','Only a closed run can be reopened.');}
   else check(['save','load'].includes(action),'Save a morning plan first.');
