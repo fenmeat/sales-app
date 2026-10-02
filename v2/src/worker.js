@@ -11,7 +11,7 @@ async function catalog(db){const r=await db.prepare('SELECT * FROM v2_catalog WH
 const idFor=(d,r)=>`${d}|${r}`;
 async function lastEvent(db,date,route){return db.prepare('SELECT * FROM v2_events WHERE run_id=? ORDER BY revision DESC LIMIT 1').bind(idFor(date,route)).first();}
 async function runResult(db,date,route){const e=await lastEvent(db,date,route);if(e){const run=JSON.parse(e.payload);return {run,revision:e.revision,saved_at:e.saved_at,actor:e.actor,summary:summarise(run)};}return null;}
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.3.1',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.3.2',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);

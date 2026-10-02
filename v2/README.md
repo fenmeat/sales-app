@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.3.1 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: automatic Zoho access and operational acceptance are pending.
+Pilot 0.3.2 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: automatic Zoho access and operational acceptance are pending.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -73,6 +73,10 @@ Approved together by the owner after review of Morning load, Evening returns and
 7. Cash Count replaces cash/adjustment inputs. Shop2Shop, Card and EFT remain separate. Counted total feeds reconciliation and is validated on the server.
 8. Approved subsequently for all input boxes: entering or clicking an editable text, quantity, receipt or denomination field selects its entire current value for replacement. Includes login fields, search, salesperson, vehicle and route notes; works again after tab changes and Save/Reload. Date pickers, files, checkboxes and disabled/read-only fields retain their native behavior. Selecting alone does not alter or save data. Numeric constraints and keyboards are preserved.
 
+9. Approved 2 October: the staff Stock Load & Return print adds a blank Cash Count block (R200, R100, R50, R20, R10, R5, R2, R1, 50c quantities and Cash Counted total). It stays on one A4 sheet with the product list; longer lists split into two columns. Out still uses the saved plan; Return and all cash-writing spaces stay empty, even when returns/cash are captured in the app.
+
 No database migration, access-key rotation, new integration, forecast algorithm change or production cutover is part of this update. Real data must not be included in this public repository. User operational acceptance remains outstanding.
 
 Verification for 0.3.0: 20 domain/API tests pass; Worker deployment dry-run succeeds. Local Chromium checks at 320, 375, 390, 768, 834, 1024 and 1280 pixels found no horizontal overflow in Morning load, Evening returns, Cash-up or Reconcile. Browser checks verified saved-plan printing despite unsaved edits, empty Return cells, load/return confirmation, denomination arithmetic and Save/Reload retention. PDF inspection confirmed one A4 page for the staff sheet, including a 49-product stress case. These checks use synthetic quantities and do not reconcile actual business sales or certify the forecast.
+
+Verification for 0.3.2: all 21 domain/API tests and the deployment dry-run pass. The actual print renderer was exercised with saved plans and deliberately different unsaved/captured values: all products are present, Out uses the saved plan, and Return plus all nine cash quantities and Cash Counted stay blank. A4 PDF checks with WeasyPrint passed at 20, 21, 29, 40, 41 and 49 products; 29- and 49-product layouts were visually inspected for full names and handwriting space. Physical iPad/AirPrint confirmation remains with the owner.

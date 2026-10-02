@@ -55,6 +55,7 @@ footer p{margin:7px 0}
 @media print{header,.routes,.tabs,.toolbar,.savebar,.head-actions,#notice,.no-print,.alert.demo{display:none!important}body{background:white}.shell{padding:0;max-width:none}.panel{padding:10px;border:0}.metrics{margin:12px 0}.table-wrap{overflow:visible;border:0}table{font-size:10px}th,td{padding:5px}input{border:0;padding:0;min-height:20px;width:50px!important}thead{display:table-header-group}tr{break-inside:avoid}.print-title{display:block}h1{font-size:23px}.cash-grid{display:block}@page{size:A4;margin:12mm}}
 
 @media print{
+ :root{background:white}
  body.printing-stock>#app,body.printing-stock>#notice{display:none!important}
  body.printing-stock>#stock-print{display:block;color:#000;font-family:Arial,sans-serif}
  #stock-print h1{font-size:18px;letter-spacing:0;margin:0 0 3mm}
@@ -63,8 +64,21 @@ footer p{margin:7px 0}
  #stock-print table{table-layout:fixed;width:100%;min-width:0;font-size:10px;line-height:1.2}
  #stock-print th{background:#e5f1fb;color:#000;text-transform:none;font-size:10px;letter-spacing:0}
  #stock-print th,#stock-print td{border:1px solid #8a9aaa;padding:1.1mm 1.5mm;height:6mm;overflow-wrap:anywhere}
- #stock-print th:first-child{width:66%}
- #stock-print th:nth-child(2),#stock-print th:nth-child(3){width:17%}
- #stock-print td:nth-child(2){text-align:center;font-variant-numeric:tabular-nums}
+ #stock-print .stock-products th:first-child{width:66%}
+ #stock-print .stock-products th:nth-child(2),#stock-print .stock-products th:nth-child(3){width:17%}
+ #stock-print .stock-products td:nth-child(2){text-align:center;font-variant-numeric:tabular-nums;font-weight:700}
  #stock-print tr{break-inside:avoid}
+ #stock-print .stock-products{font-size:11px}
+ #stock-print .stock-products td{height:9mm;padding:1mm 1.5mm}
+ #stock-print.stock-compact .stock-products{font-size:10px}
+ #stock-print.stock-compact .stock-products td{height:6.7mm;padding:.7mm 1.2mm}
+ #stock-print .stock-cash-count{margin-top:6mm;border:1px solid #8a9aaa;padding:3mm;break-inside:avoid}
+ #stock-print .stock-cash-count h2{font-size:14px;letter-spacing:0;line-height:1.2;margin:0 0 2mm}
+ #stock-print .stock-cash-table{font-size:11px}
+ #stock-print .cash-denomination{width:12%}
+ #stock-print .cash-quantity{width:21.333%}
+ #stock-print .stock-cash-table tbody th,#stock-print .stock-cash-table td{height:8mm;background:white;font-size:11px}
+ #stock-print .stock-cash-total{display:flex;justify-content:flex-end;align-items:center;gap:2mm;margin-top:2mm;font-size:12px}
+ #stock-print .stock-cash-total strong{margin-right:3mm}
+ #stock-print .stock-writing-box{display:inline-block;width:55mm;height:9mm;border:1px solid #8a9aaa}
 }
