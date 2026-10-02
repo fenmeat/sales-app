@@ -62,7 +62,9 @@ export async function beginZoho(request,env,user){
 // Fixed destinations, no redirect following and no upstream error bodies in responses/logs.
 async function requestJson(url,options){
  let response,data;
- try{response=await fetch(url,{...options,redirect:'error',signal:AbortSignal.timeout(12000)});}catch{throw new ZohoError('unreachable','Zoho could not be reached. Try again shortly.');}
+ // workerd rejects redirect:'error' before sending; manual + a 3xx check keeps redirects blocked.
+ try{response=await fetch(url,{...options,redirect:'manual',signal:AbortSignal.timeout(12000)});}catch{throw new ZohoError('unreachable','Zoho could not be reached. Try again shortly.');}
+ if(response.status>=300&&response.status<400)throw new ZohoError('unexpected_redirect','Zoho returned an unexpected redirect. The request was stopped to protect the connection credentials.');
  try{data=await response.json();if(!data||typeof data!=='object'||Array.isArray(data))throw new Error();}catch{throw new ZohoError('invalid_response','Zoho returned an unreadable response. Try again shortly.');}
  return {response,data};
 }

@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.4.1 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: live Zoho authorisation, mapping checks and operational acceptance are pending.
+Pilot 0.4.2 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: live Zoho authorisation, mapping checks and operational acceptance are pending.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -121,3 +121,10 @@ Callback failures now use fixed, safe reason codes with specific staff-facing me
 Regression coverage exercises the documented generic OAuth response through initial connection and refresh, hostile/cross-region response rejection, known and unknown upstream errors, network/JSON failures and storage/decryption failures. All 31 domain/API/OAuth cases and the Worker deployment dry-run pass. Live retry and organisation verification remain pending.
 
 Additional source: https://www.zoho.com/developer/oauth/web-server-apps/get-access-token.html
+
+
+### 11.2 Cloudflare runtime request fix — 2 October 2026
+
+The owner's retry reached `unreachable`. Reproducing the full callback in local Cloudflare workerd/D1 returned exactly that result: workerd rejects `redirect: 'error'` before sending any HTTP request. The Node-only mocks and deploy dry-run did not detect this runtime incompatibility. Pilot 0.4.2 uses supported `redirect: 'manual'` and explicitly rejects all 3xx responses before parsing the body. No redirect destination is followed, so credentials remain restricted to the fixed Zoho endpoints.
+
+Two new runtime regression cases execute the actual Worker, D1 state/session checks, WebCrypto encryption, token exchange and refresh in workerd. A local fake service handles all outbound requests without live credentials or external traffic. The success case failed before the fix with `zoho=unreachable`, matching the owner's screenshot, and passes after the fix. All 33 domain/API/OAuth/runtime cases and the deployment dry-run pass. Redirect cases cover 301/302/303/307/308 and preserve an encrypted authorisation when the Books organisation check redirects. The installed Miniflare version is pinned explicitly for these CI tests. Saved route revisions, app keys and production remain unchanged. Live consent and organisation verification still require an owner retry.

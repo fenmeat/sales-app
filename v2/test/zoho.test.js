@@ -23,7 +23,7 @@ async function fixture(){
 function mockZoho(t,{tokenError=false,orgError=false,apiDomain='https://www.zohoapis.com',networkError=false,invalidJson=false}={}){
  const calls=[];
  t.mock.method(globalThis,'fetch',async(url,options)=>{
-  calls.push({url,options});assert.equal(options.redirect,'error');
+  calls.push({url,options});assert.equal(options.redirect,'manual');
   assert.ok(!url.includes(testSecret));assert.ok(!url.includes('local-access-token'));assert.ok(!url.includes('local-refresh-token'));
   if(url==='https://accounts.zoho.com/oauth/v2/token'){
    assert.equal(options.method,'POST');const params=new URLSearchParams(options.body);
