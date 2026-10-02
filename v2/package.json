@@ -1,0 +1,19 @@
+{
+  "name": "fenmeat-sales-test",
+  "version": "0.4.4",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-assets.mjs",
+    "predev": "npm run build",
+    "dev": "wrangler dev",
+    "pretest": "npm run build",
+    "test": "node --test",
+    "deploy": "npm run build && wrangler deploy",
+    "check:deploy": "npm run build && wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "miniflare": "5.20260926.1-alpha",
+    "wrangler": "4.144.0"
+  }
+}
