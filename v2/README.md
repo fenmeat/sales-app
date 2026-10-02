@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.3.3 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: automatic Zoho access and operational acceptance are pending.
+Pilot 0.4.0 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: live Zoho authorisation, mapping checks and operational acceptance are pending.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -83,8 +83,30 @@ The owner will enter actual route data for Thursday 1 October 2026, Friday 2 Oct
 
 Zoho integration investigation is approved from 2 October: begin with read-only invoices, line quantities and customer payments. Preserve separate cash/Shop2Shop/card/EFT channels and use payment date for money received, including allocations to older invoices. Organisation, region, product IDs, route/salesperson IDs and collection-route attribution still need verification before activation. No Zoho connection, permission grant, token reuse or sync is implemented by this demo-removal update.
 
-No database migration, access-key rotation, new integration, forecast algorithm change or production cutover is part of this update. Real data must not be included in this public repository. User operational acceptance remains outstanding.
+The 0.3.3 demo-removal update included no database migration, access-key rotation, new integration, forecast algorithm change or production cutover. Real data must not be included in this public repository. User operational acceptance remains outstanding.
 
 Verification for 0.3.0: 20 domain/API tests pass; Worker deployment dry-run succeeds. Local Chromium checks at 320, 375, 390, 768, 834, 1024 and 1280 pixels found no horizontal overflow in Morning load, Evening returns, Cash-up or Reconcile. Browser checks verified saved-plan printing despite unsaved edits, empty Return cells, load/return confirmation, denomination arithmetic and Save/Reload retention. PDF inspection confirmed one A4 page for the staff sheet, including a 49-product stress case. These checks use synthetic quantities and do not reconcile actual business sales or certify the forecast.
 
 Verification for 0.3.2: all 21 domain/API tests and the deployment dry-run pass. The actual print renderer was exercised with saved plans and deliberately different unsaved/captured values: all products are present, Out uses the saved plan, and Return plus all nine cash quantities and Cash Counted stay blank. A4 PDF checks with WeasyPrint passed at 20, 21, 29, 40, 41 and 49 products; 29- and 49-product layouts were visually inspected for full names and handwriting space. Physical iPad/AirPrint confirmation remains with the owner.
+
+## 11. Zoho read-only authorisation — 2 October 2026
+
+Pilot 0.4.0 adds **Setup & history → Zoho Books → Connect Zoho**. This is the connection stage; importing or automatically reconciling invoices/payments remains disabled until organisation, product, route and payment-allocation mappings have been checked against real Zoho data.
+
+The owner created a separate **FenMeat Sales V2** server-based client in Zoho and stored its `ZOHO_CLIENT_ID` and `ZOHO_CLIENT_SECRET` as runtime Secrets on the test Worker. Keep the existing Self Client, legacy Apps Script integration and `APP_ACCESS_KEYS` unchanged. The registered callback is exactly:
+
+`https://fenmeat-sales-test.alexander-fenwick.workers.dev/api/zoho/callback`
+
+Sign in as `alex`, save any pending route changes, and press **Connect Zoho**. The owner reviews Zoho's permission screen. Requested scopes are only `ZohoBooks.settings.READ`, `ZohoBooks.invoices.READ` and `ZohoBooks.customerpayments.READ`. The Worker currently makes only a read-only organisation-list request, plus OAuth token exchanges/refreshes. The available organisation names and IDs are shown for verification; no organisation is silently selected from memory.
+
+The accounts server defaults to `https://accounts.zoho.com`, matching the console used to register this client. An optional `ZOHO_ACCOUNTS_URL` can specify an officially supported region; do not change it unless the client's region is verified. Callback accounts servers and Books API domains must match a fixed official allowlist. Requests do not follow redirects or reflect upstream error bodies.
+
+Authorisation uses PKCE S256 and 10-minute, single-use state, bound both to an HttpOnly/Secure/SameSite=Lax temporary browser cookie and the existing signed-in session. The ordinary app session retains SameSite=Strict. Logged-out/expired/changed-key sessions cannot complete authorisation. Only Alex can initiate or check the connection. OAuth results redirect to a clean app URL with a fixed status code; no token is returned to browser JavaScript, reports or route exports.
+
+Access and refresh tokens are stored in the separate D1 connection table using AES-256-GCM, with a purpose-specific HKDF key derived from the Cloudflare client secret and client ID. Temporary PKCE verifiers are also encrypted. The secrets must therefore be retained unchanged: changing them does not silently overwrite or decrypt a previous connection. A successful token exchange is saved before checking Books, so a temporary organisation API failure cannot lose the refresh token. **Check connection** can retry and refresh expired access tokens. A saved authorisation is not automatically recreated.
+
+`0003_zoho_oauth.sql` documents two new additive tables, also initialized through the existing repeat-safe schema mechanism. There are no destructive migrations, changes to captured routes/history, production changes or remote migration commands in this update.
+
+Verification: the existing 22 domain/API cases plus 5 OAuth integration cases pass with synthetic data and mocked Zoho responses. Coverage includes read-only scopes, PKCE, one-use callbacks, browser/session binding, denial/expiry/logout, owner-only management, CSRF, encrypted storage, safe token refresh, failed API checks retaining authorisation, hostile destination rejection and unchanged saved route revisions. Deployment dry-run succeeds. Live Zoho permission and organisation verification require the owner's next action; no live Zoho records were accessed during development.
+
+Sources: https://www.zoho.com/books/api/v3/oauth/ ; https://www.zoho.com/books/api/v3/organizations/ ; https://www.zoho.com/books/api/v3/introduction/ ; https://www.zoho.com/developer/oauth/web-server-apps/overview.html

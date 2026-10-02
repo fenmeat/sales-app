@@ -7,6 +7,8 @@ export const SCHEMA = [
 `CREATE INDEX IF NOT EXISTS v2_history_route_date ON v2_history(route,service_date)`,
 `CREATE TABLE IF NOT EXISTS v2_sessions (token_hash TEXT PRIMARY KEY NOT NULL, username TEXT NOT NULL, key_hash TEXT NOT NULL, expires INTEGER NOT NULL)`,
 `CREATE TABLE IF NOT EXISTS v2_auth_limits (bucket TEXT PRIMARY KEY NOT NULL, attempts INTEGER NOT NULL, expires INTEGER NOT NULL)`,
-`CREATE TABLE IF NOT EXISTS v2_sync (id TEXT PRIMARY KEY NOT NULL, saved_at TEXT NOT NULL, payload TEXT NOT NULL)`
+`CREATE TABLE IF NOT EXISTS v2_sync (id TEXT PRIMARY KEY NOT NULL, saved_at TEXT NOT NULL, payload TEXT NOT NULL)`,
+`CREATE TABLE IF NOT EXISTS v2_zoho_states (state_hash TEXT PRIMARY KEY NOT NULL, session_hash TEXT NOT NULL, expires INTEGER NOT NULL, client_fingerprint TEXT NOT NULL, accounts_url TEXT NOT NULL, verifier TEXT NOT NULL)`,
+`CREATE TABLE IF NOT EXISTS v2_zoho_connection (id INTEGER PRIMARY KEY CHECK(id=1), client_fingerprint TEXT NOT NULL, encrypted_tokens TEXT NOT NULL, accounts_url TEXT NOT NULL, api_domain TEXT NOT NULL, connected_at TEXT NOT NULL, connected_by TEXT NOT NULL, organisations TEXT NOT NULL, last_checked TEXT)`
 ];
 export async function ensureSchema(db){await db.batch(SCHEMA.map(sql=>db.prepare(sql)));}
