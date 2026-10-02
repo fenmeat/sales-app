@@ -1,6 +1,6 @@
 import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,summarise,isQty} from './domain.js';
 import {forecast} from './forecast.js';
-import {zohoStatus,beginZoho,completeZoho,checkZoho} from './zoho.js';
+import {zohoStatus,beginZoho,completeZoho,checkZoho,previewZohoInvoices,previewZohoInvoice} from './zoho.js';
 import {ensureSchema} from './schema.js';
 import {keys,authenticate,login,sameOrigin,hash} from './auth.js';
 const initialized=new WeakMap();
@@ -12,7 +12,7 @@ async function catalog(db){const r=await db.prepare('SELECT * FROM v2_catalog WH
 const idFor=(d,r)=>`${d}|${r}`;
 async function lastEvent(db,date,route){return db.prepare('SELECT * FROM v2_events WHERE run_id=? ORDER BY revision DESC LIMIT 1').bind(idFor(date,route)).first();}
 async function runResult(db,date,route){const e=await lastEvent(db,date,route);if(e){const run=JSON.parse(e.payload);return {run,revision:e.revision,saved_at:e.saved_at,actor:e.actor,summary:summarise(run)};}return null;}
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.4.2',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.4.3',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
@@ -29,6 +29,8 @@ async function handle(request,env){
  if(path==='/api/zoho/status'&&method==='GET')return json(await zohoStatus(env,user));
  if(path==='/api/zoho/connect'&&method==='POST'){const result=await beginZoho(request,env,user);return json({authorization_url:result.authorization_url},200,{'Set-Cookie':result.cookie});}
  if(path==='/api/zoho/check'&&method==='POST')return json(await checkZoho(env,user));
+ if(path==='/api/zoho/invoices/preview'&&method==='POST')return json(await previewZohoInvoices(env,user,await bodyOf(request)));
+ if(path==='/api/zoho/invoice/preview'&&method==='POST')return json(await previewZohoInvoice(env,user,await bodyOf(request)));
  if(path==='/api/bootstrap'&&method==='GET'){const c=await catalog(env.DB);const counts=await env.DB.prepare('SELECT COUNT(*) AS rows, MAX(service_date) AS latest FROM v2_history').first();const sync=await env.DB.prepare('SELECT id,saved_at FROM v2_sync').all();const zoho=await zohoStatus(env,user);return json({username:user.username,today:today(),catalog:c,history:counts,sync:sync.results,zoho_connected:zoho.connected,zoho});}
  if(path==='/api/catalog'&&method==='POST'){const b=await bodyOf(request);const c=validateCatalog(b.catalog);const old=await catalog(env.DB);check(b.revision===old.revision,'The catalogue changed. Reload before saving.',409);let sql=old.revision?'UPDATE v2_catalog SET revision=revision+1,payload=?,actor=?,saved_at=? WHERE id=1 AND revision=?':'INSERT INTO v2_catalog(payload,actor,saved_at,revision,id) VALUES(?,?,?,1,1)';const args=[JSON.stringify({products:c.products,routes:c.routes}),user.username,new Date().toISOString()];if(old.revision)args.push(old.revision);try{const result=await env.DB.prepare(sql).bind(...args).run();check(result.meta.changes===1,'The catalogue changed. Reload.',409);}catch(e){if(e instanceof UserError)throw e;throw new UserError('Catalogue conflict. Reload.',409);}return json({revision:old.revision+1});}
  if(path==='/api/import/history'&&method==='POST'){const b=await bodyOf(request);check(Array.isArray(b.rows)&&b.rows.length>0&&b.rows.length<=250,'Import 1–250 history rows at a time.');const c=await catalog(env.DB),seen=new Set();for(const r of b.rows){dateKey(r.date);check(r.date<today()&&c.routes.some(x=>x.code===r.route)&&c.products.some(x=>x.code===r.product)&&isQty(r.qty),'Invalid history date, code or quantity.');check(r.quality==='provisional'&&r.source==='legacy_sales_log','This endpoint accepts provisional legacy actuals only.');const key=[r.date,r.route,r.product].join('|');check(!seen.has(key),'Duplicate history key in upload.');seen.add(key);}

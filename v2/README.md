@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.4.2 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: live Zoho authorisation, mapping checks and operational acceptance are pending.
+Pilot 0.4.3 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: Zoho mapping checks and operational acceptance are pending. The owner confirmed the live read-only connection on 2 October 2026.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -128,3 +128,16 @@ Additional source: https://www.zoho.com/developer/oauth/web-server-apps/get-acce
 The owner's retry reached `unreachable`. Reproducing the full callback in local Cloudflare workerd/D1 returned exactly that result: workerd rejects `redirect: 'error'` before sending any HTTP request. The Node-only mocks and deploy dry-run did not detect this runtime incompatibility. Pilot 0.4.2 uses supported `redirect: 'manual'` and explicitly rejects all 3xx responses before parsing the body. No redirect destination is followed, so credentials remain restricted to the fixed Zoho endpoints.
 
 Two new runtime regression cases execute the actual Worker, D1 state/session checks, WebCrypto encryption, token exchange and refresh in workerd. A local fake service handles all outbound requests without live credentials or external traffic. The success case failed before the fix with `zoho=unreachable`, matching the owner's screenshot, and passes after the fix. All 33 domain/API/OAuth/runtime cases and the deployment dry-run pass. Redirect cases cover 301/302/303/307/308 and preserve an encrypted authorisation when the Books organisation check redirects. The installed Miniflare version is pinned explicitly for these CI tests. Saved route revisions, app keys and production remain unchanged. Live consent and organisation verification still require an owner retry.
+
+
+## 12. FEN confirmed and read-only invoice preview — 2 October 2026
+
+**11 completed:** the owner's screenshot shows Connected — read-only, checked at 15:14:22 SAST. The available organisations are 441 (857912290), FEN (852102281), and FOUR4ONE (804365236), all ZAR. Alex explicitly confirmed that all invoices are recorded in **FEN**.
+
+**12 in progress:** pilot 0.4.3 pins invoice reads to FEN ID `852102281`, checks that it is active and accessible in the saved connection, and displays it as the selected organisation. Under Setup & history, Alex can use **Load FEN invoices** (default check date 1 October 2026), page through 20 summaries at a time, and press **View invoice** to inspect its Zoho salesperson/route, status, product names, SKU, sales units and quantities. **Download invoice check** includes only those selected invoice fields and the app's product/route catalogue for matching. It excludes addresses, contact details, bank data, notes and all credentials.
+
+This is a read-only verification step, not reconciliation data. It does not infer routes from invoice dates, assign products, total paid invoices as cash receipts, or claim a partial page is a complete extract. Draft/void invoices are visible with their statuses for checking. Zoho payments, current/old-credit allocation, product units and route mapping still need verification before import or automatic sync. These preview endpoints only make GET requests to the fixed FEN invoice endpoints; OAuth refresh remains server-side. No new permissions, destructive schema changes or production edits.
+
+The preview is owner-only and same-origin. Dates are restricted to the authorised real-data trial from 1 October 2026 up to today. Pages and invoice IDs are validated; wrong-date/organisation responses and incomplete pagination are rejected. Runtime tests cover FEN-only reads even when a different organisation ID is supplied, real token refresh, paging, sanitised details, invalid inputs, wrong-date data and unchanged saved route revisions. Node tests also verify staff/CSRF rejection. All 35 domain/API/OAuth/runtime cases and the deployment dry-run pass. All automatic sync remains disabled pending the owner's live preview check.
+
+API references: https://www.zoho.com/books/api/v3/invoices/ ; https://www.zoho.com/books/api/v3/introduction/

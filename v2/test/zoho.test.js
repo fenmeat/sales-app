@@ -48,6 +48,10 @@ test('Zoho requires Alex, a session and same-origin initiation; unavailable conf
  const staff=await f.call('/api/login',{body:{username:'alinda',key:key+'a'}});const staffCookie=staff.headers.get('set-cookie').split(';')[0];
  assert.equal((await f.call('/api/zoho/connect',{body:{},cookie:staffCookie})).status,403);
  assert.equal((await f.call('/api/zoho/check',{body:{},cookie:staffCookie})).status,403);
+ for(const path of ['/api/zoho/invoices/preview','/api/zoho/invoice/preview']){
+  assert.equal((await f.call(path,{body:{date:'2026-10-01',invoice_id:'9001'},cookie:staffCookie})).status,403);
+  assert.equal((await f.call(path,{body:{date:'2026-10-01'},cookie:f.session,headers:{Origin:'https://evil.example'}})).status,403);
+ }
  delete f.env.ZOHO_CLIENT_SECRET;const status=await (await f.call('/api/zoho/status',{cookie:f.session})).json();assert.equal(status.configured,false);
  assert.equal((await f.call('/api/zoho/connect',{body:{},cookie:f.session})).status,503);
 });
