@@ -12,6 +12,14 @@ test('all shipped browser modules load through the Worker without signing in',as
   assert.equal(await response.text(),await readFile(new URL(file,publicDir),'utf8'));
  }
 });
+test('demo and sample reconciliation are removed without opening protected routes',async()=>{
+ const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
+ assert.doesNotMatch(app,/demoApi|state\.demo|Try the demo|sample-recon/);
+ assert.match(app,/Personal access key/);
+ assert.match(app,/Saved successfully/);
+ const response=await worker.fetch(new Request(origin+'/demo.js'),{APP_ENV:'test'});
+ assert.equal(response.status,404);
+});
 test('protected pilot: sign-in, save, idempotency, concurrent edit, reconciliation and close',async()=>{const env={APP_ENV:'test',DB:new D1(),APP_ACCESS_KEYS:JSON.stringify({alex:key})};let cookie='';async function call(path,body,extra={}){const r=await worker.fetch(new Request(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...extra},body:body?JSON.stringify(body):undefined}),env);return {r,data:await r.json()};}
  assert.equal((await call('/api/bootstrap')).r.status,401);assert.equal((await call('/api/login',{username:'alex',key:'wrong'})).r.status,401);
  const auth=await call('/api/login',{username:'alex',key});assert.equal(auth.r.status,200);cookie=auth.r.headers.get('set-cookie').split(';')[0];assert.match(auth.r.headers.get('set-cookie'),/HttpOnly; Secure; SameSite=Strict/);

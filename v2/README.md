@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.3.2 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: automatic Zoho access and operational acceptance are pending.
+Pilot 0.3.3 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: automatic Zoho access and operational acceptance are pending.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -11,7 +11,7 @@ Only `v2/public` is deployed. The current app, master spreadsheet and legacy App
 
 ## Activate
 
-1. Open the test app and try the demo. Synthetic figures stay in browser memory and reset on refresh.
+1. Open the test app and sign in with your existing personal access key. The demo was removed at the owner's request. Steps 2–4 below are initial provisioning instructions, not steps to repeat on an already configured app.
 2. Expand **First-time access setup**. Generate keys on your device and keep them in a password manager. In the test Worker's **Settings → Variables and Secrets**, add a **Secret** named `APP_ACCESS_KEYS` and paste the generated JSON. Deploy that configuration. Never put keys in GitHub, a spreadsheet cell or chat.
 3. Sign in. Under **Setup & history**, upload the privately supplied `FenMeat_Sales_V2_Setup.json`. It loads the catalogue and provisional historical actuals in repeatable batches. Real sales history is not committed to this public repository.
 4. In the new spreadsheet, open **Extensions → Apps Script**. Paste `integrations/GoogleSheets.gs`, save and run `setupSalesV2Sync`. Follow Google's authorization prompt and enter your app key in the dialog. Setup requires the test spreadsheet title and report tabs, then privately records that spreadsheet's ID in Script Properties. Limit script editing to trusted administrators: script editors can read Script Properties.
@@ -74,6 +74,14 @@ Approved together by the owner after review of Morning load, Evening returns and
 8. Approved subsequently for all input boxes: entering or clicking an editable text, quantity, receipt or denomination field selects its entire current value for replacement. Includes login fields, search, salesperson, vehicle and route notes; works again after tab changes and Save/Reload. Date pickers, files, checkboxes and disabled/read-only fields retain their native behavior. Selecting alone does not alter or save data. Numeric constraints and keyboards are preserved.
 
 9. Approved 2 October: the staff Stock Load & Return print adds a blank Cash Count block (R200, R100, R50, R20, R10, R5, R2, R1, 50c quantities and Cash Counted total). It stays on one A4 sheet with the product list; longer lists split into two columns. Out still uses the saved plan; Return and all cash-writing spaces stay empty, even when returns/cash are captured in the app.
+
+10. Approved 2 October: remove Try the demo, in-memory demo storage and sample reconciliation. Sign-in and saved D1 route records are unchanged; no data or access keys are cleared. The removed demo source remains recoverable through Git history.
+
+## Parallel operational trial
+
+The owner will enter actual route data for Thursday 1 October 2026, Friday 2 October and later dates. Existing entries on those dates must be reviewed, not automatically treated as verified actuals or erased. Keep using the existing production app as the official record during parallel testing. The two apps do not automatically synchronise with each other. Before a final cutover, back up and verify the retained/migrated real records; no production cutover is approved.
+
+Zoho integration investigation is approved from 2 October: begin with read-only invoices, line quantities and customer payments. Preserve separate cash/Shop2Shop/card/EFT channels and use payment date for money received, including allocations to older invoices. Organisation, region, product IDs, route/salesperson IDs and collection-route attribution still need verification before activation. No Zoho connection, permission grant, token reuse or sync is implemented by this demo-removal update.
 
 No database migration, access-key rotation, new integration, forecast algorithm change or production cutover is part of this update. Real data must not be included in this public repository. User operational acceptance remains outstanding.
 
