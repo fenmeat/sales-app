@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.4.0 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: live Zoho authorisation, mapping checks and operational acceptance are pending.
+Pilot 0.4.1 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: live Zoho authorisation, mapping checks and operational acceptance are pending.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -110,3 +110,14 @@ Access and refresh tokens are stored in the separate D1 connection table using A
 Verification: the existing 22 domain/API cases plus 5 OAuth integration cases pass with synthetic data and mocked Zoho responses. Coverage includes read-only scopes, PKCE, one-use callbacks, browser/session binding, denial/expiry/logout, owner-only management, CSRF, encrypted storage, safe token refresh, failed API checks retaining authorisation, hostile destination rejection and unchanged saved route revisions. Deployment dry-run succeeds. Live Zoho permission and organisation verification require the owner's next action; no live Zoho records were accessed during development.
 
 Sources: https://www.zoho.com/books/api/v3/oauth/ ; https://www.zoho.com/books/api/v3/organizations/ ; https://www.zoho.com/books/api/v3/introduction/ ; https://www.zoho.com/developer/oauth/web-server-apps/overview.html
+
+
+### 11.1 OAuth response compatibility and failure diagnosis — 2 October 2026
+
+After the owner accepted the read-only permission request, the live callback returned the generic failure message. The specific upstream failure is not known: the previous callback discarded diagnostic reasons. Pilot 0.4.1 fixes a reproducible compatibility problem: the official generic OAuth response can contain `https://api.zoho.com`, while Books uses `https://www.zohoapis.com`. Accept only these exact, same-region allowlisted origins and always use the canonical Books origin. Other regions, arbitrary hosts, paths, queries and redirects remain rejected.
+
+Callback failures now use fixed, safe reason codes with specific staff-facing messages for rejected credentials, expired codes, network/response failures, region mismatches and app storage/encryption stages. No upstream text, tokens, keys or secret values appear in callback URLs, app responses or logs. Existing authorisations and all captured route data are preserved; no new permissions or schema changes are needed.
+
+Regression coverage exercises the documented generic OAuth response through initial connection and refresh, hostile/cross-region response rejection, known and unknown upstream errors, network/JSON failures and storage/decryption failures. All 31 domain/API/OAuth cases and the Worker deployment dry-run pass. Live retry and organisation verification remain pending.
+
+Additional source: https://www.zoho.com/developer/oauth/web-server-apps/get-access-token.html

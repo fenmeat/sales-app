@@ -5,6 +5,10 @@ export const ZOHO_ORIGIN='https://fenmeat-sales-test.alexander-fenwick.workers.d
 export const ZOHO_REDIRECT_URI=ZOHO_ORIGIN+'/api/zoho/callback';
 export const ZOHO_SCOPES=['ZohoBooks.settings.READ','ZohoBooks.invoices.READ','ZohoBooks.customerpayments.READ'];
 const regions=Object.fromEntries(['com','eu','in','com.au','jp','ca','com.cn','sa'].map(suffix=>['https://accounts.zoho.'+suffix,'https://www.zohoapis.'+suffix]));
+const genericApiDomains=Object.fromEntries(Object.keys(regions).map(accounts=>[accounts,accounts.replace('https://accounts.','https://api.')]));
+class ZohoError extends UserError{
+ constructor(reason,message){super(message,502);this.reason=reason;}
+}
 const cookieName='__Secure-fm_zoho_state';
 const encoder=new TextEncoder();
 const cookie=value=>`${cookieName}=${value}; HttpOnly; Secure; SameSite=Lax; Path=/api/zoho; Max-Age=${value?600:0}`;
@@ -57,7 +61,9 @@ export async function beginZoho(request,env,user){
 }
 // Fixed destinations, no redirect following and no upstream error bodies in responses/logs.
 async function requestJson(url,options){
- let response,data;try{response=await fetch(url,{...options,redirect:'error',signal:AbortSignal.timeout(12000)});data=await response.json();}catch{throw new UserError('Zoho could not be reached. Try Check connection again shortly.',502);}
+ let response,data;
+ try{response=await fetch(url,{...options,redirect:'error',signal:AbortSignal.timeout(12000)});}catch{throw new ZohoError('unreachable','Zoho could not be reached. Try again shortly.');}
+ try{data=await response.json();if(!data||typeof data!=='object'||Array.isArray(data))throw new Error();}catch{throw new ZohoError('invalid_response','Zoho returned an unreadable response. Try again shortly.');}
  return {response,data};
 }
 async function tokenRequest(config,accountsUrl,parameters){
@@ -65,10 +71,14 @@ async function tokenRequest(config,accountsUrl,parameters){
  const {response,data}=await requestJson(accountsUrl+'/oauth/v2/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({client_id:config.clientId,client_secret:config.secret,...parameters}).toString()});
  if(!response.ok||data.error||!data.access_token){
   const known={invalid_client:'Zoho rejected the Client ID or accounts region.',invalid_client_secret:'Zoho rejected the Client Secret.',invalid_redirect_uri:'The Zoho redirect URI does not match the test app.',invalid_code:'Zoho authorisation expired or was already used. Start again from the app.'};
-  throw new UserError(known[data.error]??'Zoho did not authorise the connection.',502);
+  const reason=Object.hasOwn(known,data.error)?data.error:'token_rejected';
+  throw new ZohoError(reason,known[reason]??'Zoho did not authorise the connection.');
  }
- check(typeof data.access_token==='string'&&data.access_token.length<4096&&Number(data.expires_in)>0,'Zoho returned an incomplete token response.',502);
- const apiDomain=data.api_domain??regions[accountsUrl];check(apiDomain===regions[accountsUrl],'Zoho returned an unexpected API region.',502);
+ if(typeof data.access_token!=='string'||data.access_token.length>=4096||!Number.isFinite(Number(data.expires_in))||Number(data.expires_in)<=0)throw new ZohoError('token_response','Zoho returned an incomplete token response.');
+ // OAuth may return api.zoho.com; Books uses www.zohoapis.com in the same region.
+ // Compare exact allowlisted origins; never follow a token-supplied destination.
+ const returnedDomain=data.api_domain??regions[accountsUrl],apiDomain=regions[accountsUrl];
+ if(returnedDomain!==apiDomain&&returnedDomain!==genericApiDomains[accountsUrl])throw new ZohoError('api_region','Zoho returned an unexpected API region.');
  return {...data,api_domain:apiDomain,expires_at:Date.now()+Math.min(Number(data.expires_in),3600)*1000};
 }
 async function listOrganisations(apiDomain,accessToken){
@@ -79,32 +89,42 @@ async function listOrganisations(apiDomain,accessToken){
 }
 function returnToApp(result){return new Response(null,{status:303,headers:{Location:ZOHO_ORIGIN+'/?zoho='+result+'#setup','Set-Cookie':cookie(''),'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; frame-ancestors 'none'"}});}
 export async function completeZoho(request,env){
+ let stage='failed';
  try{
   check(new URL(request.url).origin===ZOHO_ORIGIN,'Wrong callback origin.',400);
   const url=new URL(request.url),state=url.searchParams.get('state');
   const browserState=request.headers.get('Cookie')?.match(/(?:^|;\s*)__Secure-fm_zoho_state=([a-f0-9]{64})(?:;|$)/)?.[1];
   if(!state||!browserState||state!==browserState||!/^[a-f0-9]{64}$/.test(state))return returnToApp('expired');
   // DELETE ... RETURNING atomically claims this one-use callback.
+  stage='state_read';
   const pending=await env.DB.prepare('DELETE FROM v2_zoho_states WHERE state_hash=? RETURNING *').bind(await hash(state)).first();
   if(!pending||pending.expires<=Date.now())return returnToApp('expired');
+  stage='session_check';
   const session=await env.DB.prepare('SELECT username,key_hash,expires FROM v2_sessions WHERE token_hash=?').bind(pending.session_hash).first();
   const accounts=keys(env);
   if(!session||!isOwner(session)||session.expires<=Date.now()||!accounts[session.username]||session.key_hash!==await hash(accounts[session.username]))return returnToApp('expired');
+  stage='configuration';
   const config=settings(env);if(pending.client_fingerprint!==await fingerprint(config))return returnToApp('configuration');
-  if(url.searchParams.has('error'))return returnToApp(url.searchParams.get('error')==='access_denied'?'denied':'failed');
-  const code=url.searchParams.get('code');if(!code||code.length>4096)return returnToApp('failed');
+  if(url.searchParams.has('error'))return returnToApp(url.searchParams.get('error')==='access_denied'?'denied':'consent_failed');
+  const code=url.searchParams.get('code');if(!code||code.length>4096)return returnToApp('missing_code');
   const accountsUrl=url.searchParams.get('accounts-server')??pending.accounts_url;
-  if(!Object.hasOwn(regions,accountsUrl))return returnToApp('failed');
+  if(!Object.hasOwn(regions,accountsUrl))return returnToApp('accounts_region');
+  stage='connection_read';
   if(await connection(env.DB))return returnToApp('already_connected');
+  stage='state_decrypt';
   const {verifier}=await unseal(config,pending.verifier,'oauth-state');
+  stage='token_request';
   const tokens=await tokenRequest(config,accountsUrl,{grant_type:'authorization_code',code,redirect_uri:ZOHO_REDIRECT_URI,code_verifier:verifier});
   if(typeof tokens.refresh_token!=='string'||!tokens.refresh_token||tokens.refresh_token.length>4096)return returnToApp('missing_refresh');
   const stamp=new Date().toISOString();
-  await env.DB.prepare('INSERT INTO v2_zoho_connection(id,client_fingerprint,encrypted_tokens,accounts_url,api_domain,connected_at,connected_by,organisations) VALUES(1,?,?,?,?,?,?,?)').bind(await fingerprint(config),await seal(config,{access_token:tokens.access_token,refresh_token:tokens.refresh_token,expires_at:tokens.expires_at},'tokens'),accountsUrl,tokens.api_domain,stamp,session.username,'[]').run();
+  stage='token_encrypt';
+  const encryptedTokens=await seal(config,{access_token:tokens.access_token,refresh_token:tokens.refresh_token,expires_at:tokens.expires_at},'tokens');
+  stage='connection_save';
+  await env.DB.prepare('INSERT INTO v2_zoho_connection(id,client_fingerprint,encrypted_tokens,accounts_url,api_domain,connected_at,connected_by,organisations) VALUES(1,?,?,?,?,?,?,?)').bind(await fingerprint(config),encryptedTokens,accountsUrl,tokens.api_domain,stamp,session.username,'[]').run();
   // Persist authorisation before the API check, so temporary Books errors cannot lose the refresh token.
   try{const organisations=await listOrganisations(tokens.api_domain,tokens.access_token);await env.DB.prepare('UPDATE v2_zoho_connection SET organisations=?,last_checked=? WHERE id=1').bind(JSON.stringify(organisations),new Date().toISOString()).run();}catch{return returnToApp('check_pending');}
   return returnToApp('connected');
- }catch{return returnToApp('failed');}
+ }catch(error){return returnToApp(error instanceof ZohoError?error.reason:stage);}
 }
 export async function checkZoho(env,user){
  check(isOwner(user),'Sign in as Alex to manage the Zoho connection.',403);

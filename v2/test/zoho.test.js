@@ -20,7 +20,7 @@ async function fixture(){
  const callback=(pending,extra={})=>'/api/zoho/callback?'+new URLSearchParams({state:pending.url.searchParams.get('state'),code:'1000.local-code','accounts-server':'https://accounts.zoho.com',...extra});
  return {env,call,session,start,callback};
 }
-function mockZoho(t,{tokenError=false,orgError=false}={}){
+function mockZoho(t,{tokenError=false,orgError=false,apiDomain='https://www.zohoapis.com',networkError=false,invalidJson=false}={}){
  const calls=[];
  t.mock.method(globalThis,'fetch',async(url,options)=>{
   calls.push({url,options});assert.equal(options.redirect,'error');
@@ -28,11 +28,13 @@ function mockZoho(t,{tokenError=false,orgError=false}={}){
   if(url==='https://accounts.zoho.com/oauth/v2/token'){
    assert.equal(options.method,'POST');const params=new URLSearchParams(options.body);
    assert.equal(params.get('client_secret'),testSecret);
-   if(tokenError)return Response.json({error:'unknown_error',message:testSecret},{status:400});
-   if(params.get('grant_type')==='refresh_token'){assert.equal(params.get('refresh_token'),'local-refresh-token');return Response.json({access_token:'local-renewed-access-token',expires_in:3600,api_domain:'https://www.zohoapis.com'});}
+   if(networkError)throw new Error(testSecret);
+   if(invalidJson)return new Response(testSecret,{status:502});
+   if(tokenError)return Response.json({error:tokenError===true?'unknown_error':tokenError,message:testSecret},{status:400});
+   if(params.get('grant_type')==='refresh_token'){assert.equal(params.get('refresh_token'),'local-refresh-token');return Response.json({access_token:'local-renewed-access-token',expires_in:3600,api_domain:apiDomain});}
    assert.equal(params.get('grant_type'),'authorization_code');assert.equal(params.get('redirect_uri'),ZOHO_REDIRECT_URI);
    assert.match(params.get('code_verifier'),/^[a-f0-9]{64}$/);
-   return Response.json({access_token:'local-access-token',refresh_token:'local-refresh-token',expires_in:1,api_domain:'https://www.zohoapis.com'});
+   return Response.json({access_token:'local-access-token',refresh_token:'local-refresh-token',expires_in:1,api_domain:apiDomain});
   }
   assert.equal(url,'https://www.zohoapis.com/books/v3/organizations');assert.equal(options.method,'GET');
   assert.match(options.headers.Authorization,/^Zoho-oauthtoken local-(renewed-)?access-token$/);
@@ -97,7 +99,7 @@ test('missing/wrong browser state, expiry, logout, denied consent and untrusted 
 test('a second initiation invalidates the previous state; token errors are not reflected or stored',async t=>{
  const calls=mockZoho(t,{tokenError:true}),f=await fixture(),old=await f.start(),current=await f.start();
  assert.match((await f.call(f.callback(old),{cookie:old.cookie})).headers.get('location'),/expired/);assert.equal(calls.length,0);
- const response=await f.call(f.callback(current),{cookie:current.cookie});assert.equal(response.headers.get('location'),origin+'/?zoho=failed#setup');
+ const response=await f.call(f.callback(current),{cookie:current.cookie});assert.equal(response.headers.get('location'),origin+'/?zoho=token_rejected#setup');
  assert.ok(!(await response.text()).includes(testSecret));assert.equal(calls.length,1);
  assert.equal(f.env.DB.db.prepare('SELECT COUNT(*) n FROM v2_zoho_connection').get().n,0);
 });
@@ -107,4 +109,51 @@ test('a temporary Books failure retains the encrypted authorisation and shows a 
  const status=await (await f.call('/api/zoho/status',{cookie:f.session})).json();assert.equal(status.connected,true);assert.equal(status.last_checked,null);assert.deepEqual(status.organisations,[]);
  const checked=await f.call('/api/zoho/check',{body:{},cookie:f.session});assert.equal(checked.status,502);assert.ok(!(await checked.text()).includes('private-upstream-error'));
  assert.equal(f.env.DB.db.prepare('SELECT COUNT(*) n FROM v2_zoho_connection').get().n,1);assert.equal(calls.length,4);
+});
+
+test('documented generic OAuth API domain connects and refreshes through the canonical Books origin',async t=>{
+ const calls=mockZoho(t,{apiDomain:'https://api.zoho.com'}),f=await fixture(),pending=await f.start();
+ const response=await f.call(f.callback(pending),{cookie:pending.cookie});assert.equal(response.headers.get('location'),origin+'/?zoho=connected#setup');
+ const row=f.env.DB.db.prepare('SELECT * FROM v2_zoho_connection').get();assert.equal(row.api_domain,'https://www.zohoapis.com');
+ const checked=await f.call('/api/zoho/check',{body:{},cookie:f.session});assert.equal(checked.status,200);
+ assert.equal((await checked.json()).organisations[0].id,'12345');assert.equal(calls.length,4);
+ assert.ok(calls.every(c=>c.url==='https://accounts.zoho.com/oauth/v2/token'||c.url==='https://www.zohoapis.com/books/v3/organizations'));
+});
+
+test('token API origins reject cross-region hosts, host tricks, ports, paths and queries without forwarding tokens',async t=>{
+ for(const apiDomain of ['https://www.zohoapis.eu','https://api.zoho.eu','https://api.zoho.com.evil.example','https://evil.example','https://api.zoho.com@evil.example','http://api.zoho.com','https://api.zoho.com:443','https://api.zoho.com/','https://api.zoho.com?x=1','https://api.zoho.com#fragment']){
+  const calls=mockZoho(t,{apiDomain}),f=await fixture(),pending=await f.start();
+  const response=await f.call(f.callback(pending),{cookie:pending.cookie});assert.equal(response.headers.get('location'),origin+'/?zoho=api_region#setup',apiDomain);
+  assert.equal(calls.length,1);assert.equal(f.env.DB.db.prepare('SELECT COUNT(*) n FROM v2_zoho_connection').get().n,0);
+  t.mock.restoreAll();
+ }
+});
+
+test('callback diagnostics distinguish fixed upstream errors and reachability without exposing upstream content',async t=>{
+ for(const [options,reason] of [
+  ...['invalid_client','invalid_client_secret','invalid_redirect_uri','invalid_code'].map(tokenError=>[{tokenError},tokenError]),
+  [{tokenError:testSecret},'token_rejected'],[{tokenError:'toString'},'token_rejected'],[{networkError:true},'unreachable'],[{invalidJson:true},'invalid_response']
+ ]){
+  const calls=mockZoho(t,options),f=await fixture(),pending=await f.start();
+  const response=await f.call(f.callback(pending),{cookie:pending.cookie});
+  assert.equal(response.headers.get('location'),origin+'/?zoho='+reason+'#setup');assert.equal(calls.length,1);
+  assert.ok(!JSON.stringify([...response.headers]).includes(testSecret));assert.equal(await response.text(),'');
+  assert.equal(f.env.DB.db.prepare('SELECT COUNT(*) n FROM v2_zoho_connection').get().n,0);
+  t.mock.restoreAll();
+ }
+});
+
+test('callback app failures report the safe stage and keep raw database/encryption details private',async t=>{
+ for(const stage of ['state_read','session_check','connection_read','state_decrypt','connection_save']){
+  const calls=mockZoho(t),f=await fixture(),pending=await f.start();
+  if(stage==='state_decrypt')f.env.DB.db.prepare('UPDATE v2_zoho_states SET verifier=?').run(testSecret);
+  else{
+   const prepare=f.env.DB.prepare.bind(f.env.DB);
+   const match={state_read:'DELETE FROM v2_zoho_states WHERE state_hash',session_check:'SELECT username,key_hash,expires FROM v2_sessions',connection_read:'SELECT * FROM v2_zoho_connection',connection_save:'INSERT INTO v2_zoho_connection'}[stage];
+   t.mock.method(f.env.DB,'prepare',sql=>{if(sql.startsWith(match))throw new Error(testSecret);return prepare(sql);});
+  }
+  const response=await f.call(f.callback(pending),{cookie:pending.cookie});assert.equal(response.headers.get('location'),origin+'/?zoho='+stage+'#setup');
+  assert.equal(await response.text(),'');assert.ok(!JSON.stringify([...response.headers]).includes(testSecret));
+  assert.equal(calls.length,stage==='connection_save'?1:0);t.mock.restoreAll();
+ }
 });
