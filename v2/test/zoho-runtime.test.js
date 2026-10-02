@@ -13,7 +13,7 @@ async function fixture(t){
   invoice:{invoice_id:'9001',invoice_number:'INV-TEST-1',date:'2026-10-01',status:'paid',customer_name:'Test customer',salesperson_id:'5001',salesperson_name:'07. THURSDAY MOSSEL BAY',currency_code:'ZAR',total:160,billing_address:{address:'private address'},notes:'private notes',
    line_items:[{line_item_id:'101',item_id:'201',name:'BRAAI WORS',sku:'W01',unit:'pack',quantity:1}]}};
  const mf=new Miniflare(convertV4MiniflareOptions({
-  name:'zoho-runtime-test',modules:['worker','domain','forecast','auth','schema','zoho'].map(name=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+name+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',
+  name:'zoho-runtime-test',modules:['worker','domain','forecast','auth','schema','zoho','zoho-matching'].map(name=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+name+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',
   d1Databases:{DB:'zoho-runtime-test'},
   bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key}),ZOHO_CLIENT_ID:'1000.LOCAL_RUNTIME_CLIENT_ID',ZOHO_CLIENT_SECRET:'local-runtime-client-secret-01234567890123456789'},
   outboundService:async request=>{
@@ -108,6 +108,22 @@ test('FEN preview rejects missing organisation, invalid dates/pages/IDs and inco
  f.fake.invoicePages[1].invoices[0].date='2026-10-01';delete f.fake.invoicePages[1].page_context;assert.equal((await f.call('/api/zoho/invoices/preview',{body:{date:'2026-10-01'},cookie:f.session})).status,502);
  f.fake.invoice.organization_id='804365236';assert.equal((await f.call('/api/zoho/invoice/preview',{body:{date:'2026-10-01',invoice_id:'9001'},cookie:f.session})).status,502);
  assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_events').first()).n,0);assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_history').first()).n,0);
+});
+
+test('live Worker matches confirmed FEN IDs using its saved catalogue without changing route captures',async t=>{
+ const f=await fixture(t);await f.finish(await f.start());
+ const catalog={products:[['W01','BRAAI WORS'],['W02','OUMA'],['W03','CHAKALAKA'],['S01','SIX GUN 20g'],['S02','SIX GUN 200g']].map(([code,name])=>({code,name,unit:'sales unit',price_cents:100,active:true,available:true})),routes:[{code:'R07',name:'MOSSEL BAY',weekday:4}]};
+ assert.equal((await f.call('/api/catalog',{body:{revision:0,catalog},cookie:f.session})).status,200);
+ const run=await (await f.call('/api/run?date=2026-10-01&route=R07',{cookie:f.session})).json();run.run.items[0].planned=33;
+ assert.equal((await f.call('/api/run',{body:{run:run.run,revision:0,request_id:crypto.randomUUID(),action:'save'},cookie:f.session})).status,200);
+ const db=await f.mf.getD1Database('DB'),before=await db.prepare('SELECT * FROM v2_events').all();
+ f.fake.invoice.salesperson_id='5173603000000932936';
+ f.fake.invoice.line_items=[['5173603000000845465',1],['5173603000000845476',1],['5173603000000845487',1],['5173603000000845476',1],['5173603000000845751',1],['5173603000000845762',5]].map(([item_id,quantity],i)=>({line_item_id:String(200+i),item_id,quantity,name:'Zoho product'}));
+ const response=await f.call('/api/zoho/invoice/preview',{body:{date:'2026-10-01',invoice_id:'9001',catalog:{products:[],routes:[]}},cookie:f.session});assert.equal(response.status,200);
+ const data=await response.json();assert.equal(data.matching.all_matched,true);assert.equal(data.matching.route.code,'R07');
+ assert.deepEqual(data.matching.quantities.map(p=>[p.code,p.quantity]),[['W01',1],['W02',2],['W03',1],['S01',1],['S02',5]]);
+ assert.deepEqual((await db.prepare('SELECT * FROM v2_events').all()).results,before.results);
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_history').first()).n,0);
 });
 
 test('workerd refuses all token redirects and preserves authorisation on a redirected Books check without following either',async t=>{

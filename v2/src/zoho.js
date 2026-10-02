@@ -1,5 +1,6 @@
 import {check,UserError,dateKey,today} from './domain.js';
 import {hash,keys,randomToken} from './auth.js';
+import {matchZohoInvoice} from './zoho-matching.js';
 
 export const ZOHO_ORIGIN='https://fenmeat-sales-test.alexander-fenwick.workers.dev';
 export const ZOHO_REDIRECT_URI=ZOHO_ORIGIN+'/api/zoho/callback';
@@ -187,14 +188,15 @@ export async function previewZohoInvoices(env,user,input){
  check(new Set(invoices.map(i=>i.id)).size===invoices.length,'Zoho returned duplicate invoices. Nothing was imported.',502);
  return {preview:true,organisation:ZOHO_ORGANISATION,date,page,has_more:data.page_context.has_more_page,invoices};
 }
-export async function previewZohoInvoice(env,user,input){
+export async function previewZohoInvoice(env,user,input,catalog={products:[],routes:[]}){
  check(isOwner(user),'Sign in as Alex to check Zoho invoices.',403);
  const date=previewDate(input.date);check(typeof input.invoice_id==='string'&&/^[0-9]{1,40}$/.test(input.invoice_id),'Choose an invoice from the FEN list.');const id=input.invoice_id;
  const data=await readFenBooks(env,user,'invoices/'+id,{}),invoice=data.invoice;
  const result=previewHeader(invoice,date);
  check(result.id===id&&Array.isArray(invoice.line_items)&&invoice.line_items.length<=500,'Zoho returned incomplete invoice details. Nothing was imported.',502);
- return {preview:true,organisation:ZOHO_ORGANISATION,invoice:{...result,lines:invoice.line_items.map(line=>({
+ const detail={...result,lines:invoice.line_items.map(line=>({
   id:zohoId(line.line_item_id),item_id:line.item_id?zohoId(line.item_id):null,name:textValue(line.name),sku:textValue(line.sku,100),unit:textValue(line.unit,80),
   quantity:typeof line.quantity==='number'&&Number.isFinite(line.quantity)&&line.quantity>=0?line.quantity:null
- }))}};
+ }))};
+ return {preview:true,organisation:ZOHO_ORGANISATION,invoice:detail,matching:matchZohoInvoice(detail,catalog)};
 }

@@ -17,6 +17,11 @@ footer p{margin:7px 0}
 .count-total{font-size:18px;margin-top:10px}
 .recon-row strong{font-variant-numeric:tabular-nums;text-align:right;overflow-wrap:anywhere}
 #stock-print{display:none}
+.zoho-lines td{overflow-wrap:anywhere}
+.zoho-quantities{margin:12px 0}
+.zoho-quantities>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:15px;padding:10px 0;border-bottom:1px solid var(--line)}
+.zoho-quantities dt{overflow-wrap:anywhere}
+.zoho-quantities dd{margin:0;font-weight:650;font-variant-numeric:tabular-nums}
 @media screen and (max-width:1100px){
  .capture-table,.reconcile-table{overflow:visible;border:0;background:transparent}
  .capture-table table,.capture-table tbody,.reconcile-table table,.reconcile-table tbody{display:block;width:100%}
@@ -25,6 +30,8 @@ footer p{margin:7px 0}
  .capture-table td,.reconcile-table td{display:block;padding:0;border:0;min-width:0;text-align:left}
  .capture-table td.product,.reconcile-table td.product{grid-column:1/-1;min-width:0;font-weight:650;font-size:15px;overflow-wrap:anywhere}
  .capture-table td.product small{font-weight:400}
+ .zoho-lines tr{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .zoho-lines .sku-cell{grid-column:1/-1}
  td[data-label]::before{content:attr(data-label);display:block;font-size:11px;font-weight:650;color:var(--muted);margin-bottom:7px;min-height:28px}
  .capture-table td input[type=number]{width:100%;max-width:130px}
  .capture-table .soldout-cell{grid-column:1/-1;display:flex;gap:10px;align-items:center}

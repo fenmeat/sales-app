@@ -141,3 +141,29 @@ This is a read-only verification step, not reconciliation data. It does not infe
 The preview is owner-only and same-origin. Dates are restricted to the authorised real-data trial from 1 October 2026 up to today. Pages and invoice IDs are validated; wrong-date/organisation responses and incomplete pagination are rejected. Runtime tests cover FEN-only reads even when a different organisation ID is supplied, real token refresh, paging, sanitised details, invalid inputs, wrong-date data and unchanged saved route revisions. Node tests also verify staff/CSRF rejection. All 35 domain/API/OAuth/runtime cases and the deployment dry-run pass. All automatic sync remains disabled pending the owner's live preview check.
 
 API references: https://www.zoho.com/books/api/v3/invoices/ ; https://www.zoho.com/books/api/v3/introduction/
+
+### 12.1 Confirmed product/route matching — pilot 0.4.4, 2 October 2026
+
+**Approved and implemented:** Alex confirmed that ALL app/Zoho quantities use the same sales unit, with a factor of **1**. One Ouma is one outer bag containing five inner packs in both systems. Numeric prefixes in Zoho product names are legacy sort positions, never quantities or product IDs. Keep product names/grouping unchanged for now.
+
+The live invoice list and detail view were confirmed in the owner's screenshots, followed by `fen-invoice-check-2026-10-01.json` for FEN invoice `INV-018567` (`5173603000008253001`). It has six separate invoice lines for five distinct products. The two Ouma lines each have quantity 1; their app quantity must be 2, not 10.
+
+| Verified Zoho item ID | App code | App product |
+| --- | --- | --- |
+| 5173603000000845465 | W01 | BRAAI WORS |
+| 5173603000000845476 | W02 | OUMA |
+| 5173603000000845487 | W03 | CHAKALAKA |
+| 5173603000000845751 | S01 | SIX GUN 20g SML |
+| 5173603000000845762 | S02 | SIX GUN 200g BIG |
+
+Verified salesperson ID `5173603000000932936` (`07. THURSDAY MOSSEL BAY`) maps to app route `R07` (`MOSSEL BAY`). Matching uses exact Zoho IDs and checks the saved app catalogue. It never guesses a match from name prefixes, SKU, customer name, date or weekday. Missing mappings, invalid quantities, duplicate line IDs, unknown invoice statuses and non-ZAR currency remain explicit issues. Draft/void invoices remain excluded; paid invoices are never treated as cash receipts.
+
+The detail screen shows each matched app product and per-product quantities for **this invoice only**. The mobile SKU field now has its own full-width row, with wrapping, to stop the observed overlap with Unit. No Zoho records or app route captures are written by this check.
+
+### 12.2 Remaining products and routes — in progress
+
+**Check page products** reads up to 20 invoices from the displayed page, sequentially, with a 1.2-second wait before each request. It reuses the existing owner-only, same-origin FEN preview endpoints and can be stopped. **Download product check** provides the checked invoices, confirmed matches and app catalogue in one file. Failures/cancellation retain an explicitly partial report; a checked page never claims to be a complete day. This avoids requiring Alex to open/download each invoice individually.
+
+Next: review the owner's first page product-check download to establish remaining item IDs and route IDs. Do not guess missing matches, import partial sales, enable scheduled Zoho sync or implement payment allocation from invoice-paid status. Payment-date and collection-route handling are still outstanding.
+
+Validation: all **41** domain/API/OAuth/matching/page-check/workerd tests and the deployment dry-run pass. Tests verify the five exact matches, the repeated Ouma line total, invalid/missing mappings, partial downloads, sequential requests, cancellation, and unchanged saved D1 route revisions/history. UI syntax and public module serving also pass. Visual confirmation on the owner's phone remains outstanding. No schema migrations, access-key changes, production edits or main-branch changes.
