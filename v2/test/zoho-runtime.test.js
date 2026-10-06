@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fileURLToPath} from 'node:url';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {addDays} from '../src/domain.js';
+import {forecast} from '../src/forecast.js';
+import {monthPhase} from '../src/month-cycle.js';
 import {ZOHO_ORIGIN as origin,ZOHO_REDIRECT_URI} from '../src/zoho.js';
 
 // Exercise the real Worker, D1 and outbound fetch validation in workerd.
@@ -13,7 +16,7 @@ async function fixture(t){
   invoice:{invoice_id:'9001',invoice_number:'INV-TEST-1',date:'2026-10-01',status:'paid',customer_name:'Test customer',salesperson_id:'5001',salesperson_name:'07. THURSDAY MOSSEL BAY',currency_code:'ZAR',total:160,billing_address:{address:'private address'},notes:'private notes',
    line_items:[{line_item_id:'101',item_id:'201',name:'BRAAI WORS',sku:'W01',unit:'pack',quantity:1}]}};
  const mf=new Miniflare(convertV4MiniflareOptions({
-  name:'zoho-runtime-test',modules:['worker','domain','forecast','forecast-history','auth','schema','zoho','zoho-matching'].map(name=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+name+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',
+  name:'zoho-runtime-test',modules:['worker','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching'].map(name=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+name+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',
   d1Databases:{DB:'zoho-runtime-test'},
   bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key}),ZOHO_CLIENT_ID:'1000.LOCAL_RUNTIME_CLIENT_ID',ZOHO_CLIENT_SECRET:'local-runtime-client-secret-01234567890123456789'},
   outboundService:async request=>{
@@ -89,6 +92,22 @@ test('workerd forecasts from confirmed returns before cash close and refresh pre
  assert.equal((await call('/api/run',{run:actual.run,revision:actual.revision,action:'forecast',request_id:crypto.randomUUID()})).status,400);
  const db=await f.mf.getD1Database('DB');assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_history').first()).n,1);
  const captured=(await call('/api/run?date=2026-10-01&route=R07')).data;assert.equal(captured.run.items[0].loaded,20);assert.equal(captured.run.items[0].returned,3);
+});
+
+test('workerd exposes month-phase evidence and refreshes stale forecasts without changing capture fields',async t=>{
+ const f=await fixture(t),products=Array.from({length:5},(_,i)=>({code:'W0'+(i+1),name:'Calendar test '+i,unit:'bag',price_cents:100,active:true,available:true}));
+ async function call(path,body){const r=await f.call(path,{body,cookie:f.session});assert.equal(r.status,200,await r.clone().text());return r.json();}
+ await call('/api/catalog',{revision:0,catalog:{products,routes:[{code:'R07',name:'Calendar test',weekday:3}]}});
+ const rows=[];for(let date='2026-04-01';date<'2026-10-01';date=addDays(date,7))for(const [i,p]of products.entries())rows.push({date,route:'R07',product:p.code,qty:[40,30,10][monthPhase(date)]*(i+1),quality:'provisional',source:'legacy_sales_log'});
+ await call('/api/import/history',{rows});
+ let r=await call('/api/run?date=2026-10-07&route=R07');assert.equal(r.forecast_status.month_cycle.applied,true);assert.equal(r.forecast_status.month_cycle.label,'Days 1–7');
+ r.run.forecast_snapshot='older-model-snapshot';r.run.notes='Retain custom capture';r.run.items[0].planned=77;r.run.items[1].planned=0;r.run.cash.card=12345;
+ for(const item of r.run.items)item.forecast=forecast(rows.filter(x=>x.product===item.code),'2026-10-07');
+ r=await call('/api/run',{run:r.run,revision:0,action:'save',request_id:crypto.randomUUID()});assert.equal(r.forecast_status.stale,true);
+ const before=structuredClone(r.run),withoutForecast=run=>{const c=structuredClone(run);delete c.forecast_snapshot;for(const item of c.items)delete item.forecast;return c;};
+ r=await call('/api/run',{run:r.run,revision:r.revision,action:'forecast',request_id:crypto.randomUUID()});assert.equal(r.forecast_status.stale,false);assert.deepEqual(withoutForecast(r.run),withoutForecast(before));
+ assert.ok(r.run.items[0].forecast.qty>before.items[0].forecast.qty);assert.equal(r.run.items[0].forecast.month_cycle.baseline_base,before.items[0].forecast.base);
+ const reloaded=await call('/api/run?date=2026-10-07&route=R07');assert.deepEqual(reloaded.run,r.run);assert.equal(reloaded.forecast_status.stale,false);
 });
 
 test('workerd completes OAuth, encrypted D1 storage and token refresh while keeping a saved route',async t=>{

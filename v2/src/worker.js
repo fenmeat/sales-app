@@ -1,5 +1,5 @@
 import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,summarise,isQty} from './domain.js';
-import {forecast} from './forecast.js';
+import {forecastRoute} from './month-cycle.js';
 import {effectiveHistory,applyForecastRefresh} from './forecast-history.js';
 import {zohoStatus,beginZoho,completeZoho,checkZoho,previewZohoInvoices,previewZohoInvoice} from './zoho.js';
 import {ensureSchema} from './schema.js';
@@ -21,13 +21,13 @@ async function forecastResult(db,date,route,c){
  (SELECT payload FROM v2_events a WHERE a.run_id=e.run_id AND a.action IN ('returns','close','reopen','load') ORDER BY revision DESC LIMIT 1) AS confirmation_payload
  FROM v2_events e JOIN (SELECT run_id,MAX(revision) revision FROM v2_events WHERE route=? AND service_date>=? AND service_date<? GROUP BY run_id) latest ON e.run_id=latest.run_id AND e.revision=latest.revision`).bind(route,from,date).all();
  const effective=effectiveHistory(history.results,events.results,{from,to:date,asOf});
- const forecasts={};for(const p of c.products)forecasts[p.code]=forecast(effective.rows.filter(r=>r.product===p.code),date);
+ const {forecasts,month_cycle}=forecastRoute(effective.rows,date,c.products.map(p=>p.code));
  let expected=addDays(date,-7);while(expected>=asOf)expected=addDays(expected,-7);
  const expectedRows=effective.rows.filter(r=>r.date===expected);
- const snapshot=await hash(JSON.stringify({version:'1.1-provenance',date,route,products:c.products.map(p=>p.code).sort(),rows:effective.rows,excluded:effective.excluded}));
- return {forecasts,snapshot,model:'8/12-week validated baseline',expected_visit:expected,latest_actual:effective.rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,provisional_count:effective.rows.filter(r=>r.quality==='provisional').length};
+ const snapshot=await hash(JSON.stringify({version:'1.2-month-phase',date,route,products:c.products.map(p=>p.code).sort(),rows:effective.rows,excluded:effective.excluded}));
+ return {forecasts,snapshot,model:'8/12-week baseline with measured route month phase',month_cycle,expected_visit:expected,latest_actual:effective.rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,provisional_count:effective.rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.5.0',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.5.1',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
