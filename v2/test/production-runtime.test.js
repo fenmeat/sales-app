@@ -27,7 +27,7 @@ test('shared packing suggestions and accepted batches survive D1 save, refresh a
  const {mf,call,save}=await fixture(t,['R01','R02','R03','R04']),db=await mf.getD1Database('DB');
  const before=(await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results;
  let r=(await call('/api/production?date=2026-10-07')).data;
- for(const i of r.plan.items)i.stock=30;
+ for(const i of r.plan.items)i.stock=30;r.plan.groups[0].coldroom_batches=0;
  r.plan.items[0].stock=16;r.plan.items[1].stock=5;
  r.plan.groups[0].planned=2;r=(await save(r)).data;assert.equal(r.summary.groups[0].suggested,2);
  r.plan.items[0].pack_plan=100;r=(await save(r)).data;
@@ -40,4 +40,30 @@ test('shared packing suggestions and accepted batches survive D1 save, refresh a
  r.plan.items[1].pack_plan=0;r=(await save(r)).data;assert.equal(r.summary.groups[0].suggested,5);assert.equal(r.plan.groups[0].planned,6);
  assert.deepEqual((await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results,before);
  assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_history').first()).n,0);
+});
+
+test('legacy production records upgrade in memory only; new counts and decisions persist without sales changes',async t=>{
+ const {mf,call,save}=await fixture(t,['W07','P02','P03','P04','R01','R05']),db=await mf.getD1Database('DB');
+ const before=(await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results;
+ let r=(await call('/api/production?date=2026-10-07')).data;
+ for(const i of r.plan.items){i.stock=0;i.pack_plan=0;i.actual=0;delete i.casing_plan;delete i.coldroom_casings;delete i.casing_yield_qty;if(i.code.startsWith('P')){i.mode='shared';i.yield_qty=122;}}
+ delete r.plan.planning_version;
+ for(const g of r.plan.groups){g.planned=g.id==='W07'?2:0;for(const key of ['coldroom_batches','roll_stock','cut_planned','rolls_per_batch','min_roll_stock','disks_per_roll'])delete g[key];if(g.id==='W07')g.mode='batch';if(g.id==='POLONY')g.mode='shared';}
+ const legacy=JSON.stringify(r.plan);
+ await db.prepare('INSERT INTO v2_production_events VALUES(?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),'legacy','2026-10-07',1,'save',legacy,'alex','2026-10-06T00:00:00Z').run();
+ r=(await call('/api/production?date=2026-10-07')).data;
+ assert.equal((await db.prepare('SELECT payload FROM v2_production_events WHERE revision=1').first()).payload,legacy,'Read must not migrate stored data');
+ assert.equal(r.plan.groups[0].planned,2);assert.equal(r.plan.groups[0].cut_planned,null);assert.equal(r.plan.items[1].yield_qty,122);assert.equal(r.plan.items[1].casing_yield_qty,20);
+ Object.assign(r.plan.groups[0],{roll_stock:20,cut_planned:2,rolls_per_batch:12,min_roll_stock:10});
+ for(const g of r.plan.groups)if(['cooked','shared'].includes(g.mode))g.coldroom_batches=.5;
+ for(const [n,i] of r.plan.items.filter(i=>i.mode==='casings').entries()){i.coldroom_casings=0;i.casing_plan=[1,3,4][n];i.pack_plan=[20,42,32][n];}
+ r.plan.groups.find(g=>g.id==='POLONY').planned=2;
+ r=(await save(r)).data;assert.equal(r.revision,2);assert.deepEqual((await call('/api/production?date=2026-10-07')).data.plan,r.plan);
+ const olderClient=structuredClone(r);for(const g of olderClient.plan.groups)for(const key of ['coldroom_batches','roll_stock','cut_planned','rolls_per_batch','min_roll_stock','disks_per_roll'])delete g[key];for(const i of olderClient.plan.items){delete i.casing_plan;delete i.coldroom_casings;}
+ r=(await save(olderClient)).data;assert.equal(r.plan.groups[0].cut_planned,2);assert.equal(r.plan.items[2].casing_plan,3);
+ r=(await save(r,'refresh')).data;assert.equal(r.plan.groups[0].roll_stock,20);assert.equal(r.plan.items[2].pack_plan,42);
+ r=(await save(r,'confirm',{acknowledge_warnings:true})).data;assert.equal(r.plan.phase,'confirmed');r.plan.items[0].actual=3;r=(await save(r,'actuals')).data;assert.equal(r.plan.phase,'confirmed');assert.equal(r.plan.groups[0].planned,2);
+ const next=(await call('/api/production?date=2026-10-08')).data;assert.equal(next.plan.groups[0].rolls_per_batch,12);assert.equal(next.plan.groups[0].min_roll_stock,10);assert.equal(next.plan.groups[0].roll_stock,null);assert.equal(next.plan.groups[0].cut_planned,null);assert.equal(next.plan.items[2].casing_plan,null);assert.equal(next.plan.items[2].coldroom_casings,null);
+ assert.deepEqual((await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results,before);
+ assert.equal((await db.prepare('SELECT payload FROM v2_production_events WHERE revision=1').first()).payload,legacy);
 });
