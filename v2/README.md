@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.4.3 implements the route-day workflow and the approved capture-screen changes. It is not ready to replace the current operational system: Zoho mapping checks and operational acceptance are pending. The owner confirmed the live read-only connection on 2 October 2026.
+Pilot 0.6.0 implements the route-day workflow, the measured month-phase forecast trial and the owner-approved task-first interface. It is not ready to replace the current operational system: Zoho mapping checks and operational acceptance are pending. The owner confirmed the live read-only connection on 2 October 2026.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -200,3 +200,17 @@ The chosen route model showed only a **small** reduction in aggregate expected-s
 Validation: **55** tests pass, including calendar boundaries, incomplete/future-month exclusion, correct weekday and quality filtering, scale-invariant pooling, sparse-data fallback, no invented sales, one-buffer behavior, and a real workerd/D1 refresh/reload preserving all non-forecast capture fields. The deployment dry-run passes. Live deployment and both Wednesday refreshes are recorded in draft PR #2 after verification.
 
 Method references: https://otexts.com/fpp3/tscv.html ; https://otexts.com/fpp3/forecasting-decomposition.html
+
+## 15. Approved usability update — pilot 0.6.0, 6 October 2026
+
+Alex approved the in-conversation layout, requested larger product names, then authorised implementation in the existing test app. Four persistent, labelled destinations keep Morning load, Evening returns, Cash-up and Reconcile reachable while scrolling. The compact route picker puts the selected date's scheduled routes first, with all other routes still available. Date and route remain explicit. Print opens the existing saved-plan Stock Load & Return sheet; More contains saved history, reload, Setup & Zoho, current-view printing and sign-out.
+
+Product names are 24px and bold on all capture layouts. Quantity and cash-count inputs are 24px with at least 54px height. Morning cards separate the forecast suggestion, editable plan and actual load; tablet widths use two product columns. Forecast explanations, route details and notes expand on demand. Stale/missing-data and low-suggestion warnings remain visible. Reconciliation owns the summary metrics. Cash-up's primary action reviews reconciliation rather than closing the day directly; closing still uses the existing server checks. The persistent dock reserves its measured height and respects device safe areas and the visual keyboard viewport.
+
+Save draft remains explicit. Saved, unsaved, saving and failed-save states are distinct. Pending saves temporarily suspend editing/navigation; failures restore editing and keep the typed values. Changing work views preserves in-memory drafts; changing date/route or reloading still asks before discarding unsaved edits. Selecting an input still selects its entire value. Refresh suggestions and Use forecast as plan remain separate, with the existing replacement confirmation.
+
+Scope: interface plus version metadata only. No database migration, catalogue, unit, price, forecast/domain algorithm, history, access-key, dependency or automatic Zoho sync change. Production, main and the original Master File are untouched. No production or test business records were written for validation.
+
+Validation: the existing 55 domain/API/workerd tests and Worker deployment dry-run pass. Local Chromium exercised the actual interface against the actual Worker with an isolated ephemeral D1 database and synthetic catalogue/captures. All four work views fit 320, 390, 768, 1024 and 1280px; navigation stays reachable after scrolling. The flow verifies value replacement, unsaved and explicit-zero quantities across tabs/Setup, cancelled route/date changes, draft save/reload, forecast refresh retaining non-forecast fields, load/return confirmation, cash-count persistence, and a simulated failed save preserving entered data and the stored revision. No browser exceptions were observed. The 29-product saved-plan printout remains one A4 page with blank Return and Cash Count fields. These are simulated browser/runtime checks; physical iPad Safari and AirPrint acceptance remain with the owner.
+
+Publish only to `build/sales-v2-cloudflare` and the existing test Worker. Keep PR #2 in draft; do not merge. Record the deployed commit and verified live build in that PR and the existing PA app record.
