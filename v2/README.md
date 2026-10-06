@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.7.0 implements the route-day workflow, the measured month-phase forecast trial, the owner-approved task-first interface and separate production planning. It is not ready to replace the current operational system: Zoho mapping checks and operational acceptance are pending. The owner confirmed the live read-only connection on 2 October 2026.
+Pilot 0.7.1 implements the route-day workflow, the measured month-phase forecast trial, the owner-approved task-first interface and separate production planning. It is not ready to replace the current operational system: Zoho mapping checks and operational acceptance are pending. The owner confirmed the live read-only connection on 2 October 2026.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -230,3 +230,14 @@ Russian sizes R01–R04 share one recipe: aggregate shortages using 1310 loose R
 `0004_production_plans.sql` documents the new additive table, created by the existing repeat-safe authenticated schema initializer. No destructive migration, catalogue update, access-key change, dependency change or automatic Zoho sync is included. Original production files, the original Master File and main are unchanged. No live operational records were created or changed for testing.
 
 Validation: 65 domain/API/workerd tests pass, including combined rounding, explicit zero, unknown quantities, shared recipes, server-owned demand, saved yield inheritance, revision/idempotency conflicts, rejected cross-origin writes, read-only audit access, refresh/manual preservation, confirmed actuals and isolation from route events/history. Worker deploy dry-run passes. Local Chromium with the actual Worker and synthetic D1 passed 320/390/768/1024/1280px layouts with 24px product names and numeric inputs, no horizontal overflow or browser errors. The browser workflow covered save/reload, manual zero, cancelled date changes, saved-plan printing, failed-save retry, source refresh, confirmed actual output and preservation of unrefreshed route selections. The 29-product production print sample fits a legible A4 page; larger plans may continue across pages. Physical iPhone/iPad Safari and AirPrint remain owner acceptance.
+
+
+### 16.1 Production navigation repair — pilot 0.7.1, 6 October 2026
+
+Alex reported a raw `{"error":"Not found."}` page when opening Production. A live HTTP check reproduced `production.html` → HTTP 307 `/production` → HTTP 404: Cloudflare canonicalizes standalone HTML assets to extensionless paths, but the Worker allowlist only contained the `.html` spelling. The previous local browser fixture served files directly and missed the actual asset redirect. The earlier cloud-browser policy block did not establish that this page worked.
+
+Allow the canonical Production and access-setup paths, including trailing-slash variants for the asset service to normalize, and send the Production button directly to `/production`. Keep existing `.html` links working. No broad fallback to the sales page is added; unknown paths remain 404 and business API access still requires authentication. No schema, captured data, manual plan, forecasting, recipe, credentials, dependency or production/Master changes.
+
+A new integration case uses the actual Cloudflare asset service in workerd with the shipped Wrangler routing configuration. Before the fix it reproduces the same final 404 JSON; after the fix it follows the full HTML redirect chains and verifies the correct screens, supporting modules, response headers, unknown-page 404 and protected production API. All 66 tests and the deployment dry-run pass. Live deployment and final HTTP verification are recorded in PR #2.
+
+Reference: https://developers.cloudflare.com/workers/static-assets/routing/advanced/html-handling/
