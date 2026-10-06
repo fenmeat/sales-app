@@ -1,4 +1,5 @@
 import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,summarise,isQty} from './domain.js';
+import {productionApi} from './production-api.js';
 import {forecastRoute} from './month-cycle.js';
 import {effectiveHistory,applyForecastRefresh} from './forecast-history.js';
 import {zohoStatus,beginZoho,completeZoho,checkZoho,previewZohoInvoices,previewZohoInvoice} from './zoho.js';
@@ -27,11 +28,11 @@ async function forecastResult(db,date,route,c){
  const snapshot=await hash(JSON.stringify({version:'1.2-month-phase',date,route,products:c.products.map(p=>p.code).sort(),rows:effective.rows,excluded:effective.excluded}));
  return {forecasts,snapshot,model:'8/12-week baseline with measured route month phase',month_cycle,expected_visit:expected,latest_actual:effective.rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,provisional_count:effective.rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.6.0',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.7.0',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
- const assetPaths=new Set(['/','/index.html','/app.js','/styles.css','/domain.js','/forecast.js','/forecast-history.js','/access-setup.html','/access-setup.js','/input-selection.js','/zoho-page-check.js']);
+ const assetPaths=new Set(['/','/index.html','/app.js','/styles.css','/domain.js','/forecast.js','/forecast-history.js','/access-setup.html','/access-setup.js','/production.html','/production-app.js','/production.css','/production.js','/input-selection.js','/zoho-page-check.js']);
  if(assetPaths.has(path)&&['GET','HEAD'].includes(method)){const r=await env.ASSETS.fetch(request);return new Response(r.body,{status:r.status,headers:{...Object.fromEntries(r.headers),...headers}});}
  check(path.startsWith('/api/'),'Not found.',404);check(['GET','POST'].includes(method),'Method not allowed.',405);
  check(Object.keys(keys(env)).length>0,'Access is not configured. Use the setup instructions on the sign-in screen.',503);
@@ -40,6 +41,7 @@ async function handle(request,env){
  if(path==='/api/login'&&method==='POST'){const result=await login(request,env,await bodyOf(request));return json({username:result.username},200,{'Set-Cookie':result.cookie});}
  const allowKey=path.startsWith('/api/sync/')||path.startsWith('/api/import/');const user=await authenticate(request,env,{allowKey});
  if(method==='POST'&&!(allowKey&&request.headers.get('Authorization')?.startsWith('Bearer ')))sameOrigin(request);
+ if((path==='/api/production'||path==='/api/production/audit')&&['GET','POST'].includes(method))return json(await productionApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),forecastResult,runResult,bodyOf}));
  if(path==='/api/logout'&&method==='POST'){const token=request.headers.get('Cookie')?.match(/fm_session=([a-f0-9]{64})/)?.[1];if(token)await env.DB.prepare('DELETE FROM v2_sessions WHERE token_hash=?').bind(await hash(token)).run();return json({ok:true},200,{'Set-Cookie':'fm_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0'});}
  if(path==='/api/zoho/status'&&method==='GET')return json(await zohoStatus(env,user));
  if(path==='/api/zoho/connect'&&method==='POST'){const result=await beginZoho(request,env,user);return json({authorization_url:result.authorization_url},200,{'Set-Cookie':result.cookie});}

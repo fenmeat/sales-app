@@ -223,3 +223,5 @@ footer p{margin:7px 0}
  .workflow-nav button{font-size:14px}
  .route-details .fields{grid-template-columns:1fr}
 }
+
+@media screen and (max-width:759px){.app-header{flex-wrap:wrap;gap:10px}.head-actions{margin-left:auto}}
