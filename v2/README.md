@@ -1,6 +1,6 @@
 # Fen Meat Sales V2 — separate pilot
 
-Pilot 0.7.1 implements the route-day workflow, the measured month-phase forecast trial, the owner-approved task-first interface and separate production planning. It is not ready to replace the current operational system: Zoho mapping checks and operational acceptance are pending. The owner confirmed the live read-only connection on 2 October 2026.
+Pilot 0.7.2 implements the route-day workflow, the measured month-phase forecast trial, the owner-approved task-first interface and separate production planning. It is not ready to replace the current operational system: Zoho mapping checks and operational acceptance are pending. The owner confirmed the live read-only connection on 2 October 2026.
 
 - Test app: https://fenmeat-sales-test.alexander-fenwick.workers.dev
 - Reporting spreadsheet: the separately supplied private **FenMeat Sales V2 — Test** file. Its ID is not committed here.
@@ -241,3 +241,12 @@ Allow the canonical Production and access-setup paths, including trailing-slash 
 A new integration case uses the actual Cloudflare asset service in workerd with the shipped Wrangler routing configuration. Before the fix it reproduces the same final 404 JSON; after the fix it follows the full HTML redirect chains and verifies the correct screens, supporting modules, response headers, unknown-page 404 and protected production API. All 66 tests and the deployment dry-run pass. Live deployment and final HTTP verification are recorded in PR #2.
 
 Reference: https://developers.cloudflare.com/workers/static-assets/routing/advanced/html-handling/
+
+
+### 16.2 Shared packing drives batch suggestions — pilot 0.7.2, 6 October 2026
+
+Alex found that entering 100 Russian 6 sales bags in My packing plan left the suggestion at the route-shortage total of two batches. Shared Russian and Polony suggestions now use each entered packing quantity, including explicit zero; only blank sizes fall back to the current shortage. Sum all sizes as recipe fractions and round up once. Packing quantities mean new output, so available stock is not deducted from them again. For the current Russian yield, 100 Russian 6 alone needs ceil(100 × 60 / 1310) = 5 batches; other sizes can increase the combined total.
+
+The suggestion updates immediately while typing. A short note identifies whether packing quantities or only shortages are being used. Use suggestion accepts the resulting batch count and fills blank packing quantities, preserving every entered packing quantity. Existing manual batch choices, including zero, remain untouched until explicitly replaced; capacity/shortage warnings remain. Bulk acceptance still fills blank batch plans only. Fully specified packing quantities can be calculated before stock counts are known; missing counts retain warnings, and any unknown blank-size shortage prevents an unsupported combined suggestion.
+
+Saved production counts, yields, packing quantities, manual batches, actuals and notes are preserved on reload/refresh. No schema, route-plan, forecast, recipe-yield, credential, dependency, original production app or Master File changes. Tests cover the reported two-to-five-or-six batch case, all sizes combined, explicit zero, blank fallback, partial unknowns, clearing overrides, Polony, accepting without losing 100, and real D1 save/refresh/reload with route/history isolation. All 70 tests and the deployment dry-run pass. Local Chromium against the actual Worker, Cloudflare asset service and synthetic D1 verified Sales-to-Production navigation, immediate packing-based suggestions, accepting without overwrites, explicit zero, saved/reloaded/refreshed quantities, preserved saved-plan printing and no route-event changes. Layouts at 320/390/768/1024px have no horizontal overflow, with zero browser errors. Live deployment evidence is recorded in draft PR #2.

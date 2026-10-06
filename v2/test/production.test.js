@@ -10,3 +10,38 @@ test('polony sizes share recipe capacity; bought-in units never become cooking b
 test('refresh retains manual plan, stock, yield, actual output and product history',()=>{const p=make();Object.assign(p.items[0],{stock:10,yield_qty:14,actual:29});p.groups[0].planned=0;p.notes='Keep me';const next=buildProductionPlan({date:p.date,target_date:p.target_date,routes:p.routes,items:[{...p.items[0],demand:100}],snapshot:'changed',previous:p});assert.equal(next.items[0].stock,10);assert.equal(next.items[0].yield_qty,14);assert.equal(next.items[0].actual,29);assert.equal(next.groups[0].planned,0);assert.equal(next.notes,'Keep me');});
 test('manual batches are whole; unsupported yields do not create a made-up suggestion',()=>{const p=make(['X01']);p.items[0].stock=0;assert.equal(productionSummary(p).groups[0].suggested,null);const v=structuredClone(p);v.groups[0].planned=.5;assert.throws(()=>validateProductionEdits(v,p));v.groups[0].planned=0;v.items[0].stock=-1;assert.throws(()=>validateProductionEdits(v,p));v.items[0].stock=0;v.items[0].yield_qty=0;assert.throws(()=>validateProductionEdits(v,p));});
 test('next production target skips days with no scheduled routes',()=>{assert.equal(nextProductionTarget('2026-10-09',[{weekday:1}]),'2026-10-12');});
+test('shared suggestion follows entered packing amounts, fills only blanks and keeps manual batch decisions',()=>{
+ const p=make(['R01','R02','R03','R04']);
+ for(const i of p.items){i.stock=0;i.demand=0;}
+ Object.assign(p.items[0],{demand:40,stock:26});p.items[1].demand=25;
+ assert.equal(productionSummary(p).groups[0].suggested,2);
+ p.items[0].pack_plan=100;
+ assert.equal(productionSummary(p).groups[0].suggested,6,'100 R6 plus 25 R5 needs six whole batches');
+ assert.equal(p.groups[0].planned,null,'A suggestion does not silently choose My plan');
+ assert.equal(applyProductionSuggestion(p,'RUSSIAN'),true);
+ assert.equal(p.groups[0].planned,6);
+ assert.deepEqual(p.items.map(i=>i.pack_plan),[100,25,0,0],'Accept keeps entered packing and fills blanks');
+ p.items[0].pack_plan=120;
+ assert.equal(productionSummary(p).groups[0].suggested,7);
+ assert.equal(p.groups[0].planned,6,'Existing manual batches stay editable and are not overwritten');
+ assert.ok(productionSummary(p).groups[0].warnings.includes('Packing plan exceeds planned batches'));
+ applyProductionSuggestion(p,'RUSSIAN');assert.equal(p.groups[0].planned,7);assert.equal(p.items[0].pack_plan,120);
+});
+test('explicit packing zero wins over shortage and stock is not deducted from new packing twice',()=>{
+ const p=make(['R01','R02']);for(const i of p.items)i.stock=0;
+ Object.assign(p.items[0],{stock:26,demand:40,pack_plan:100});p.items[1].pack_plan=0;
+ assert.equal(productionSummary(p).groups[0].suggested,5);
+ assert.equal(applyProductionSuggestion(p,'RUSSIAN',{blankOnly:true}),true);
+ assert.equal(p.groups[0].planned,5);assert.deepEqual(p.items.map(i=>i.pack_plan),[100,0]);
+ p.groups[0].planned=0;assert.equal(applyProductionSuggestion(p,'RUSSIAN',{blankOnly:true}),false);assert.equal(p.groups[0].planned,0);
+ p.items[0].pack_plan=0;assert.equal(productionSummary(p).groups[0].suggested,0);
+});
+test('shared packing basis handles incomplete counts, clearing an override and polony combined rounding',()=>{
+ const p=make(['P02','P03']);p.items[0].pack_plan=122;p.items[1].pack_plan=61;
+ assert.equal(productionSummary(p).groups[0].suggested,2,'Complete packing quantities can be calculated before stock is counted');
+ p.items[1].pack_plan=null;assert.equal(productionSummary(p).groups[0].suggested,null,'Unknown blank size is not silently zero');
+ p.items[1].stock=0;assert.equal(productionSummary(p).groups[0].suggested,2,'Blank size falls back to its shortage');
+ p.items[0].stock=30;p.items[0].pack_plan=null;assert.equal(productionSummary(p).groups[0].suggested,1,'Clearing an override restores shortage basis');
+ const r=make(['R01','R02']);for(const i of r.items){i.stock=0;i.demand=100;i.pack_plan=10;}
+ assert.equal(productionSummary(r).groups[0].suggested,1,'Sum the entered sizes and round only once');
+});

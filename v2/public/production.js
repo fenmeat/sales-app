@@ -35,7 +35,9 @@ export function buildProductionPlan({date,target_date,routes,items,snapshot,prev
 export function productionSummary(plan){
  const items=plan.items.map(i=>{const shortage=i.demand==null||i.stock==null?null:roundQty(Math.max(0,i.demand-i.stock));return {...i,shortage};});
  const groups=plan.groups.map(g=>{const rows=items.filter(i=>i.group===g.id),batch=['batch','shared'].includes(g.mode);
- const required=rows.map(i=>i.shortage===null?null:i.shortage===0?0:batch?i.yield_qty>0?i.shortage/i.yield_qty:null:i.shortage);
+ // A packing quantity is NEW output, so stock has already been accounted for.
+ // An explicit zero overrides shortage too; only blank sizes use the shortage.
+ const required=rows.map(i=>{const qty=g.mode==='shared'?(i.pack_plan??i.shortage):i.shortage;return qty===null?null:qty===0?0:batch?i.yield_qty>0?qty/i.yield_qty:null:qty;});
  const suggested=required.some(x=>x===null)?null:batch?Math.ceil(Math.max(0,required.reduce((a,x)=>a+x,0)-1e-9)):roundQty(required.reduce((a,x)=>a+x,0));
  let used=null,output=null;
  if(g.mode==='shared')used=rows.some(i=>i.pack_plan===null||(i.pack_plan>0&&!(i.yield_qty>0)))?null:rows.reduce((a,i)=>a+(i.pack_plan===0?0:i.pack_plan/i.yield_qty),0);
@@ -50,13 +52,13 @@ export function productionSummary(plan){
  if(g.mode==='shared'&&used!==null&&g.planned!==null&&used>g.planned+1e-9)warnings.push('Packing plan exceeds planned batches');
  const balances=rows.map(i=>{const made=g.mode==='shared'?i.pack_plan:output;return {code:i.code,output:made,balance:i.stock===null||i.demand===null||made===null?null:roundQty(i.stock+made-i.demand)};});
  if(balances.some(b=>b.balance<0))warnings.push('My plan leaves a shortage');
- return {...g,rows,suggested,output,used,balances,warnings};
+ return {...g,rows,suggested,packing_based:g.mode==='shared'&&rows.some(i=>i.pack_plan!==null),output,used,balances,warnings};
  });
  return {items,groups,warnings:groups.flatMap(g=>g.warnings.map(message=>({group:g.id,name:g.name,message})))};
 }
 export function applyProductionSuggestion(plan,id,{blankOnly=false}={}){
  const s=productionSummary(plan).groups.find(g=>g.id===id),g=plan.groups.find(g=>g.id===id);if(!s||s.suggested===null||(blankOnly&&g.planned!==null))return false;
- g.planned=s.suggested;if(g.mode==='shared')for(const row of s.rows){const i=plan.items.find(x=>x.code===row.code);if(!blankOnly||i.pack_plan===null)i.pack_plan=row.shortage;}
+ g.planned=s.suggested;if(g.mode==='shared')for(const row of s.rows){const i=plan.items.find(x=>x.code===row.code);if(i.pack_plan===null)i.pack_plan=row.shortage;}
  plan.phase='draft';return true;
 }
 export function validateProductionEdits(input,base){

@@ -1,9 +1,10 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {fileURLToPath} from 'node:url';import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {applyProductionSuggestion} from '../src/production.js';
 const origin='https://production-local.example',key='test-production-key-012345678901234567890';
-async function fixture(t){const mf=new Miniflare(convertV4MiniflareOptions({name:'production-test',modules:['worker','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'production-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key})},outboundService:()=>{throw Error('No outbound traffic in production tests');}}));t.after(()=>mf.dispose());let cookie='';async function call(path,body,headers={}){const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...headers},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json(),headers:r.headers};}
+async function fixture(t,codes=['W01']){const mf=new Miniflare(convertV4MiniflareOptions({name:'production-test',modules:['worker','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'production-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key})},outboundService:()=>{throw Error('No outbound traffic in production tests');}}));t.after(()=>mf.dispose());let cookie='';async function call(path,body,headers={}){const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...headers},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json(),headers:r.headers};}
  assert.equal((await call('/api/production?date=2026-10-07')).status,401);const auth=await call('/api/login',{username:'alex',key});cookie=auth.headers.get('set-cookie').split(';')[0];
- const catalog={products:[{code:'W01',name:'Braaiwors',unit:'bag',price_cents:16000,active:true,available:true}],routes:[{code:'MB',name:'Mossel Bay',weekday:4},{code:'PL',name:'Plett',weekday:4}]};assert.equal((await call('/api/catalog',{revision:0,catalog})).status,200);
- for(const route of ['MB','PL']){let r=(await call('/api/run?date=2026-10-08&route='+route)).data;r.run.items[0].planned=15;assert.equal((await call('/api/run',{run:r.run,revision:0,action:'save',request_id:crypto.randomUUID()})).status,200);}
+ const catalog={products:codes.map(code=>({code,name:code,unit:'bag',price_cents:16000,active:true,available:true})),routes:[{code:'MB',name:'Mossel Bay',weekday:4},{code:'PL',name:'Plett',weekday:4}]};assert.equal((await call('/api/catalog',{revision:0,catalog})).status,200);
+ for(const route of ['MB','PL']){let r=(await call('/api/run?date=2026-10-08&route='+route)).data;for(const item of r.run.items)item.planned=15;assert.equal((await call('/api/run',{run:r.run,revision:0,action:'save',request_id:crypto.randomUUID()})).status,200);}
  const save=(r,action='save',extra={})=>call('/api/production',{plan:r.plan,revision:r.revision,action,request_id:crypto.randomUUID(),...extra});return {mf,call,save};}
 test('real D1 production save, reopen, refresh, explicit zero, stale/concurrent/idempotent writes and route isolation',async t=>{const {mf,call,save}=await fixture(t),db=await mf.getD1Database('DB');const before=(await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results;
  let r=(await call('/api/production?date=2026-10-07')).data;assert.equal(r.plan.items[0].demand,30);r.plan.items[0].stock=10;r.plan.groups[0].planned=2;const body={plan:r.plan,revision:0,action:'save',request_id:crypto.randomUUID()};let first=await call('/api/production',body);assert.equal(first.status,200,JSON.stringify(first));r=first.data;assert.equal(r.summary.groups[0].output,26);assert.equal(r.summary.groups[0].balances[0].balance,6);
@@ -21,3 +22,22 @@ test('real D1 production save, reopen, refresh, explicit zero, stale/concurrent/
  const next=(await call('/api/production?date=2026-10-08')).data;assert.equal(next.plan.items[0].stock,null);assert.equal(next.plan.items[0].yield_qty,14);assert.equal(next.plan.groups[0].planned,null);
 });
 test('production D1 rejects partial batches, missing plan decisions and tampered source quantities',async t=>{const {call,save}=await fixture(t);let r=(await call('/api/production?date=2026-10-07')).data;assert.equal((await save(r,'confirm',{acknowledge_warnings:true})).status,400);r.plan.groups[0].planned=.5;assert.equal((await save(r)).status,400);r.plan.groups[0].planned=2;r.plan.items[0].stock=10;r.plan.items[0].demand=99999;r=(await save(r)).data;assert.equal(r.plan.items[0].demand,30);r.plan.items[0].demand=1;r=(await save(r)).data;assert.equal(r.plan.items[0].demand,30);});
+
+test('shared packing suggestions and accepted batches survive D1 save, refresh and reload without changing route data',async t=>{
+ const {mf,call,save}=await fixture(t,['R01','R02','R03','R04']),db=await mf.getD1Database('DB');
+ const before=(await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results;
+ let r=(await call('/api/production?date=2026-10-07')).data;
+ for(const i of r.plan.items)i.stock=30;
+ r.plan.items[0].stock=16;r.plan.items[1].stock=5;
+ r.plan.groups[0].planned=2;r=(await save(r)).data;assert.equal(r.summary.groups[0].suggested,2);
+ r.plan.items[0].pack_plan=100;r=(await save(r)).data;
+ assert.equal(r.summary.groups[0].suggested,6);assert.equal(r.plan.groups[0].planned,2);
+ assert.equal(r.summary.groups[0].packing_based,true);
+ applyProductionSuggestion(r.plan,'RUSSIAN');r=(await save(r)).data;
+ assert.equal(r.plan.groups[0].planned,6);assert.deepEqual(r.plan.items.map(i=>i.pack_plan),[100,25,0,0]);
+ const saved=structuredClone(r.plan);assert.deepEqual((await call('/api/production?date=2026-10-07')).data.plan,saved);
+ r=(await save(r,'refresh')).data;assert.equal(r.summary.groups[0].suggested,6);assert.equal(r.plan.groups[0].planned,6);assert.deepEqual(r.plan.items.map(i=>i.pack_plan),[100,25,0,0]);
+ r.plan.items[1].pack_plan=0;r=(await save(r)).data;assert.equal(r.summary.groups[0].suggested,5);assert.equal(r.plan.groups[0].planned,6);
+ assert.deepEqual((await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results,before);
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_history').first()).n,0);
+});
