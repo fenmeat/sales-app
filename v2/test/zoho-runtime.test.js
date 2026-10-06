@@ -13,7 +13,7 @@ async function fixture(t){
   invoice:{invoice_id:'9001',invoice_number:'INV-TEST-1',date:'2026-10-01',status:'paid',customer_name:'Test customer',salesperson_id:'5001',salesperson_name:'07. THURSDAY MOSSEL BAY',currency_code:'ZAR',total:160,billing_address:{address:'private address'},notes:'private notes',
    line_items:[{line_item_id:'101',item_id:'201',name:'BRAAI WORS',sku:'W01',unit:'pack',quantity:1}]}};
  const mf=new Miniflare(convertV4MiniflareOptions({
-  name:'zoho-runtime-test',modules:['worker','domain','forecast','auth','schema','zoho','zoho-matching'].map(name=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+name+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',
+  name:'zoho-runtime-test',modules:['worker','domain','forecast','forecast-history','auth','schema','zoho','zoho-matching'].map(name=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+name+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',
   d1Databases:{DB:'zoho-runtime-test'},
   bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key}),ZOHO_CLIENT_ID:'1000.LOCAL_RUNTIME_CLIENT_ID',ZOHO_CLIENT_SECRET:'local-runtime-client-secret-01234567890123456789'},
   outboundService:async request=>{
@@ -58,6 +58,38 @@ async function fixture(t){
  const finish=pending=>call('/api/zoho/callback?'+new URLSearchParams({state:pending.state,code:'1000.synthetic-code','accounts-server':'https://accounts.zoho.com'}),{cookie:pending.cookie});
  return {mf,call,session,start,finish,calls,fake};
 }
+
+test('workerd forecasts from confirmed returns before cash close and refresh preserves manual plan and audit',async t=>{
+ const f=await fixture(t),cat={products:[{code:'W01',name:'Test product',unit:'bag',price_cents:100,active:true,available:true}],routes:[{code:'R07',name:'Test route',weekday:4}]};
+ async function call(path,body){const response=await f.call(path,{body,cookie:f.session});return {status:response.status,data:await response.json()};}
+ assert.equal((await call('/api/catalog',{revision:0,catalog:cat})).status,200);
+ const history={rows:[{date:'2026-09-24',route:'R07',product:'W01',qty:10,quality:'provisional',source:'legacy_sales_log',constrained:false}]};
+ assert.equal((await call('/api/import/history',history)).data.accepted,1);
+ let plan=(await call('/api/run?date=2026-10-08&route=R07')).data;plan.run.items[0].planned=77;plan.run.notes='Keep this manual quantity';
+ plan=(await call('/api/run',{run:plan.run,revision:0,action:'save',request_id:crypto.randomUUID()})).data;
+ let actual=(await call('/api/run?date=2026-10-01&route=R07')).data;actual.run.rep='Tester';actual.run.items[0].loaded=20;
+ actual=(await call('/api/run',{run:actual.run,revision:0,action:'load',request_id:crypto.randomUUID()})).data;
+ actual.run.items[0].returned=2;
+ actual=(await call('/api/run',{run:actual.run,revision:actual.revision,action:'returns',request_id:crypto.randomUUID()})).data;
+ assert.equal(actual.run.phase,'returned');assert.equal(actual.run.cash.counted,null);
+ let loaded=(await call('/api/run?date=2026-10-08&route=R07')).data;
+ assert.equal(loaded.forecast_status.stale,true);assert.equal(loaded.run.items[0].planned,77);assert.equal(loaded.run.items[0].forecast.base,10);
+ const refresh={run:loaded.run,revision:loaded.revision,action:'forecast',request_id:crypto.randomUUID()};
+ const result=await call('/api/run',refresh);assert.equal(result.status,200,JSON.stringify(result));loaded=result.data;
+ assert.equal(loaded.run.items[0].forecast.base,14);assert.equal(loaded.run.items[0].forecast.last_qty,18);assert.equal(loaded.run.items[0].planned,77);assert.equal(loaded.run.notes,'Keep this manual quantity');assert.equal(loaded.forecast_status.stale,false);
+ assert.equal((await call('/api/run',refresh)).data.replayed,true);
+ assert.equal((await call('/api/run',{...refresh,request_id:crypto.randomUUID()})).status,409);
+ const stable=(await call('/api/run?date=2026-10-08&route=R07')).data;assert.equal(stable.forecast_status.stale,false);assert.equal(stable.run.items[0].planned,77);
+ actual.run.items[0].returned=3;
+ actual=(await call('/api/run',{run:actual.run,revision:actual.revision,action:'save',request_id:crypto.randomUUID()})).data;
+ const stale=(await call('/api/run?date=2026-10-08&route=R07')).data;assert.equal(stale.forecast_status.stale,true);
+ let revised=(await call('/api/run',{run:stale.run,revision:stale.revision,action:'forecast',request_id:crypto.randomUUID()})).data;assert.equal(revised.run.items[0].forecast.base,10);
+ actual=(await call('/api/run',{run:actual.run,revision:actual.revision,action:'returns',request_id:crypto.randomUUID()})).data;
+ revised=(await call('/api/run',{run:revised.run,revision:revised.revision,action:'forecast',request_id:crypto.randomUUID()})).data;assert.equal(revised.run.items[0].forecast.base,13.5);
+ assert.equal((await call('/api/run',{run:actual.run,revision:actual.revision,action:'forecast',request_id:crypto.randomUUID()})).status,400);
+ const db=await f.mf.getD1Database('DB');assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_history').first()).n,1);
+ const captured=(await call('/api/run?date=2026-10-01&route=R07')).data;assert.equal(captured.run.items[0].loaded,20);assert.equal(captured.run.items[0].returned,3);
+});
 
 test('workerd completes OAuth, encrypted D1 storage and token refresh while keeping a saved route',async t=>{
  const f=await fixture(t);

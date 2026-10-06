@@ -3,3 +3,5 @@ node_modules/
 .dev.vars
 public/domain.js
 public/forecast.js
+
+/public/forecast-history.js
