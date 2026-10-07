@@ -67,3 +67,21 @@ test('legacy production records upgrade in memory only; new counts and decisions
  assert.deepEqual((await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results,before);
  assert.equal((await db.prepare('SELECT payload FROM v2_production_events WHERE revision=1').first()).payload,legacy);
 });
+
+test('trolley choices persist through D1 saves, reload, refresh, old clients, actuals, conflicts and explicit clear',async t=>{
+ const {mf,call,save}=await fixture(t,['R01','R06','V01','P02','P03','P04']),db=await mf.getD1Database('DB');
+ const before=(await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results;
+ let r=(await call('/api/production?date=2026-10-07')).data;assert.deepEqual(r.plan.trolleys,[]);
+ for(const i of r.plan.items){i.stock=30;i.pack_plan=0;i.casing_plan=0;i.coldroom_casings=0;}for(const g of r.plan.groups){g.planned=0;g.coldroom_batches=0;}
+ r.plan.groups.find(g=>g.id==='RUSSIAN').planned=1;r.plan.groups.find(g=>g.id==='R06').planned=1;r.plan.groups.find(g=>g.id==='V01').planned=.5;
+ r.plan.trolleys=[{id:'mixed-trolley',slot1:'RUSSIAN',slot2:'R06',casings:{P02:0,P03:0,P04:0}},{id:'half-trolley',slot1:'V01_HALF',slot2:'',casings:{P02:0,P03:0,P04:0}}];
+ const chosen=structuredClone(r.plan.trolleys),body={plan:r.plan,revision:0,action:'save',request_id:crypto.randomUUID()};r=(await call('/api/production',body)).data;assert.equal(r.revision,1);assert.deepEqual((await call('/api/production?date=2026-10-07')).data.plan.trolleys,chosen);
+ assert.equal((await call('/api/production',body)).data.replayed,true);assert.equal((await call('/api/production',{...body,request_id:crypto.randomUUID()})).status,409);
+ const oldClient=structuredClone(r);delete oldClient.plan.trolleys;r=(await save(oldClient)).data;assert.deepEqual(r.plan.trolleys,chosen);
+ r.plan.groups.find(g=>g.id==='RUSSIAN').planned=0;r=(await save(r,'refresh')).data;assert.deepEqual(r.plan.trolleys,chosen);assert.equal(r.summary.trolley.requirements.find(g=>g.id==='RUSSIAN').remaining,-1);
+ assert.equal((await save(r,'confirm')).status,400);r=(await save(r,'confirm',{acknowledge_warnings:true})).data;r.plan.items[0].actual=1;r=(await save(r,'actuals')).data;assert.equal(r.plan.phase,'confirmed');assert.deepEqual(r.plan.trolleys,chosen);
+ const tamper=structuredClone(r);tamper.plan.trolleys[0].slot1='R06';assert.equal((await save(tamper,'actuals')).status,400);tamper.plan.trolleys[0].slot1='NOT-A-RECIPE';assert.equal((await save(tamper)).status,400);
+ assert.deepEqual((await call('/api/production?date=2026-10-08')).data.plan.trolleys,[]);
+ r.plan.trolleys=[];r=(await save(r)).data;assert.deepEqual((await call('/api/production?date=2026-10-07')).data.plan.trolleys,[]);
+ assert.deepEqual((await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results,before);
+});

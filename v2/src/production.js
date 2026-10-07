@@ -22,7 +22,7 @@ export function productionProfile(p){
 // Add fields in a copy. Never rewrite historical payloads or reinterpret saved
 // batch counts as rolls/casings. Existing group.planned ALWAYS remains batches.
 export function normaliseProductionPlan(input){
- const plan=structuredClone(input);plan.planning_version=2;
+ const plan=structuredClone(input);plan.planning_version=3;plan.trolleys=plan.trolleys??[];
  plan.items=plan.items.map(i=>({...i,...productionProfile(i),yield_qty:has(i,'yield_qty')?i.yield_qty:productionProfile(i).yield_qty,stock:i.stock??null,pack_plan:i.pack_plan??null,actual:i.actual??null,coldroom_casings:i.coldroom_casings??null,casing_plan:i.casing_plan??null}));
  plan.groups=plan.groups.map(g=>{const item=plan.items.find(i=>i.group===g.id);return {...g,name:item?.group_name??g.name,mode:item?.mode??g.mode,planned:g.planned??null,coldroom_batches:g.coldroom_batches??null,roll_stock:g.roll_stock??null,cut_planned:g.cut_planned??null,rolls_per_batch:g.rolls_per_batch??null,min_roll_stock:g.min_roll_stock??null,disks_per_roll:g.disks_per_roll??30};});
  return plan;
@@ -42,7 +42,7 @@ export function aggregateProductionDemand(products,sources){return products.map(
 });}
 export function buildProductionPlan({date,target_date,routes,items,snapshot,previous=null,yieldSettings=null,settingsPlan=null}){
  const prev=previous?normaliseProductionPlan(previous):null,old=new Map((prev?.items??[]).map(i=>[i.code,i]));
- const plan={planning_version:2,date,target_date,routes,phase:'draft',demand_snapshot:snapshot,notes:prev?.notes??'',items:items.map(i=>{
+ const plan={planning_version:3,trolleys:structuredClone(prev?.trolleys??[]),date,target_date,routes,phase:'draft',demand_snapshot:snapshot,notes:prev?.notes??'',items:items.map(i=>{
   const prior=old.get(i.code),setting=yieldSettings?.find(x=>x.code===i.code);
   return {...i,stock:prior?.stock??null,yield_qty:prior?prior.yield_qty:setting?setting.yield_qty:i.yield_qty,pack_plan:prior?.pack_plan??null,actual:prior?.actual??null,coldroom_casings:prior?.coldroom_casings??null,casing_plan:prior?.casing_plan??null};
  }),groups:[]};
@@ -117,7 +117,8 @@ export function productionSummary(input){
   const has_decision=g.planned!==null&&(g.mode!=='rolls'||g.cut_planned!==null)&&(g.mode!=='casings'||rows.every(i=>i.casing_plan!==null));
   return {...g,rows,suggested,packing_based:packing&&rows.some(i=>i.pack_plan!==null),output,used,balances,warnings,required_batches,available_batches,unpacked_left,suggested_batches,rolls_to_make,rolls_after_cut,loose_disks,new_casings,trolleys,casing_capacity,has_decision};
  });
- return {items,groups,warnings:groups.flatMap(g=>g.warnings.map(message=>({group:g.id,name:g.name,message})))};
+ const trolley=trolleySummary(plan,groups);
+ return {items,groups,trolley,warnings:[...groups.flatMap(g=>g.warnings.map(message=>({group:g.id,name:g.name,message}))),...trolley.warnings.map(message=>({group:'TROLLEYS',name:'Trolley plan',message}))]};
 }
 export function applyProductionSuggestion(plan,id,{blankOnly=false}={}){
  const s=productionSummary(plan).groups.find(g=>g.id===id),g=plan.groups.find(g=>g.id===id);if(!s||s.suggested===null)return false;
@@ -150,11 +151,90 @@ export function validateProductionEdits(input,base){
  }
  for(const g of plan.groups){
   const submitted=input.groups.find(x=>x.id===g.id),value=submitted.planned;
-  check(value===null||(['batch','shared','cooked','casings','rolls'].includes(g.mode)?Number.isSafeInteger(value)&&value>=0&&value<=10000:isQty(value)),'My plan must use non-negative whole batches (or sales units for bought-in / packing items).');g.planned=value;
+  check(value===null||(['batch','shared','cooked','casings','rolls'].includes(g.mode)?typeof value==='number'&&Number.isSafeInteger(value*(['V01','V02'].includes(g.id)?2:1))&&value>=0&&value<=10000:isQty(value)),'Use non-negative whole batches; Vienna may use half batches. Bought-in / packing items use sales units.');g.planned=value;
   for(const key of ['coldroom_batches','roll_stock','cut_planned','rolls_per_batch','min_roll_stock','disks_per_roll'])if(has(submitted,key)){
    qty(submitted[key],'Use non-negative counts and whole rolls; recipe yields must be positive.',key!=='coldroom_batches',['rolls_per_batch','disks_per_roll'].includes(key));
    check(key!=='disks_per_roll'||submitted[key]!==null,'Enter disks per roll.');g[key]=submitted[key];
   }
  }
+ if(has(input,'trolleys'))plan.trolleys=validateTrolleys(input.trolleys,plan.groups);
  return plan;
+}
+
+
+export const MAX_PRODUCTION_TROLLEYS=8;
+const trolleyDefinitions=[
+ {id:'RUSSIAN',group:'RUSSIAN',label:'RUSSIAN',fraction:1},
+ {id:'R05',group:'R05',label:'ECONO RUSSIAN',fraction:1},
+ {id:'R06',group:'R06',label:'CHEESE RUSSIAN',fraction:1},
+ {id:'R07',group:'R07',label:'BABALAS RUSSIAN',fraction:1},
+ {id:'V01',group:'V01',label:'VIENNA Full',fraction:1},
+ {id:'V01_HALF',group:'V01',label:'VIENNA Half',fraction:.5},
+ {id:'V02',group:'V02',label:'CHEESE VIENNA Full',fraction:1},
+ {id:'V02_HALF',group:'V02',label:'CHEESE VIENNA Half',fraction:.5},
+ {id:'POLONY',group:'POLONY',label:'POLONY',fraction:1}
+];
+export function trolleyRecipeOptions(groups){return trolleyDefinitions.filter(r=>groups.some(g=>g.id===r.group));}
+export function createProductionTrolley(){return {id:crypto.randomUUID(),slot1:'',slot2:'',casings:{P02:0,P03:0,P04:0}};}
+function validateTrolleys(rows,groups){
+ check(Array.isArray(rows)&&rows.length<=MAX_PRODUCTION_TROLLEYS,'Use at most eight trolleys per production day.');
+ const allowed=new Set(trolleyRecipeOptions(groups).map(r=>r.id)),ids=new Set();
+ return rows.map(row=>{
+  check(row&&typeof row==='object'&&typeof row.id==='string'&&/^[a-zA-Z0-9-]{1,80}$/.test(row.id)&&!ids.has(row.id),'Invalid or repeated trolley identifier.');ids.add(row.id);
+  check(['slot1','slot2'].every(key=>row[key]===''||allowed.has(row[key])),'Choose a supported recipe for each trolley position.');
+  check(row.casings&&typeof row.casings==='object','Enter the polony casings on each trolley.');
+  const casings={};for(const code of Object.keys(POLONY_CASING_YIELDS)){
+   const value=row.casings[code];check(Number.isSafeInteger(value)&&value>=0&&value<=POLONY_CASINGS_PER_TROLLEY,'Use whole casing counts from zero to eight on a trolley.');casings[code]=value;
+  }
+  // Construct the trusted shape: clients cannot add a third batch or forge capacity.
+  check(!Object.keys(row).some(k=>!['id','slot1','slot2','casings'].includes(k)),'A trolley has exactly two recipe positions.');
+  return {id:row.id,slot1:row.slot1,slot2:row.slot2,casings};
+ });
+}
+// Pure reconciliation: report differences, never assign, clear or reorder a trolley.
+function trolleySummary(plan,groups){
+ const recipes=trolleyRecipeOptions(groups),definitions=new Map(recipes.map(r=>[r.id,r]));
+ const warnings=[],assigned=new Map(),casingAssigned={P02:0,P03:0,P04:0};
+ const rows=plan.trolleys.map((row,index)=>{
+  const slots=['slot1','slot2'].map(key=>{
+   const recipe=definitions.get(row[key]);
+   if(!row[key])return {key,id:'',label:'Empty',fraction:0,detail:''};
+   if(!recipe){warnings.push('Trolley '+(index+1)+': unknown recipe');return {key,id:row[key],label:row[key],fraction:0,detail:'Unknown recipe'};}
+   assigned.set(recipe.group,(assigned.get(recipe.group)??0)+recipe.fraction);
+   const group=groups.find(g=>g.id===recipe.group);
+   // A shared Russian batch is loose pieces, never 1,310 sales bags.
+   const qty=recipe.group==='POLONY'?POLONY_CASINGS_PER_BATCH:recipe.group==='RUSSIAN'?null:group.rows[0].yield_qty>0?roundQty(group.rows[0].yield_qty*recipe.fraction):null;
+   const detail=recipe.group==='POLONY'?qty+' casings capacity':recipe.group==='RUSSIAN'?'Shared recipe · packing in Products & stock':qty===null?'Set recipe yield':qty+' sales units before packing';
+   return {...recipe,key,detail};
+  });
+  const capacity=slots.filter(s=>s.group==='POLONY').length*POLONY_CASINGS_PER_BATCH;
+  const casings={...row.casings},total=Object.values(casings).reduce((a,b)=>a+b,0);
+  for(const code of Object.keys(casingAssigned))casingAssigned[code]+=casings[code]??0;
+  const notes=[];
+  if(total>capacity)notes.push('Casings exceed the selected polony batch capacity');
+  if(capacity>total)notes.push((capacity-total)+' casing spaces still need sizes');
+  if(!slots.some(s=>s.id)&&total===0)notes.push('No recipes selected');
+  warnings.push(...notes.map(note=>'Trolley '+(index+1)+': '+note));
+  return {...row,number:index+1,slots,casing_capacity:capacity,casing_total:total,show_casings:capacity>0||total>0,warnings:notes};
+ });
+ const requirements=groups.filter(g=>recipes.some(r=>r.group===g.id)).map(g=>{
+  const required=g.planned??g.suggested,allocated=assigned.get(g.id)??0,remaining=required===null?null:required-allocated;
+  const label=recipes.find(r=>r.group===g.id&&r.fraction===1).label.replace(' Full','');
+  if(remaining===null)warnings.push(label+': cooking requirement is not yet known');
+  else if(remaining>0)warnings.push(label+': '+remaining+' batches still to assign');
+  else if(remaining<0)warnings.push(label+': '+(-remaining)+' extra batches assigned');
+  return {id:g.id,label,required,assigned:allocated,remaining,basis:g.planned===null?'Suggestion — choose My plan':'My plan'};
+ });
+ const polony=groups.find(g=>g.id==='POLONY');
+ const casing_requirements=Object.keys(POLONY_CASING_YIELDS).filter(code=>polony?.rows.some(i=>i.code===code)||casingAssigned[code]>0).map(code=>{
+  const item=polony?.rows.find(i=>i.code===code),required=item?(item.casing_plan??item.casing_suggested):0,allocated=casingAssigned[code],remaining=required===null?null:required-allocated;
+  const label={P02:'Small',P03:'Medium',P04:'Long'}[code];
+  if(remaining===null)warnings.push('Polony '+label+': casing requirement not yet known');
+  else if(remaining>0)warnings.push('Polony '+label+': '+remaining+' casings still to assign');
+  else if(remaining<0)warnings.push('Polony '+label+': '+(-remaining)+' extra casings assigned');
+  return {code,label,required,assigned:allocated,remaining,basis:item?.casing_plan!=null?'My plan':'Suggestion — choose casing plan'};
+ });
+ const minimum_slots=sumKnown(requirements.map(r=>r.required===null?null:Math.ceil(r.required)));
+ if(minimum_slots>MAX_PRODUCTION_TROLLEYS*2)warnings.push('More than eight trolleys are needed; review today’s cooking plan');
+ return {recipes,rows,requirements,casing_requirements,warnings,max_trolleys:MAX_PRODUCTION_TROLLEYS,minimum_trolleys:minimum_slots===null?null:Math.ceil(minimum_slots/2)};
 }
