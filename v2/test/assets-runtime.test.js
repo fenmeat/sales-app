@@ -19,7 +19,7 @@ test('real Cloudflare assets follow HTML redirects through the Worker to the pro
  const app=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
  const link=app.match(/location\.assign\('(\/production(?:\.html)?)'\)/)?.[1];
  assert.ok(link,'Production navigation destination exists');
- for(const [path,title] of [[link,'Production Plan'],['/production.html','Production Plan'],['/production/','Production Plan'],['/access-setup.html','Access'],['/access-setup/','Access'],['/','Sales Pilot']]){
+ for(const [path,title] of [[link,'Production Plan'],['/production.html','Production Plan'],['/production/','Production Plan'],['/access-setup.html','Access'],['/access-setup/','Access'],['/staff-access','Staff access'],['/staff-access.html','Staff access'],['/staff-access/','Staff access'],['/','Sales Pilot']]){
   let url=origin+path,response;
   for(let redirects=0;redirects<4;redirects++){
    response=await mf.dispatchFetch(url,{redirect:'manual'});
@@ -33,7 +33,7 @@ test('real Cloudflare assets follow HTML redirects through the Worker to the pro
   assert.match(await response.text(),new RegExp('<title>[^<]*'+title,'i'));
   assert.match(response.headers.get('cache-control'),/(?:^|,\s*)no-store(?:,|$)/);
  }
- for(const path of ['/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.js','/production.css'])assert.equal((await mf.dispatchFetch(origin+path)).status,200,path);
+ for(const path of ['/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.js','/production.css','/staff-access.js','/staff-access.css'])assert.equal((await mf.dispatchFetch(origin+path)).status,200,path);
  assert.equal((await mf.dispatchFetch(origin+'/not-a-page')).status,404);
  assert.equal((await mf.dispatchFetch(origin+'/api/production?date=2026-10-07')).status,401,'HTML routing does not open business data');
 });

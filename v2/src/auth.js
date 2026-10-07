@@ -2,7 +2,27 @@ import {check,UserError} from './domain.js';
 const encoder=new TextEncoder();
 export const hash=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(s)))).map(b=>b.toString(16).padStart(2,'0')).join('');
 export const randomToken=()=>Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b=>b.toString(16).padStart(2,'0')).join('');
-export function keys(env){try{const entries=Object.entries(JSON.parse(env.APP_ACCESS_KEYS??'{}'));check(entries.length<=20,'Too many accounts.');return Object.fromEntries(entries.filter(([u,k])=>/^[a-z0-9_-]{1,40}$/.test(u)&&typeof k==='string'&&k.length>=32&&k.length<=200));}catch{return {};}}
+function readKeys(raw){
+ try{
+  const value=JSON.parse(raw??'{}');
+  if(!value||typeof value!=='object'||Array.isArray(value))return Object.create(null);
+  const entries=Object.entries(value);check(entries.length<=20,'Too many accounts.');
+  return Object.assign(Object.create(null),Object.fromEntries(entries.filter(([u,k])=>/^[a-z0-9_-]{1,40}$/.test(u)&&typeof k==='string'&&k.length>=32&&k.length<=200)));
+ }catch{return Object.create(null);}
+}
+export function keys(env){
+ const primary=readKeys(env.APP_ACCESS_KEYS);
+ // Extra staff keys cannot bootstrap access, replace an existing identity or
+ // change Alex/Alinda. An absent/malformed extra secret leaves primary access intact.
+ if(!Object.keys(primary).length)return primary;
+ const used=new Set(Object.values(primary));let count=Object.keys(primary).length;
+ for(const [username,key] of Object.entries(readKeys(env.APP_STAFF_ACCESS_KEYS))){
+  if(['alex','alinda'].includes(username)||Object.hasOwn(primary,username)||used.has(key)||count>=20)continue;
+  Object.defineProperty(primary,username,{value:key,enumerable:true,configurable:true,writable:true});
+  used.add(key);count++;
+ }
+ return primary;
+}
 export function sameOrigin(request){check(request.headers.get('Origin')===new URL(request.url).origin,'This save must come from the app.',403);}
 export async function authenticate(request,env,{allowKey=false}={}){
  const accounts=keys(env);check(Object.keys(accounts).length>0,'Access keys have not been configured.',503);
