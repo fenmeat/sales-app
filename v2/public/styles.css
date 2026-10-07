@@ -139,6 +139,7 @@ footer p{margin:7px 0}
  .capture-table td input[type=number]{font-size:24px;font-weight:650;min-height:54px;text-align:center;width:110px}
  .capture-table td input[data-qty=loaded],.capture-table td input[data-qty=returned]{background:#f0f7fc;border:2px solid #3977a7}
  .capture-table td input:disabled{background:#edf2f6;border-color:#c6d4df}
+ .capture-table .copy-product-plan{display:block;min-height:44px;width:110px;max-width:100%;margin-top:6px;padding:8px 6px;font-size:14px;line-height:1.2;white-space:normal;background:#e5f2fc;color:var(--blue)}
  .capture-table td .forecast{font-size:22px}
  .forecast-detail{font-size:14px;line-height:1.5;margin:0}
  .forecast-detail summary{font-size:14px;min-height:44px;display:flex;align-items:center;color:var(--blue)}
