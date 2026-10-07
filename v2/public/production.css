@@ -18,3 +18,51 @@
 .trolley-panel{padding:22px}.trolley-heading{display:flex;justify-content:space-between;gap:16px;align-items:start}.trolley-heading h2{margin:0;font-size:26px}.trolley-heading p{margin:8px 0}.trolley-heading>strong{white-space:nowrap;color:#205c89}.trolley-panel h3{font-size:18px}.trolley-need{display:grid;grid-template-columns:minmax(160px,2fr) repeat(3,minmax(70px,1fr));gap:12px;padding:12px 0;border-bottom:1px solid #dbe7ee;align-items:center}.trolley-need small{display:block;font-size:12px;color:#506b80;margin-top:4px}.trolley-need span{display:block;color:#506b80;font-size:12px}.trolley-need b{font-size:20px}.trolley-review{color:#995c0c;font-size:14px;line-height:1.5}.trolley-casing-summary{margin:18px 0}.trolley-casing-summary p{margin:7px 0;font-size:14px}.trolley-row{border:1.5px solid #c5dbe9;border-radius:14px;padding:18px;margin:16px 0;background:#f6fafd;scroll-margin-bottom:calc(var(--dock-height,150px) + 20px)}.trolley-row-heading{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px}.trolley-row-heading h3{font-size:22px;margin:0}.trolley-row-actions{display:flex;gap:6px}.trolley-row-actions button{min-height:44px;min-width:44px;padding:8px;font-size:13px}.trolley-slots{display:grid;grid-template-columns:1fr 1fr;gap:18px}.trolley-slots label{font-size:14px;min-width:0}.trolley-slots select{display:block;width:100%;min-width:0;min-height:56px;font-size:18px;font-weight:700;background:#fff;border:1.5px solid #b7d1e3;border-radius:10px;color:#142c40;padding:10px;margin-top:6px}.trolley-slots small{display:block;font-size:13px;color:#506b80;margin-top:6px}.trolley-casings{border-top:1px solid #c5dbe9;margin-top:16px;padding-top:4px}.trolley-casings h4{margin:14px 0}.trolley-casing-inputs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.trolley-casing-inputs input{width:100%;min-width:0;min-height:56px;font-size:24px;font-weight:750;background:#fff}.trolley-casing-inputs label{min-width:0}.trolley-actions{display:flex;flex-wrap:wrap;gap:10px}.trolley-actions button{min-height:48px}.trolley-review:empty{display:none}
 @media(max-width:699px){.trolley-panel{padding:16px 12px}.trolley-heading{display:block}.trolley-heading>strong{display:block;margin:12px 0}.trolley-need{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.trolley-need>div:first-child{grid-column:1/-1}.trolley-need b{font-size:19px}.trolley-row{padding:14px 12px}.trolley-slots{grid-template-columns:1fr}.trolley-row-heading h3{font-size:19px}.trolley-actions button{flex:1 1 40%;font-size:14px}.production-nav button{font-size:15px}.trolley-casing-inputs{gap:8px}}
 @media print{#production-print .trolley-print{break-after:page}#production-print.trolley-only .trolley-print{break-after:auto}#production-print .trolley-print h2{font-size:15pt}#production-print .trolley-print h3{font-size:11pt;margin:12pt 0 6pt}#production-print .trolley-print table{table-layout:auto}#production-print .trolley-print thead th{width:auto}#production-print .trolley-print .print-review{font-size:8pt}}
+
+/* Staff sheet shares one set of dimensions for offscreen fitting and printing. */
+#production-staff-print{display:none;width:190mm;color:#000;background:#fff;font:9.5pt/1.2 Arial,sans-serif;--staff-row:7.5mm;--staff-pad:1.2mm;--staff-trolley-row:7mm;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+#production-staff-print[data-density=compact]{font-size:9pt;--staff-row:6mm;--staff-pad:.9mm;--staff-trolley-row:6mm}
+#production-staff-print[data-density=tight]{font-size:8.5pt;--staff-row:5mm;--staff-pad:.65mm;--staff-trolley-row:5.5mm}
+#production-staff-print .staff-heading{display:flex;align-items:center;justify-content:space-between;gap:5mm;margin-bottom:4mm}
+#production-staff-print h1{font-size:18pt;line-height:1.1;letter-spacing:0;margin:0}
+#production-staff-print .staff-heading>strong{font-size:11pt;color:#335d79}
+#production-staff-print .staff-context{display:flex;justify-content:space-between;gap:5mm;align-items:start;font-size:10pt;line-height:1.35}
+#production-staff-print .staff-context>strong{max-width:115mm}
+#production-staff-print .staff-context>span{text-align:right;white-space:nowrap}
+#production-staff-print p{font:inherit;line-height:1.3;margin:2mm 0}
+#production-staff-print .staff-status{font-size:8.5pt;margin:2mm 0 4mm;color:#333}
+#production-staff-print .staff-columns{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5mm;align-items:start}
+#production-staff-print table{font:inherit;line-height:1.2;border-collapse:collapse;table-layout:fixed;width:100%;min-width:0}
+#production-staff-print th,#production-staff-print td{border:1px solid #899ba7;padding:var(--staff-pad) 1mm;height:var(--staff-row);font:inherit;text-transform:none;letter-spacing:0;color:#000;white-space:normal;overflow-wrap:anywhere;vertical-align:middle}
+#production-staff-print th{background:#e4f1f9;font-weight:bold;text-align:left;height:6mm}
+#production-staff-print td{background:white}
+#production-staff-print .staff-product-col{width:45%}#production-staff-print .staff-make-col{width:15%}#production-staff-print .staff-qty-col{width:11%}#production-staff-print .staff-label-col{width:15%}#production-staff-print .staff-actual-col{width:14%}
+#production-staff-print .staff-products td:nth-child(n+2){text-align:center}
+#production-staff-print .staff-products td:nth-child(3),#production-staff-print .staff-products td:nth-child(4){font-weight:bold;font-variant-numeric:tabular-nums}
+#production-staff-print .staff-products td small{display:block;font-size:8.5pt;margin-top:1mm}
+#production-staff-print .staff-recipe td{background:#f3f5f6}
+#production-staff-print .staff-trolleys{margin-top:5mm;border:1px solid #899ba7;padding:3mm;break-inside:avoid}
+#production-staff-print h2{font-size:12pt;letter-spacing:0;margin:0 0 2mm;line-height:1.2}
+#production-staff-print .staff-trolleys td{height:var(--staff-trolley-row)}
+#production-staff-print .staff-trolleys p{font-size:8.5pt;margin:2mm 0 0}
+#production-staff-print .staff-notes{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:3mm}
+#production-staff-print .staff-key{font-size:8.5pt;margin:3mm 0 0}
+body.preparing-staff-print #production-staff-print{display:block;position:absolute;left:-10000px;top:0}
+@media print{
+ @page production-staff{size:A4 portrait;margin:10mm}
+ body.printing-production-staff #app,body.printing-production-staff #notice,body.printing-production-staff #production-print{display:none!important}
+ body.printing-production-staff #production-staff-print{display:block;position:static;page:production-staff;break-inside:avoid}
+ #production-staff-print tr{break-inside:avoid}
+}
+
+#production-staff-print .staff-products th{font-size:8.5pt;white-space:nowrap;padding-left:.65mm;padding-right:.65mm}
+#production-staff-print .staff-trolley-number{width:5%}#production-staff-print .staff-trolley-batch{width:31%}#production-staff-print .staff-trolley-casings{width:33%}
+
+#production-staff-print[data-density=tight] .staff-heading{margin-bottom:1mm}
+#production-staff-print[data-density=tight] .staff-status{margin-bottom:1mm}
+#production-staff-print[data-density=tight] .staff-trolleys{margin-top:3mm;padding:1.5mm}
+#production-staff-print[data-density=tight] .staff-trolleys td{height:5mm;padding:.4mm 1mm}
+#production-staff-print[data-density=tight] .staff-key{margin-top:2mm}
+
+#production-staff-print[data-density=tight] .staff-notes{margin:2mm 0 1mm}
+#production-staff-print .staff-products td:nth-child(2){font-size:8.5pt;overflow-wrap:normal}
