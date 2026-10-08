@@ -226,3 +226,6 @@ footer p{margin:7px 0}
 }
 
 @media screen and (max-width:759px){.app-header{flex-wrap:wrap;gap:10px}.head-actions{margin-left:auto}}
+
+/* Shared product availability controls. */
+#product-availability{width:min(580px,calc(100% - 24px));max-height:90dvh;border:1px solid #c7d9e8;border-radius:16px;padding:20px;color:#172e45}#product-availability::backdrop{background:#172e4580}.availability-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.availability-heading h2{margin:0}#product-availability input{width:100%;min-width:0}#availability-message{min-height:1.5em}.availability-product{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 0;border-bottom:1px solid #d5e3ee}.availability-product strong{display:block;font-size:16px;overflow-wrap:anywhere}.availability-product small{display:block;color:#607589;margin-top:5px}.availability-product button{flex:0 0 68px;border-radius:24px;background:#e9eff4;color:#52697d}.availability-product button[aria-checked=true]{background:#14558a;color:white;border-color:#14558a}@media print{#product-availability{display:none!important}}

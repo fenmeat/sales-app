@@ -23,8 +23,14 @@ export function availableForLoad(item,products=[]) {
   const current=products.find(p=>p.code===item.code);
   return current?current.active&&current.available:item.available;
 }
+// Owner's temporary supplier shortage, 8 October 2026. A saved switch choice
+// takes precedence, including turning these products on again after delivery.
+export function effectiveAvailability(catalog) {
+  return {...catalog,products:catalog.products.map(p=>({...p,available:typeof p.availability_override==='boolean'?p.availability_override:['C01','C02','C03'].includes(p.code)?false:p.available}))};
+}
 export function captureItems(run,evening,products=[]) {
-  return run.items.filter(i=>evening?i.loaded>0||i.returned>0:availableForLoad(i,products));
+  const current=run.date<today()?[]:products;
+  return run.items.filter(i=>evening?i.loaded>0||i.returned>0:availableForLoad(i,current)||i.loaded>0||i.returned>0);
 }
 export function validateCatalog(c) {
   check(c && Array.isArray(c.products) && c.products.length>0 && c.products.length<=200 && Array.isArray(c.routes) && c.routes.length>0 && c.routes.length<=50,'Invalid product/route catalogue.');

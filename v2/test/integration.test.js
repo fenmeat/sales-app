@@ -1,7 +1,32 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readdir,readFile} from 'node:fs/promises';import worker from '../src/worker.js';import {emptyRun,CASH_DENOMINATIONS} from '../src/domain.js';
+import test from 'node:test';import assert from 'node:assert/strict';import {DatabaseSync} from 'node:sqlite';import {readdir,readFile} from 'node:fs/promises';import worker from '../src/worker.js';import {emptyRun,CASH_DENOMINATIONS,today,captureItems} from '../src/domain.js';
 class D1 {constructor(){this.db=new DatabaseSync(':memory:');}prepare(sql){const db=this.db;let values=[];const stmt={bind(...v){values=v;return stmt;},async first(){return db.prepare(sql).get(...values)??null;},async all(){return {results:db.prepare(sql).all(...values)};},async run(){const r=db.prepare(sql).run(...values);return {meta:{changes:r.changes}};},sql,values:()=>values};return stmt;}async batch(statements){this.db.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());this.db.exec('COMMIT');return result;}catch(e){this.db.exec('ROLLBACK');throw e;}}}
 const key='test-only-local-key-012345678901234567890123456789';const origin='https://test.example';
 const catalog={products:[{code:'W01',name:'Braai wors',unit:'bag',price_cents:16000,available:true,active:true}],routes:[{code:'R07',name:'MOSSEL BAY',weekday:4}]};
+test('availability switches persist across imports and sessions, protect loads, and filter current production without changing history',async()=>{
+ const env={APP_ENV:'test',DB:new D1(),APP_ACCESS_KEYS:JSON.stringify({alex:key,alinda:key+'-alinda',staff:key+'-staff'})};let cookie='';
+ async function call(path,body){const r=await worker.fetch(new Request(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie},body:body?JSON.stringify(body):undefined}),env);return {status:r.status,data:await r.json(),headers:r.headers};}
+ async function login(username){const r=await call('/api/login',{username,key:key+(username==='alex'?'':'-'+username)});assert.equal(r.status,200);cookie=r.headers.get('set-cookie').split(';')[0];}
+ await login('alex');const source={...catalog,products:['W01','C01','C02','C03'].map(code=>({...catalog.products[0],code,name:code}))};
+ assert.equal((await call('/api/catalog',{revision:0,catalog:source})).status,200);
+ let c=(await call('/api/bootstrap')).data.catalog;assert.deepEqual(c.products.map(p=>p.available),[true,false,false,false]);
+ const toggle=(code,available,revision=c.revision)=>call('/api/products/availability',{code,available,revision});
+ c=(await toggle('C01',true)).data.catalog;assert.equal(c.revision,2);assert.equal((await toggle('C01',false,1)).status,409);
+ const date=today();let run=(await call('/api/run?date='+date+'&route=R07')).data;for(const i of run.run.items){i.planned=12;i.loaded=i.code==='C01'?5:0;i.returned=0;}run.run.cash.card=1234;
+ run=(await call('/api/run',{run:run.run,revision:0,action:'save',request_id:crypto.randomUUID()})).data;
+ let production=(await call('/api/production?date='+date)).data;for(const i of production.plan.items)i.stock=0;
+ production=(await call('/api/production',{plan:production.plan,revision:0,action:'save',request_id:crypto.randomUUID()})).data;
+ const oldSales=env.DB.db.prepare('SELECT * FROM v2_events').all(),oldProduction=env.DB.db.prepare('SELECT * FROM v2_production_events').all();
+ c=(await toggle('C01',false)).data.catalog;assert.equal(c.products.find(p=>p.code==='C01').availability_updated_by,'alex');
+ const persisted=(await call('/api/run?date='+date+'&route=R07')).data;assert.deepEqual(persisted.run,run.run);assert.equal(captureItems(persisted.run,true,c.products).find(p=>p.code==='C01').loaded,5);
+ let view=(await call('/api/production?date='+date)).data;assert.equal(view.plan.items.some(p=>p.code==='C01'),true);assert.equal(view.summary.items.some(p=>p.code==='C01'),false);
+ assert.deepEqual(env.DB.db.prepare('SELECT * FROM v2_events').all(),oldSales);assert.deepEqual(env.DB.db.prepare('SELECT * FROM v2_production_events').all(),oldProduction);
+ const staleLoad=structuredClone(run);staleLoad.run.items.find(i=>i.code==='C01').loaded=6;assert.equal((await call('/api/run',{run:staleLoad.run,revision:run.revision,action:'save',request_id:crypto.randomUUID()})).status,409);
+ run.run.items.find(i=>i.code==='C01').returned=2;const returned=await call('/api/run',{run:run.run,revision:run.revision,action:'save',request_id:crypto.randomUUID()});assert.equal(returned.status,200);assert.equal(returned.data.run.cash.card,1234);
+ await login('staff');assert.equal((await toggle('C01',true)).status,403);await login('alinda');c=(await toggle('C01',true)).data.catalog;
+ view=(await call('/api/production?date='+date)).data;assert.equal(view.summary.items.some(p=>p.code==='C01'),true);
+ assert.equal((await call('/api/catalog',{revision:c.revision,catalog:source})).status,200);c=(await call('/api/bootstrap')).data.catalog;assert.equal(c.products.find(p=>p.code==='C01').available,true);assert.equal(c.products.find(p=>p.code==='C01').availability_updated_by,'alinda');
+ await login('alex');assert.equal((await call('/api/bootstrap')).data.catalog.products.find(p=>p.code==='C01').available,true);
+});
 test('all shipped browser modules load through the Worker without signing in',async()=>{
  const publicDir=new URL('../public/',import.meta.url);
  const env={APP_ENV:'test',ASSETS:{async fetch(request){return new Response(await readFile(new URL(new URL(request.url).pathname.slice(1),publicDir)),{headers:{'Content-Type':'application/javascript'}});}}};

@@ -1,4 +1,4 @@
-import {check,dateKey,addDays,weekday,isQty,roundQty,cleanText} from './domain.js';
+import {check,dateKey,addDays,weekday,isQty,roundQty,cleanText,today,availableForLoad} from './domain.js';
 // Planning references only. Original production app and Master remain read-only.
 const yields={W01:13,W02:26,W03:24,W04:55,W05:50,W06:16,W07:29,W08:31,R05:22,R06:24,R07:23,V01:32,V02:36};
 const russianPieces={R01:60,R02:50,R03:40,R04:30};
@@ -11,6 +11,7 @@ const sumKnown=values=>values.some(v=>v==null)?null:values.reduce((a,v)=>a+v,0);
 const equivalent=(qty,yieldQty)=>qty==null?null:qty===0?0:yieldQty>0?qty/yieldQty:null;
 const has=(object,key)=>Object.prototype.hasOwnProperty.call(object,key);
 export function productionProfile(p){
+ if(p.code==='R07'){const version=p.recipe_version??2;return {group:p.code,group_name:p.name,mode:'cooked',recipe_version:version,yield_qty:version===2?46:23,yield_note:version===2?'2 spice packs · 106 kg per batch. Planning yield: double the previous 23 sales units; verify actual packed output.':'Previous recipe basis. Update to the approved 2-pack recipe before new production.'};}
  if(russianPieces[p.code])return {group:'RUSSIAN',group_name:'Russian · shared recipe',mode:'shared',yield_qty:1310/russianPieces[p.code],yield_note:'Existing planner: 1,310 loose Russians per batch; '+russianPieces[p.code]+' per sales bag. Review after recipe changes.'};
  if(POLONY_CASING_YIELDS[p.code])return {group:'POLONY',group_name:'Polony · casing plan',mode:'casings',yield_qty:null,casing_yield_qty:POLONY_CASING_YIELDS[p.code],yield_note:'Owner-confirmed sales units per casing. Sizes remain separate, including cooked stock.'};
  if(p.code==='W07')return {group:p.code,group_name:p.name,mode:'rolls',yield_qty:yields.W07,yield_note:'Frozen rolls are cut into disks: 4 disks per tray, 5 trays per bag. New rolls must be frozen before cutting.'};
@@ -23,8 +24,30 @@ export function productionProfile(p){
 // batch counts as rolls/casings. Existing group.planned ALWAYS remains batches.
 export function normaliseProductionPlan(input){
  const plan=structuredClone(input);plan.planning_version=3;plan.trolleys=plan.trolleys??[];
- plan.items=plan.items.map(i=>({...i,...productionProfile(i),yield_qty:has(i,'yield_qty')?i.yield_qty:productionProfile(i).yield_qty,stock:i.stock??null,pack_plan:i.pack_plan??null,actual:i.actual??null,coldroom_casings:i.coldroom_casings??null,casing_plan:i.casing_plan??null}));
+ plan.items=plan.items.map(i=>{const profile=productionProfile(i.code==='R07'?{...i,recipe_version:i.recipe_version??1}:i);return {...i,...profile,yield_qty:has(i,'yield_qty')?i.yield_qty:profile.yield_qty,stock:i.stock??null,pack_plan:i.pack_plan??null,actual:i.actual??null,coldroom_casings:i.coldroom_casings??null,casing_plan:i.casing_plan??null};});
  plan.groups=plan.groups.map(g=>{const item=plan.items.find(i=>i.group===g.id);return {...g,name:item?.group_name??g.name,mode:item?.mode??g.mode,planned:g.planned??null,coldroom_batches:g.coldroom_batches??null,roll_stock:g.roll_stock??null,cut_planned:g.cut_planned??null,rolls_per_batch:g.rolls_per_batch??null,min_roll_stock:g.min_roll_stock??null,disks_per_roll:g.disks_per_roll??30};});
+ return plan;
+}
+export function babalasRecipeUpdateNeeded(plan){return plan.items.some(i=>i.code==='R07'&&(i.recipe_version??1)<2);}
+export function upgradeBabalasRecipe(input){
+ const plan=normaliseProductionPlan(input),item=plan.items.find(i=>i.code==='R07'),group=plan.groups.find(g=>g.id==='R07');
+ check(item&&group&&item.recipe_version===1,'The current Babalas recipe is already selected.');
+ plan.babalas_recipe_update={from_version:1,to_version:2,previous_yield:item.yield_qty,previous_batches:group.planned,previous_cooked_batches:group.coldroom_batches,previous_trolleys:structuredClone(plan.trolleys.filter(t=>t.slot1==='R07'||t.slot2==='R07'))};
+ item.recipe_version=2;item.yield_qty=item.yield_qty>0?item.yield_qty*2:46;
+ group.coldroom_batches=group.coldroom_batches===null?null:group.coldroom_batches/2;
+ // Explicit upgrade requires a new cooking decision. Counts, packing, actuals
+ // and every unrelated decision remain intact; old revisions retain the past.
+ group.planned=null;
+ for(const trolley of plan.trolleys)for(const slot of ['slot1','slot2'])if(trolley[slot]==='R07')trolley[slot]='';
+ plan.phase='draft';return normaliseProductionPlan(plan);
+}
+export function productionPlanningView(input,catalog,asOf=today()){
+ const plan=normaliseProductionPlan(input);
+ if(!catalog||plan.date<asOf)return plan;
+ plan.items=plan.items.filter(i=>availableForLoad(i,catalog.products));
+ plan.groups=plan.groups.filter(g=>plan.items.some(i=>i.group===g.id));
+ const recipes=new Set(trolleyRecipeOptions(plan.groups).map(r=>r.id));
+ for(const row of plan.trolleys){for(const slot of ['slot1','slot2'])if(!recipes.has(row[slot]))row[slot]='';for(const code of Object.keys(row.casings))if(!plan.items.some(i=>i.code===code))row.casings[code]=0;}
  return plan;
 }
 export function nextProductionTarget(date,routes){for(let n=1;n<=7;n++){const d=addDays(date,n);if(routes.some(r=>r.weekday===weekday(d)))return d;}return addDays(date,1);}
@@ -42,9 +65,10 @@ export function aggregateProductionDemand(products,sources){return products.map(
 });}
 export function buildProductionPlan({date,target_date,routes,items,snapshot,previous=null,yieldSettings=null,settingsPlan=null}){
  const prev=previous?normaliseProductionPlan(previous):null,old=new Map((prev?.items??[]).map(i=>[i.code,i]));
- const plan={planning_version:3,trolleys:structuredClone(prev?.trolleys??[]),date,target_date,routes,phase:'draft',demand_snapshot:snapshot,notes:prev?.notes??'',items:items.map(i=>{
+ const plan={...(prev?.babalas_recipe_update?{babalas_recipe_update:structuredClone(prev.babalas_recipe_update)}:{}),planning_version:3,trolleys:structuredClone(prev?.trolleys??[]),date,target_date,routes,phase:'draft',demand_snapshot:snapshot,notes:prev?.notes??'',items:items.map(i=>{
   const prior=old.get(i.code),setting=yieldSettings?.find(x=>x.code===i.code);
-  return {...i,stock:prior?.stock??null,yield_qty:prior?prior.yield_qty:setting?setting.yield_qty:i.yield_qty,pack_plan:prior?.pack_plan??null,actual:prior?.actual??null,coldroom_casings:prior?.coldroom_casings??null,casing_plan:prior?.casing_plan??null};
+  const sameRecipe=i.code!=='R07'||setting?.recipe_version===i.recipe_version;
+  return {...i,...(prior&&i.code==='R07'?{recipe_version:prior.recipe_version}:{}),stock:prior?.stock??null,yield_qty:prior?prior.yield_qty:setting&&sameRecipe?setting.yield_qty:i.yield_qty,pack_plan:prior?.pack_plan??null,actual:prior?.actual??null,coldroom_casings:prior?.coldroom_casings??null,casing_plan:prior?.casing_plan??null};
  }),groups:[]};
  for(const i of prev?.items??[])if(!plan.items.some(x=>x.code===i.code))plan.items.push({...i,demand:0,breakdown:[],retained:true});
  for(const i of plan.items)if(!plan.groups.some(g=>g.id===i.group)){
@@ -75,7 +99,7 @@ export function productionSummary(input){
    used=sumKnown(rows.map(i=>equivalent(i.pack_plan,i.yield_qty)));
    available_batches=g.planned===null||g.coldroom_batches===null?null:g.planned+g.coldroom_batches;
    unpacked_left=available_batches===null||used===null?null:roundQty(available_batches-used);
-   if(g.coldroom_batches===null)warnings.push('Cooked, unpacked batches not counted');
+   if(g.coldroom_batches===null)warnings.push('Enter cooked, unpacked stock above; enter 0 if none. Then the batch suggestion can be calculated.');
    if(required_batches!==null&&available_batches!==null&&required_batches>available_batches+1e-9)warnings.push('Packing plan exceeds cooked stock plus new batches');
   }else if(g.mode==='casings'){
    for(const i of rows){
@@ -120,8 +144,8 @@ export function productionSummary(input){
  const trolley=trolleySummary(plan,groups);
  return {items,groups,trolley,warnings:[...groups.flatMap(g=>g.warnings.map(message=>({group:g.id,name:g.name,message}))),...trolley.warnings.map(message=>({group:'TROLLEYS',name:'Trolley plan',message}))]};
 }
-export function applyProductionSuggestion(plan,id,{blankOnly=false}={}){
- const s=productionSummary(plan).groups.find(g=>g.id===id),g=plan.groups.find(g=>g.id===id);if(!s||s.suggested===null)return false;
+export function applyProductionSuggestion(plan,id,{blankOnly=false,catalog=null}={}){
+ const s=productionSummary(productionPlanningView(plan,catalog)).groups.find(g=>g.id===id),g=plan.groups.find(g=>g.id===id);if(!s||s.suggested===null)return false;
  if(s.mode==='rolls'){
   if(blankOnly&&g.cut_planned!=null)return false;
   g.cut_planned=s.suggested;
@@ -153,6 +177,7 @@ export function validateProductionEdits(input,base){
   const submitted=input.groups.find(x=>x.id===g.id),value=submitted.planned;
   check(value===null||(['batch','shared','cooked','casings','rolls'].includes(g.mode)?typeof value==='number'&&Number.isSafeInteger(value*(['V01','V02'].includes(g.id)?2:1))&&value>=0&&value<=10000:isQty(value)),'Use non-negative whole batches; Vienna may use half batches. Bought-in / packing items use sales units.');g.planned=value;
   for(const key of ['coldroom_batches','roll_stock','cut_planned','rolls_per_batch','min_roll_stock','disks_per_roll'])if(has(submitted,key)){
+   if(key==='coldroom_batches'&&g.id==='R07'&&plan.items.find(i=>i.code==='R07')?.recipe_version===2){check(submitted[key]===null||(typeof submitted[key]==='number'&&Number.isFinite(submitted[key])&&submitted[key]>=0&&submitted[key]<=100000&&Math.abs(submitted[key]*10000-Math.round(submitted[key]*10000))<0.00001),'Use a non-negative cooked-stock count.');g[key]=submitted[key];continue;}
    qty(submitted[key],'Use non-negative counts and whole rolls; recipe yields must be positive.',key!=='coldroom_batches',['rolls_per_batch','disks_per_roll'].includes(key));
    check(key!=='disks_per_roll'||submitted[key]!==null,'Enter disks per roll.');g[key]=submitted[key];
   }

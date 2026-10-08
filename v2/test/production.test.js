@@ -1,7 +1,33 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {aggregateProductionDemand,buildProductionPlan,productionProfile,productionSummary,applyProductionSuggestion,validateProductionEdits,nextProductionTarget,normaliseProductionPlan} from '../src/production.js';
+import {aggregateProductionDemand,buildProductionPlan,productionProfile,productionSummary,applyProductionSuggestion,validateProductionEdits,nextProductionTarget,normaliseProductionPlan,upgradeBabalasRecipe,productionPlanningView,babalasRecipeUpdateNeeded} from '../src/production.js';
 const product=(code='W01')=>({code,name:code,unit:'bag',active:true,available:true});
 function make(codes=['W01']){const p=buildProductionPlan({date:'2026-10-07',target_date:'2026-10-08',routes:['MB','PL'],snapshot:'test',items:codes.map(code=>({...product(code),...productionProfile(product(code)),demand:30,breakdown:[]}))});for(const g of p.groups)if(['shared','cooked'].includes(g.mode))g.coldroom_batches=0;for(const i of p.items)if(i.mode==='casings')i.coldroom_casings=0;return p;}
+test('24 Babalas units require one new 2-pack batch after cooked stock is counted',()=>{
+ const p=make(['R07']);Object.assign(p.items[0],{demand:24,stock:0,pack_plan:24});p.groups[0].coldroom_batches=null;
+ assert.equal(p.items[0].recipe_version,2);assert.equal(p.items[0].yield_qty,46);
+ let s=productionSummary(p).groups[0];assert.equal(s.suggested,null);assert.ok(s.warnings.some(w=>w.includes('enter 0 if none')));
+ p.groups[0].coldroom_batches=0;assert.equal(productionSummary(p).groups[0].suggested,1);
+ p.groups[0].coldroom_batches=1;assert.equal(productionSummary(p).groups[0].suggested,0);
+});
+test('explicit recipe update preserves physical quantities and history while resetting only affected cooking choices',()=>{
+ const old=make(['R07','V01']);delete old.items[0].recipe_version;Object.assign(old.items[0],{yield_qty:23,stock:4,pack_plan:24,actual:22});Object.assign(old.groups[0],{planned:2,coldroom_batches:1.5});old.groups[1].planned=2;
+ old.trolleys=[{id:'mixed',slot1:'R07',slot2:'V01',casings:{P02:0,P03:0,P04:0}}];const before=structuredClone(old);
+ assert.equal(babalasRecipeUpdateNeeded(old),true);const p=upgradeBabalasRecipe(old);
+ assert.deepEqual(old,before);assert.equal(p.items[0].yield_qty,46);assert.equal(p.groups[0].coldroom_batches,.75);assert.equal(p.groups[0].planned,null);
+ for(const field of ['stock','pack_plan','actual'])assert.equal(p.items[0][field],old.items[0][field]);
+ assert.equal(p.groups[1].planned,2);assert.equal(p.trolleys[0].slot1,'');assert.equal(p.trolleys[0].slot2,'V01');assert.equal(p.babalas_recipe_update.previous_trolleys[0].slot1,'R07');
+ assert.equal(babalasRecipeUpdateNeeded(p),false);assert.throws(()=>upgradeBabalasRecipe(p),/already/);assert.doesNotThrow(()=>validateProductionEdits(p,p));
+ const fresh=make(['R07','V01']);const refresh=buildProductionPlan({date:p.date,target_date:p.target_date,routes:p.routes,items:fresh.items,snapshot:'refresh',previous:p});assert.deepEqual(refresh.babalas_recipe_update,p.babalas_recipe_update);
+ const next=buildProductionPlan({date:'2026-10-08',target_date:'2026-10-09',routes:p.routes,items:fresh.items,snapshot:'next',yieldSettings:old.items,settingsPlan:old});assert.equal(next.items[0].yield_qty,46);assert.equal(next.groups[0].coldroom_batches,null);
+ old.groups[0].coldroom_batches=.001;const tiny=upgradeBabalasRecipe(old);assert.equal(tiny.groups[0].coldroom_batches,.0005);assert.doesNotThrow(()=>validateProductionEdits(tiny,tiny));
+});
+test('availability filters current production, shared sizes and trolley instructions without rewriting saved decisions',()=>{
+ const p=make(['C01','R01','R02','R07']);for(const i of p.items){i.stock=0;i.pack_plan=20;}p.trolleys=[{id:'mixed',slot1:'R07',slot2:'RUSSIAN',casings:{P02:0,P03:0,P04:0}}];
+ const catalog={products:p.items.map(i=>({...product(i.code),available:i.code==='R02'}))},before=structuredClone(p);
+ const view=productionPlanningView(p,catalog,p.date);assert.deepEqual(view.items.map(i=>i.code),['R02']);assert.deepEqual(view.groups.map(g=>g.id),['RUSSIAN']);assert.equal(view.trolleys[0].slot1,'');assert.equal(view.trolleys[0].slot2,'RUSSIAN');assert.deepEqual(p,before);
+ assert.equal(productionSummary(view).groups[0].suggested,1);assert.deepEqual(productionPlanningView(p,catalog,'2026-10-08'),normaliseProductionPlan(p));
+ for(const product of catalog.products)product.available=true;assert.equal(productionPlanningView(p,catalog,p.date).items.length,4);
+});
 test('Braaiwors: total need 30, post-dispatch stock 10, two complete recipes and six bags left',()=>{const p=make();p.items[0].stock=10;const s=productionSummary(p).groups[0];assert.equal(s.suggested,2);assert.equal(p.groups[0].planned,null);applyProductionSuggestion(p,'W01');const planned=productionSummary(p).groups[0];assert.equal(planned.output,26);assert.equal(planned.balances[0].balance,6);p.groups[0].planned=1;assert.equal(productionSummary(p).groups[0].balances[0].balance,-7);assert.ok(productionSummary(p).groups[0].warnings.includes('My plan leaves a shortage'));});
 test('enough stock gives zero, blank stock stays unknown, zero plan is kept',()=>{const p=make();assert.equal(productionSummary(p).groups[0].suggested,null);assert.equal(applyProductionSuggestion(p,'W01'),false);p.items[0].stock=30;assert.equal(productionSummary(p).groups[0].suggested,0);p.groups[0].planned=0;p.items[0].stock=0;assert.equal(applyProductionSuggestion(p,'W01',{blankOnly:true}),false);assert.equal(p.groups[0].planned,0);});
 test('route quantities use manual override including zero; incomplete forecast remains unknown',()=>{const ps=[product()];const source=(route,planned,forecast)=>({route,name:route,revision:1,run:{items:[{code:'W01',planned}]},forecasts:{W01:{qty:forecast}}});assert.equal(aggregateProductionDemand(ps,[source('A',0,25),source('B',30,90)])[0].demand,30);assert.equal(aggregateProductionDemand(ps,[source('A',null,12),source('B',null,null)])[0].demand,null);});

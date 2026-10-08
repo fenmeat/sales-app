@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {emptyRun,summarise,validateRun,validateRecon,CASH_DENOMINATIONS,cashCountTotal,captureItems} from '../src/domain.js';import {forecast} from '../src/forecast.js';
+import {emptyRun,summarise,validateRun,validateRecon,CASH_DENOMINATIONS,cashCountTotal,captureItems,today,addDays,effectiveAvailability} from '../src/domain.js';import {forecast} from '../src/forecast.js';
 const product={code:'W01',name:'Braai wors',unit:'bag',price_cents:16000,available:true,active:true};
 function run(){const r=emptyRun('2026-09-30','R07',[product]);r.rep='Alex';r.items[0].loaded=20;r.items[0].returned=2;r.items[0].planned=22;return r;}
 function recon(r){return {date:r.date,route:r.route,complete:true,source:'test',invoice_lines:[{id:'INV1:1',product:'W01',qty:18,status:'sent'}],payments:[{id:'PAY1:1',date:r.date,invoice_date:r.date,method:'cash',cents:1000000},{id:'PAY2:1',date:r.date,invoice_date:'2026-09-23',method:'cash',cents:2000000}]};}
@@ -31,12 +31,12 @@ test('saved total is derived from counts, including zero and cash from older inv
  validateRun(r,null,'load');assert.equal(r.cash.counted,3000000);assert.equal(summarise(r).cashVariance,0);
  r.cash.denominations[20000]=149;assert.equal(summarise(r).cashVariance,-20000);
 });
-test('unavailable products are hidden from loading but loaded ones remain for returns',()=>{
- const r=run();r.items[0].available=false;assert.equal(captureItems(r,false).length,0);assert.equal(captureItems(r,true).length,1);
+test('unavailable products hide from new loading; recorded loads remain in stock and returns',()=>{
+ const r=run();r.items[0].available=false;assert.equal(captureItems(r,false).length,1);assert.equal(captureItems(r,true).length,1);
  r.items.push({...r.items[0],code:'X',loaded:null,returned:null});r.items[0].returned=0;
  validateRun(r,null,'load');assert.equal(r.items[1].loaded,0);assert.equal(r.items[1].returned,0);
  assert.equal(captureItems(r,true).length,1);
- const current=[{...product,available:false}];r.items[0].available=true;assert.equal(captureItems(r,false,current).length,0);
+ const current=[{...product,available:false}];r.items[0].available=true;r.items[0].loaded=0;r.date=today();assert.equal(captureItems(r,false,current).length,0);r.date=addDays(today(),-1);assert.equal(captureItems(r,false,current).length,1,'Historical availability uses the saved snapshot');
 });
 test('removed adjustments cannot be newly entered and historical amounts remain intact',()=>{
  const r=run();r.items[0].adjustment=1;r.items[0].adjustment_reason='Old damage';
