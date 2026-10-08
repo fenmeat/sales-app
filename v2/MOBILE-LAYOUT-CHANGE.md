@@ -1,0 +1,9 @@
+# Mobile layout repair — 0.12.1, 8 October 2026
+
+Alex reported that the Sales screen extended beyond his iPhone and was difficult to read. The shared header's `nowrap` rule forced the five navigation controls into one wide row after Recipes & Order Guy was added. Chromium mobile emulation reproduced a 663px document on a 414px viewport, including displaced fixed navigation.
+
+The shared header now wraps within its container. On phones, navigation uses two rows of three flexible columns, with Recipes & Order Guy spanning two columns. Sales and Production use the same rules; all existing buttons and labels remain. Recipe-page navigation links use two columns. Menus remain accessible, and overflow is fixed at its source rather than hidden. Search and its actions stack only at 360px and below. Production date inputs use at least 16px text. Larger product names, quantity inputs, touch targets and existing print styles are retained.
+
+Verification used the actual Worker and Cloudflare asset router with isolated synthetic D1 and Chromium mobile emulation. The original stylesheet reproduced the reported overflow. The repaired screens passed 102 layout checks across 320, 375, 390, 414, 430, 768, 834, 1024 and 1280px: Morning load, Evening returns, Cash-up, Reconcile, header menus, Production, Trolleys, Recipes, Materials, Packaging, Order Guy and editor dialogs. Product availability opened correctly; a decimal-comma return saved and survived reload. No page errors occurred. The 414px screenshot was visually reviewed. All 108 existing tests passed. Physical iPhone Safari remains user acceptance.
+
+Only layout rules and the release identifier change. No operational records, recipes, prices, stock, forecasts, credentials, schemas or dependencies are modified. Deployment uses the existing `build/sales-v2-cloudflare` branch; no merge to main.
