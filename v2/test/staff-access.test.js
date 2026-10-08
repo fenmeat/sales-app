@@ -21,7 +21,7 @@ test('separate staff keys preserve primary identities and fail closed independen
 
 test('real Worker keeps existing sessions/data while staff is added, rotated or removed',async t=>{
  const origin='https://staff.example';
- const base={name:'staff-access-test',modules:['worker','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'staff-access-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify(primary)},outboundService:()=>{throw Error('No outbound calls in staff access tests');}};
+ const base={name:'staff-access-test',modules:['worker','order-guy-api','order-guy','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'staff-access-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify(primary)},outboundService:()=>{throw Error('No outbound calls in staff access tests');}};
  const mf=new Miniflare(convertV4MiniflareOptions(base));t.after(()=>mf.dispose());
  const call=async(path,{body,cookie='',headers={}}={})=>{
   const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...headers},body:body?JSON.stringify(body):undefined});

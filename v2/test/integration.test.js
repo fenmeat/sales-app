@@ -63,3 +63,28 @@ test('protected pilot: sign-in, save, idempotency, concurrent edit, reconciliati
  env.APP_ACCESS_KEYS=JSON.stringify({alex:key+'rotated'});assert.equal((await call('/api/bootstrap')).r.status,401);
 });
 test('missing access configuration denies business endpoints and writes',async()=>{const env={APP_ENV:'test',DB:new D1()};for(const path of ['/api/bootstrap','/api/run','/api/sync/export']){const r=await worker.fetch(new Request(origin+path),env);assert.equal(r.status,503);}env.APP_ENV='production';assert.equal((await worker.fetch(new Request(origin+'/api/health'),env)).status,503);});
+
+test('recipe register is private, revisioned, retry-safe and independent of sales/production; Order Guy reads saved plans only',async()=>{
+ const env={APP_ENV:'test',DB:new D1(),APP_ACCESS_KEYS:JSON.stringify({alex:key,staff:key+'-staff'})};let cookie='';
+ async function call(path,body,extra={}){const r=await worker.fetch(new Request(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...extra},body:body?JSON.stringify(body):undefined}),env);return {status:r.status,data:await r.json(),headers:r.headers};}
+ assert.equal((await call('/api/recipes')).status,401);assert.equal((await call('/api/sync/order-guy')).status,401);
+ let auth=await call('/api/login',{username:'staff',key:key+'-staff'});cookie=auth.headers.get('set-cookie').split(';')[0];assert.equal((await call('/api/recipes')).status,403);
+ auth=await call('/api/login',{username:'alex',key});cookie=auth.headers.get('set-cookie').split(';')[0];assert.equal((await call('/api/recipes')).data.revision,0);
+ const material={id:'TEST',name:'Synthetic',unit:'kg',supplier:'Supplier',source:'TEST',notes:'',pack_qty:5,procure:true,price:{amount:2,status:'verified',date:'2026-10-01',valid_until:null,source:'TEST INVOICE'},stock:{qty:0,date:'2026-10-08',reserve:0,incoming:[],source:'Physical count'}};
+ const recipe={group:'W01',name:'Synthetic recipe',version:1,effective_date:'2026-10-01',status:'approved',complete:true,batch_kg:10,ingredients:[{material:'TEST',qty:10,unit:'kg',status:'approved',note:''}],consumables:[],source:'TEST RECIPE',notes:''};
+ const body={revision:0,request_id:crypto.randomUUID(),reason:'Test import source',register:{schema_version:1,materials:[material],recipes:[recipe],packaging:[],notes:''}};
+ assert.equal((await call('/api/recipes',body,{Origin:'https://evil.example'})).status,403);
+ assert.equal((await call('/api/import/recipes',body,{Authorization:'Bearer '+key,'X-User':'alex'})).status,200);
+ assert.equal((await call('/api/recipes',body)).data.replayed,true);assert.equal((await call('/api/recipes',{...body,reason:'Changed contents'})).status,409);
+ assert.equal((await call('/api/recipes',{...body,request_id:crypto.randomUUID()})).status,409);
+ assert.equal((await call('/api/catalog',{revision:0,catalog})).status,200);
+ let p=(await call('/api/production?date=2026-10-08')).data;p.plan.groups[0].planned=1;
+ const saved=await call('/api/production',{plan:p.plan,revision:0,action:'save',request_id:crypto.randomUUID()});assert.equal(saved.status,200);
+ const before=env.DB.db.prepare('SELECT * FROM v2_production_events').all();
+ const exportData=(await call('/api/sync/order-guy?from=2026-10-08&to=2026-10-09',{},{Authorization:'Bearer '+key,'X-User':'alex'}));assert.equal(exportData.status,405);
+ const report=await call('/api/sync/order-guy?from=2026-10-08&to=2026-10-09',null,{Authorization:'Bearer '+key,'X-User':'alex'});assert.equal(report.status,200);assert.equal(report.data.rows[0].gross,10);assert.equal(report.data.plans.length,1);assert.equal(report.data.coverage[1].status,'no_saved_plan');assert.equal(report.data.complete,false);
+ const changed=structuredClone(body);changed.revision=1;changed.request_id=crypto.randomUUID();changed.register.recipes[0].ingredients[0].qty=11;changed.register.recipes[0].batch_kg=11;assert.equal((await call('/api/recipes',changed)).status,400);
+ changed.register=structuredClone(body.register);changed.register.materials[0].price.amount=3;assert.equal((await call('/api/recipes',changed)).status,200);
+ assert.equal((await call('/api/recipes/audit')).data.events.length,2);assert.deepEqual(env.DB.db.prepare('SELECT * FROM v2_production_events').all(),before);assert.equal(env.DB.db.prepare('SELECT COUNT(*) n FROM v2_events').get().n,0);
+ assert.equal((await call('/api/order-guy?from=2026-10-08&to=2026-12-01')).status,400);
+});
