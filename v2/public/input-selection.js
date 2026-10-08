@@ -1,5 +1,5 @@
 // Delegate once so login, tabs, searches and save/reload renders behave alike.
-// Keep native number inputs: min/step validation and numeric keyboards still apply.
+// Decimal text controls retain the same select-all behavior as native numbers.
 function selectInputContents(event) {
   const input = event.target;
   const textEntry = input instanceof HTMLTextAreaElement ||
