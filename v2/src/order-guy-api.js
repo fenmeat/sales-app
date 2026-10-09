@@ -1,21 +1,21 @@
 import {check,UserError,dateKey,addDays,today,weekday} from './domain.js';
 import {hash} from './auth.js';
-import {emptyRegister,validateRegister,recipeCost,orderGuyReport} from './order-guy.js';
+import {emptyRegister,validateRegister,recipeCost,orderGuyReport,withResaleMaterials} from './order-guy.js';
 import {nextProductionTarget,aggregateProductionDemand,buildProductionPlan,normaliseProductionPlan} from './production.js';
 import {applySupplierCount} from './stocktake.js';
 import {documentedCorrections,margotPackCorrections} from './register-corrections.js';
-export async function readRegister(db){const r=await db.prepare('SELECT * FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();return r?{register:JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at,actor:r.actor,request_id:r.request_id}:{register:emptyRegister(),revision:0,saved_at:null,actor:null};}
+export async function readRegister(db,catalog){const r=await db.prepare('SELECT * FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();return r?{register:withResaleMaterials(JSON.parse(r.payload),catalog),revision:r.revision,saved_at:r.saved_at,actor:r.actor,request_id:r.request_id}:{register:withResaleMaterials(emptyRegister(),catalog),revision:0,saved_at:null,actor:null};}
 export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,forecastResult}){
  check(['alex','alinda'].includes(user.username),'Recipes, costs and Order Guy are available to Alex and Alinda.',403);
  const path=url.pathname;
  if(path==='/api/recipes/audit'){check(request.method==='GET','Method not allowed.',405);const r=await db.prepare('SELECT revision,actor,saved_at,reason FROM v2_recipe_events ORDER BY revision DESC LIMIT 50').all();return {events:r.results};}
  if(['/api/recipes','/api/import/recipes','/api/stocktake','/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){
-  if(request.method==='GET'){const r=await readRegister(db);if(['/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){const {changes,skipped,applied}=(path.endsWith('/margot-packs')?margotPackCorrections:documentedCorrections)(r.register);return {revision:r.revision,changes,skipped,applied};}return {...r,current_user:user.username,costs:r.register.recipes.map(recipe=>recipeCost(recipe,r.register))};}
+  if(request.method==='GET'){const r=await readRegister(db,catalog);if(['/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){const {changes,skipped,applied}=(path.endsWith('/margot-packs')?margotPackCorrections:documentedCorrections)(r.register);return {revision:r.revision,changes,skipped,applied};}return {...r,current_user:user.username,costs:r.register.recipes.map(recipe=>recipeCost(recipe,r.register))};}
   check(request.method==='POST','Method not allowed.',405);
   const b=await bodyOf(request);check(typeof b.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(b.request_id),'Missing save identifier.');const fingerprint=await hash(JSON.stringify(b));
   const replay=await db.prepare('SELECT * FROM v2_recipe_events WHERE request_id=?').bind(b.request_id).first();
   if(replay){check(replay.request_hash===fingerprint,'Save identifier reused for different data.',409);const register=JSON.parse(replay.payload);return {revision:replay.revision,saved_at:replay.saved_at,actor:replay.actor,request_id:b.request_id,replayed:true,...(path==='/api/stocktake'?{register,current_user:user.username,costs:register.recipes.map(recipe=>recipeCost(recipe,register))}:{})};}
-  const old=await readRegister(db);check(b.revision===old.revision,'The register changed. Reload before saving; your draft has not replaced it.',409);
+  const old=await readRegister(db,catalog);check(b.revision===old.revision,'The register changed. Reload before saving; your draft has not replaced it.',409);
   let draft=b.register,reason=b.reason,extra={};
   if(path==='/api/stocktake'){
    const counted=applySupplierCount(old.register,b,user.username);draft=counted.register;
@@ -30,7 +30,7 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
    reason='Margot Swiss pack sizes: Alinda email and stocktake sheet, 9 October 2026; Alex confirmed vinegar 1 L = 1 kg and maintenance minimum 2 each.';extra={changes:update.changes,skipped:update.skipped};
   }
   check(typeof reason==='string'&&reason.trim().length>=5&&reason.length<=500,'Describe the source or reason for the change.');
-  const register=validateRegister(draft);
+  const register=validateRegister(withResaleMaterials(draft,catalog));
   // Preserve all recorded identities and old recipe versions. Corrections have an audit trail.
   check(old.register.materials.every(m=>register.materials.some(x=>x.id===m.id)),'Existing materials cannot be removed.');
   for(const recipe of old.register.recipes){const next=register.recipes.find(x=>x.group===recipe.group&&x.version===recipe.version);check(next,'Keep earlier recipe versions.');if(JSON.stringify(next.ingredients)!==JSON.stringify(recipe.ingredients)||next.batch_kg!==recipe.batch_kg||next.effective_date!==recipe.effective_date||(next.plan_version??next.version)!==(recipe.plan_version??recipe.version)||JSON.stringify(next.consumables)!==JSON.stringify(recipe.consumables))throw new UserError('Changed recipe quantities need a new version. Keep the earlier version unchanged.');}
@@ -66,5 +66,5 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
    forecast_days.push({...base,status:'forecast',plan,sources:sources.map(({run,forecasts,...s})=>s),settings_date:settingsPlan?.date??null});
   }catch{forecast_days.push({...base,status:'forecast_unavailable',source_warning:'The current app forecast could not be read. Requirements remain unresolved.'});}
  }
- const r=await readRegister(db);return {...orderGuyReport({register:r.register,registry_revision:r.revision,plans,forecast_days,from,to,catalog}),register:r.register,registry_saved_at:r.saved_at,plans,catalog};
+ const r=await readRegister(db,catalog);return {...orderGuyReport({register:r.register,registry_revision:r.revision,plans,forecast_days,from,to,catalog}),register:r.register,registry_saved_at:r.saved_at,plans,catalog};
 }

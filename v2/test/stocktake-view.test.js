@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {stocktakeView} from '../public/stocktake-view.js';
 import {reconcileCountDraft} from '../public/stocktake-state.js';
 import {applySupplierCount} from '../src/stocktake.js';
+import {withResaleMaterials,emptyRegister} from '../src/order-guy.js';
 import {today,addDays} from '../src/domain.js';
 
 // A small DOM test double exercises the real view's event handlers and rendered
@@ -76,4 +77,18 @@ test('switching cannot discard unsaved quantities; the reason appears beside the
  const h=viewHarness('margot swiss',[britos()]);h.root.querySelector('[data-stock-field="packs"][data-material="BAGS"]').input('8');
  h.root.querySelector('[data-supplier="brito\'s"]').onclick();assert.equal(h.draft.supplier,'margot swiss');assert.equal(h.draft.rows.BAGS.packs,'8');assert.match(h.root.querySelector('#stock-supplier-note').textContent,/ongestoorde veranderings vir Margot Swiss/);
  const menu=h.root.querySelector('#stock-supplier');menu.open=true;let prevented=false;menu.events.keydown[0]({key:'Escape',preventDefault(){prevented=true;}});assert.equal(menu.open,false);assert(prevented);
+});
+
+
+test('Brito view shows all requested products, clear box/bale labels and saves pork loose packs correctly',async()=>{
+ const materials=withResaleMaterials(emptyRegister(),{products:['B01','B03','B06'].map(code=>({code,active:true,available:true}))}).materials;
+ const h=viewHarness("brito's",[britos(),...materials]);
+ assert.equal(h.root.querySelectorAll('[data-stock-card]').length,4);
+ assert.match(h.root.innerHTML,/Aantal volle bale/);assert.match(h.root.innerHTML,/Los 2 kg-pakkies buite die bale/);assert.match(h.root.innerHTML,/Aantal bokse/);
+ h.root.querySelector('[data-stock-field="packs"][data-material="BUY_B03"]').input('2');
+ h.root.querySelector('[data-stock-field="loose"][data-material="BUY_B03"]').input('3');
+ await h.root.querySelector('#save-stock').onclick();await h.root.querySelector('#reload-stock').onclick();
+ assert.equal(h.result.register.materials.find(m=>m.id==='BUY_B03').stock.qty,19);
+ assert.equal(h.root.querySelector('[data-stock-field="packs"][data-material="BUY_B03"]').value,'2');
+ assert.equal(h.root.querySelector('[data-stock-field="loose"][data-material="BUY_B03"]').value,'3');
 });

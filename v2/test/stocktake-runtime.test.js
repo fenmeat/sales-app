@@ -40,3 +40,24 @@ test('real Worker saves supplier counts privately, rejects stale writes, replays
  const db=await mf.getD1Database('DB');assert.equal((await db.prepare('SELECT count(*) n FROM v2_production_events').first()).n,0);assert.equal((await db.prepare('SELECT count(*) n FROM v2_events').first()).n,0);
  cookie=(await call('/api/login',{username:'xavier',key:'synthetic-staff-stocktake-key-0123456789'})).headers.get('set-cookie').split(';')[0];assert.equal((await call('/api/stocktake')).status,403);assert.equal((await call('/api/stocktake',{...body,revision:3,request_id:crypto.randomUUID()})).status,403);assert.equal((await call('/api/recipes/documented-update')).status,403);assert.equal((await call('/api/recipes/margot-packs')).status,403);assert.equal((await call('/api/recipes/margot-packs',{revision:4,request_id:crypto.randomUUID()})).status,403);
 });
+
+test('Brito resale entries appear automatically, save alongside MDM and persist across reads without mutating on GET',async t=>{
+ const origin='https://britos-local.example',key='synthetic-britos-test-key-01234567890123456789';
+ const mf=new Miniflare(convertV4MiniflareOptions({name:'britos-test',modules:['worker','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'britos-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key})},outboundService:()=>{throw Error('No outbound calls');}}));t.after(()=>mf.dispose());let cookie='';
+ async function call(path,body){const response=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie},body:body?JSON.stringify(body):undefined});const data=await response.json();assert.equal(response.status,200,JSON.stringify(data));return {data,headers:response.headers};}
+ cookie=(await call('/api/login',{username:'alex',key})).headers.get('set-cookie').split(';')[0];
+ const db=await mf.getD1Database('DB'),date=today();
+ const mdm={id:'RM01',name:'Test MDM',unit:'kg',supplier:"Brito's",pack_qty:20,procure:true,notes:'',source:'Synthetic source',price:{amount:null,status:'unknown',date:null,valid_until:null,source:''},stock:{qty:3600,date,reserve:0,source:'Synthetic prior count',incoming:[]}};
+ await call('/api/recipes',{register:{schema_version:1,materials:[mdm],recipes:[],packaging:[],notes:''},revision:0,reason:'Synthetic prior MDM count',request_id:crypto.randomUUID()});
+ await call('/api/catalog',{revision:0,catalog:{products:['B01','B03','B06'].map(code=>({code,name:code,unit:'sales unit',price_cents:100,active:true,available:true})),routes:[{code:'TEST',name:'Test',weekday:2}]}});
+ const read=(await call('/api/recipes')).data;assert.equal(read.revision,1);assert.equal(read.register.materials.length,4);assert.deepEqual(read.register.materials[0],mdm);
+ assert.equal((await db.prepare('SELECT count(*) n FROM v2_recipe_events').first()).n,1);
+ const b={revision:read.revision,request_id:crypto.randomUUID(),supplier:"brito's",date,available_from:date,rows:[{material:'BUY_B01',packs:9,loose:0,reserve:0},{material:'BUY_B03',packs:2,loose:3,reserve:0},{material:'BUY_B06',packs:0,loose:null,reserve:0}]};
+ const save=(await call('/api/stocktake',b)).data;assert.equal(save.revision,2);assert.equal(save.counted,3);
+ assert.equal((await call('/api/stocktake',b)).data.replayed,true);
+ cookie=(await call('/api/login',{username:'alex',key})).headers.get('set-cookie').split(';')[0];
+ const reload=(await call('/api/stocktake')).data;assert.equal(reload.revision,2);assert.deepEqual(reload.register,save.register);
+ assert.deepEqual(reload.register.materials[0],mdm);assert.equal(reload.register.materials.find(m=>m.id==='BUY_B03').stock.qty,19);assert.equal(reload.register.materials.find(m=>m.id==='BUY_B06').stock.qty,0);
+ const persisted=JSON.parse((await db.prepare('SELECT payload FROM v2_recipe_events WHERE revision=2').first()).payload);assert.deepEqual(persisted,reload.register);
+ assert.equal((await db.prepare('SELECT count(*) n FROM v2_events').first()).n,0);assert.equal((await db.prepare('SELECT count(*) n FROM v2_production_events').first()).n,0);
+});

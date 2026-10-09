@@ -3,7 +3,7 @@ import {check,dateKey,today,addDays} from './domain.js';
 export function supplierKey(value){return String(value??'').trim().toLowerCase().replace(/\s+/g,' ');}
 export function supplierGroups(materials){
  const groups=new Map();
- for(const m of materials.filter(m=>m.procure)){
+ for(const m of materials.filter(m=>m.procure&&m.resale_available!==false)){
   const key=supplierKey(m.supplier),label=m.supplier.trim()||'Supplier not assigned';
   if(!groups.has(key))groups.set(key,{key,name:label,materials:[]});
   const group=groups.get(key);if(label!==label.toUpperCase())group.name=label;group.materials.push(m);
