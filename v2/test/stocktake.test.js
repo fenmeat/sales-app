@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {supplierGroups,stockQuantity,applySupplierCount} from '../src/stocktake.js';
-import {documentedCorrections,DOCUMENTED_UPDATE} from '../src/register-corrections.js';
+import {documentedCorrections,DOCUMENTED_UPDATE,margotPackCorrections,MARGOT_PACK_UPDATE} from '../src/register-corrections.js';
 import {emptyRegister,validateRegister,orderGuyReport} from '../src/order-guy.js';
 import {buildProductionPlan,productionProfile} from '../src/production.js';
 
@@ -59,4 +59,26 @@ test('patty forecast rounds the 59 kg recipe, not 20 full 3 kg rolls; cutting fr
  let result=report();assert.equal(result.requirements[0].batches,2);assert.equal(result.rows.find(x=>x.material==='RAW').gross,118);assert.equal(result.rows.find(x=>x.material==='RM65').gross,40);assert.equal(result.rows.find(x=>x.material==='RM66').gross,150);
  plan.phase='confirmed';Object.assign(plan.groups[0],{planned:0,cut_planned:2,roll_stock:2,disks_per_roll:30});plan.items[0].stock=0;
  result=report([{plan,revision:1,stale:false}]);assert(!result.rows.some(x=>x.material==='RM65'));assert.equal(result.rows.find(x=>x.material==='RM66').gross,15);
+});
+test('Margot pack update retains saved stock and prices, distinguishes container contents, and uses owner-confirmed vinegar conversion',()=>{
+ const items=[['RM82','Apron: Plastic','unit'],['RM91','Toilet Paper','unit'],['RM88','Pine Gel','unit'],['RM48','Brown Vinegar','kg'],['RM83','Bandsaw Blades','unit'],['RM84','DZ400 Ribbon Element 12mm','unit'],['RM85','Teflon Tape 5m Vacuum','unit'],['RM38','Fomo White Oval Labels','unit'],['RM51','Ginger Ground','kg']];
+ const r={...emptyRegister(),applied_updates:[DOCUMENTED_UPDATE],materials:items.map(([id,name,unit])=>({...material(id,unit,'Margot Swiss',id==='RM38'?250:null),name}))};
+ for(const m of r.materials)m.stock={qty:17,date,reserve:1,incoming:[{qty:3,date:'2026-10-12',reference:'TEST-PO'}],source:'Saved before pack correction',available_from:'2026-10-12',availability_confirmed:true,count:{packs:1,loose:2,pack_qty:15,unit:m.unit}};
+ const before=structuredClone(r),update=margotPackCorrections(r),byId=id=>update.register.materials.find(m=>m.id===id);
+ assert.equal(update.changes.length,8);assert(update.register.applied_updates.includes(MARGOT_PACK_UPDATE));assert.doesNotThrow(()=>validateRegister(update.register));assert.deepEqual(r,before);
+ for(let i=0;i<r.materials.length;i++){assert.deepEqual(update.register.materials[i].stock,before.materials[i].stock);assert.deepEqual(update.register.materials[i].price,before.materials[i].price);}
+ assert.equal(stockQuantity(byId('RM82'),2,3),203);assert.equal(stockQuantity(byId('RM91'),2,3),99);assert.equal(stockQuantity(byId('RM88'),2,0),2);assert.match(byId('RM88').pack_spec.label,/5 L/);
+ assert.equal(stockQuantity(byId('RM48'),2,3),13);assert.equal(byId('RM83').minimum_stock,2);assert.equal(byId('RM84').pack_qty,1);assert.equal(byId('RM85').pack_qty,1);
+ assert.equal(byId('RM38').pack_qty,200);assert.equal(byId('RM38').name,'Fomo White Oval 2 trays');assert.equal(byId('RM51').pack_qty,null);
+ assert.deepEqual(margotPackCorrections(update.register).register,update.register);assert.equal(margotPackCorrections(update.register).applied,true);
+ const changed=structuredClone(r);changed.materials[0].pack_qty=200;changed.materials[1].supplier='Other supplier';const guarded=margotPackCorrections(changed).register;assert.deepEqual(guarded.materials[0],changed.materials[0]);assert.deepEqual(guarded.materials[1],changed.materials[1]);
+});
+test('maintenance minimum creates independent order rows, buys only the shortage and applies no extra 15 percent',()=>{
+ const r={...emptyRegister(),materials:[0,1,2,3,null].map((qty,i)=>({...material('SPARE'+i,'unit','Margot Swiss',1),minimum_stock:2,stock:{qty,date,reserve:0,incoming:[],source:'Physical count'}}))};
+ const report=()=>orderGuyReport({register:r,registry_revision:1,plans:[],forecast_days:[],from:date,to:date,catalog:{products:[],routes:[]}});
+ const rows=report().rows;assert.deepEqual(rows.map(x=>x.order_packs),[2,1,0,0,null]);assert(rows.every(x=>x.gross===0&&x.early_month_reserve===0&&x.minimum_only));
+ r.materials[0].stock.incoming=[{qty:1,date,reference:'TEST-PO'}];assert.equal(report().rows[0].order_packs,1);
+ r.materials[1].stock.reserve=1;assert.equal(report().rows[1].order_packs,1); // A smaller ordinary reserve is not counted twice.
+ r.materials[3].stock.reserve=4;assert.equal(report().rows[3].order_packs,1); // A larger existing reserve remains effective.
+ r.materials[0].minimum_stock=-1;assert.throws(()=>validateRegister(r));
 });

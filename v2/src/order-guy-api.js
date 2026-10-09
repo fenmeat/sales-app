@@ -3,14 +3,14 @@ import {hash} from './auth.js';
 import {emptyRegister,validateRegister,recipeCost,orderGuyReport} from './order-guy.js';
 import {nextProductionTarget,aggregateProductionDemand,buildProductionPlan,normaliseProductionPlan} from './production.js';
 import {applySupplierCount} from './stocktake.js';
-import {documentedCorrections} from './register-corrections.js';
+import {documentedCorrections,margotPackCorrections} from './register-corrections.js';
 export async function readRegister(db){const r=await db.prepare('SELECT * FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();return r?{register:JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at,actor:r.actor}:{register:emptyRegister(),revision:0,saved_at:null,actor:null};}
 export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,forecastResult}){
  check(['alex','alinda'].includes(user.username),'Recipes, costs and Order Guy are available to Alex and Alinda.',403);
  const path=url.pathname;
  if(path==='/api/recipes/audit'){check(request.method==='GET','Method not allowed.',405);const r=await db.prepare('SELECT revision,actor,saved_at,reason FROM v2_recipe_events ORDER BY revision DESC LIMIT 50').all();return {events:r.results};}
- if(['/api/recipes','/api/import/recipes','/api/stocktake','/api/recipes/documented-update'].includes(path)){
-  if(request.method==='GET'){const r=await readRegister(db);if(path==='/api/recipes/documented-update'){const {changes,skipped,applied}=documentedCorrections(r.register);return {revision:r.revision,changes,skipped,applied};}return {...r,costs:r.register.recipes.map(recipe=>recipeCost(recipe,r.register))};}
+ if(['/api/recipes','/api/import/recipes','/api/stocktake','/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){
+  if(request.method==='GET'){const r=await readRegister(db);if(['/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){const {changes,skipped,applied}=(path.endsWith('/margot-packs')?margotPackCorrections:documentedCorrections)(r.register);return {revision:r.revision,changes,skipped,applied};}return {...r,costs:r.register.recipes.map(recipe=>recipeCost(recipe,r.register))};}
   check(request.method==='POST','Method not allowed.',405);
   const b=await bodyOf(request);check(typeof b.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(b.request_id),'Missing save identifier.');const fingerprint=await hash(JSON.stringify(b));
   const replay=await db.prepare('SELECT * FROM v2_recipe_events WHERE request_id=?').bind(b.request_id).first();
@@ -24,6 +24,10 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
   if(path==='/api/recipes/documented-update'){
    const update=documentedCorrections(old.register);check(!update.applied&&update.changes.length>0,'This documented update is already saved, or no matching entries remain.');draft=update.register;
    reason='Apply owner-requested documented packaging and patty conversion, 9 October 2026.';extra={changes:update.changes,skipped:update.skipped};
+  }
+  if(path==='/api/recipes/margot-packs'){
+   const update=margotPackCorrections(old.register);check(!update.applied&&update.changes.length>0,'Die Margot Swiss-pakgroottes is reeds gestoor, of geen passende produkte bly oor nie.');draft=update.register;
+   reason='Margot Swiss pack sizes: Alinda email and stocktake sheet, 9 October 2026; Alex confirmed vinegar 1 L = 1 kg and maintenance minimum 2 each.';extra={changes:update.changes,skipped:update.skipped};
   }
   check(typeof reason==='string'&&reason.trim().length>=5&&reason.length<=500,'Describe the source or reason for the change.');
   const register=validateRegister(draft);

@@ -13,6 +13,8 @@ export function validateRegister(input){
  for(const [key,max] of [['materials',500],['recipes',250],['packaging',250]])check(Array.isArray(input[key])&&input[key].length<=max,'Invalid '+key+' register.');
  const r=structuredClone(input);text(r.notes);unique(r.materials,m=>m.id);unique(r.recipes,x=>x.group+'@'+x.version);unique(r.packaging,p=>p.product);
  for(const m of r.materials){id(m.id);text(m.name,150);check(m.name.length>0,'Material name is required.');text(m.unit,30);check(m.unit.length>0,'Material unit is required.');text(m.supplier,150);text(m.notes);text(m.source,1500);check(optional(m.pack_qty)&&m.pack_qty!==0,'Pack size must be positive or unknown.');check(typeof m.procure==='boolean','Mark whether the material is purchased.');
+  if(m.minimum_stock!==undefined)check(qty(m.minimum_stock),'Minimum stock must be a non-negative quantity.');
+  if(m.pack_spec!==undefined){check(m.pack_spec&&typeof m.pack_spec==='object','Invalid purchase pack description.');for(const field of ['label','unit_label','note','source'])text(m.pack_spec[field],field==='unit_label'?60:1500);}
   const p=m.price;check(p&&optional(p.amount)&&['verified','reference','expired','unknown'].includes(p.status),'Invalid price.');text(p.source,1500);if(p.date!==null)dateKey(p.date);if(p.valid_until!==null)dateKey(p.valid_until);check(p.status!=='verified'||(p.amount!==null&&p.date&&p.source.trim()),'A verified price needs an amount, date and source.');
   const s=m.stock;check(s&&optional(s.qty)&&optional(s.reserve)&&Array.isArray(s.incoming)&&s.incoming.length<=100,'Invalid material stock.');if(s.date!==null)dateKey(s.date);check(s.qty===null||s.date,'Date the usable stock count.');text(s.source,1500);for(const x of s.incoming){check(qty(x.qty),'Invalid incoming quantity.');dateKey(x.date);text(x.reference,200);check(x.reference.trim().length>0,'Incoming stock needs a PO or delivery reference.');}unique(s.incoming,x=>x.reference);
   if(s.available_from!==undefined){dateKey(s.available_from);check(s.date&&s.available_from>=s.date&&s.available_from<=addDays(s.date,31),'Invalid stock availability date.');check(s.available_from===s.date||s.availability_confirmed===true,'Confirm availability when using an earlier count.');}
@@ -110,10 +112,14 @@ export function orderGuyReport({register,registry_revision,plans,forecast_days=[
    if(g.mode==='buy')warn(date,i.code,'Bought-in product: '+packing+' sales units required. Confirm supplier SKU and purchase pack separately.');
   }
  }
+ // Minimum stock also creates a purchasing row for maintenance items without recipe demand.
+ for(const m of register.materials)if(m.procure&&m.minimum_stock>0)rowFor({material:m.id});
+ const referenced=new Set([...register.recipes.flatMap(r=>[...r.ingredients,...r.consumables]),...register.packaging.flatMap(p=>p.lines)].map(l=>l.material));
  const rows=[...totals.values()].map(row=>{
   const m=materials.get(row.material),p=priceFor(m,asOf),s=m.stock;
   const inventory_ready=s.qty!==null&&(s.available_from??s.date)===from&&(s.date===from||s.availability_confirmed===true)&&s.reserve!==null&&s.source.trim().length>0;
-  let stock=inventory_ready?s.qty-s.reserve:null,shortage=0,high=0,extra=0;
+  const minimum=m.minimum_stock??0,retained=Math.max(s.reserve??0,minimum),minimumOnly=minimum>0&&!referenced.has(m.id);
+  let stock=inventory_ready?s.qty-retained:null,shortage=0,high=0,extra=0;
   const daily=[];for(let date=from;date<=to;date=addDays(date,1)){
    const use=row.contributions.filter(c=>c.date===date).reduce((n,c)=>n+c.qty,0),eligible=m.procure&&Number(date.slice(8))<=EARLY_MONTH_BUFFER.last_day;
    const buffer=eligible?use*EARLY_MONTH_BUFFER.rate:0,incoming=s.incoming.filter(x=>x.date===date).reduce((n,x)=>n+x.qty,0);
@@ -121,8 +127,8 @@ export function orderGuyReport({register,registry_revision,plans,forecast_days=[
    let short=null;if(stock!==null){stock+=incoming-use-buffer;short=Math.max(0,-stock);shortage+=short;stock=Math.max(0,stock);}
    daily.push({date,gross:round(use),early_month_reserve:round(buffer),incoming:round(incoming),shortage:short===null?null:round(short)});
   }
-  const quantity_ready=!unmapped&&!row.unresolved.length,net=inventory_ready&&quantity_ready?round(shortage):null,pack=m.pack_qty;
-  return {...row,gross:round(row.gross),provisional:round(row.provisional),early_month_gross:round(high),early_month_reserve:round(extra),required_with_reserve:round(row.gross+extra),daily,price:p,known_cost:p===null?null:round(row.gross*p),required_cost:p===null?null:round((row.gross+extra)*p),price_status:m.price.status,price_source:m.price.source,price_date:m.price.date,stock:s,inventory_ready,quantity_ready,net,pack_qty:pack,order_packs:net===null||pack===null?null:Math.ceil(Math.max(0,net/pack-1e-10)),quantity_review:row.provisional>0||!inventory_ready||!quantity_ready};
+  const quantity_ready=(!unmapped||minimumOnly)&&!row.unresolved.length,net=inventory_ready&&quantity_ready?round(shortage):null,pack=m.pack_qty;
+  return {...row,gross:round(row.gross),provisional:round(row.provisional),early_month_gross:round(high),early_month_reserve:round(extra),required_with_reserve:round(row.gross+extra),daily,price:p,known_cost:p===null?null:round(row.gross*p),required_cost:p===null?null:round((row.gross+extra)*p),price_status:m.price.status,price_source:m.price.source,price_date:m.price.date,stock:s,minimum_stock:minimum,retained_stock:retained,minimum_only:minimumOnly,inventory_ready,quantity_ready,net,pack_qty:pack,pack_spec:m.pack_spec??null,order_packs:net===null||pack===null?null:Math.ceil(Math.max(0,net/pack-1e-10)),quantity_review:row.provisional>0||!inventory_ready||!quantity_ready};
  }).sort((a,b)=>a.supplier.localeCompare(b.supplier)||a.material.localeCompare(b.material));
  return {source:'FenMeat Sales V2',calculation_version:'2.0',generated_at:new Date().toISOString(),from,to,registry_revision,buffer_policy:EARLY_MONTH_BUFFER,coverage,requirements,warnings,unmapped_requirements:unmapped,rows,complete:warnings.length===0&&rows.every(r=>!r.quantity_review&&(!r.procure||r.order_packs!==null)),cost_basis:'ZAR including VAT. Missing/expired prices are blank, never zero.',note:'Confirmed production decisions take precedence. Other days use the current app forecast once per route/date, without future finished-stock counts. Gross forecast quantities are purchasing estimates, not saved production plans. Extra 15% reserve applies only to purchased materials needed on production dates 1–14, before stock netting and pack rounding. Ordinary material reserve is separate and must exclude this extra reserve. This is not a purchase order.'};
 }
