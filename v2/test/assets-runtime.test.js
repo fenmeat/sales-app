@@ -8,7 +8,7 @@ test('real Cloudflare assets follow HTML redirects through the Worker to the pro
  const config=JSON.parse(await readFile(new URL('../wrangler.jsonc',import.meta.url),'utf8'));
  const mf=new Miniflare(convertV4MiniflareOptions({
   name:'asset-routing-test',
-  modules:['worker','order-guy-api','order-guy','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),
+  modules:['worker','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),
   compatibilityDate:config.compatibility_date,
   assets:{directory:fileURLToPath(new URL('../'+config.assets.directory+'/',import.meta.url)),binding:config.assets.binding,run_worker_first:config.assets.run_worker_first,routerConfig:{has_user_worker:true}},
   d1Databases:{DB:'asset-routing-test'},
@@ -33,7 +33,8 @@ test('real Cloudflare assets follow HTML redirects through the Worker to the pro
   assert.match(await response.text(),new RegExp('<title>[^<]*'+title,'i'));
   assert.match(response.headers.get('cache-control'),/(?:^|,\s*)no-store(?:,|$)/);
  }
- for(const path of ['/decimal-input.js','/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.js','/production.css','/staff-access.js','/staff-access.css'])assert.equal((await mf.dispatchFetch(origin+path)).status,200,path);
+ for(const path of ['/decimal-input.js','/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.js','/production.css','/staff-access.js','/staff-access.css','/stocktake.js','/stocktake-view.js'])assert.equal((await mf.dispatchFetch(origin+path)).status,200,path);
+ assert.equal((await mf.dispatchFetch(origin+'/register-corrections.js')).status,404,'Private register migration is not a browser asset');
  assert.equal((await mf.dispatchFetch(origin+'/not-a-page')).status,404);
  assert.equal((await mf.dispatchFetch(origin+'/api/production?date=2026-10-07')).status,401,'HTML routing does not open business data');
 });

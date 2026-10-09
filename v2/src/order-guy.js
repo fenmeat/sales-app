@@ -15,6 +15,7 @@ export function validateRegister(input){
  for(const m of r.materials){id(m.id);text(m.name,150);check(m.name.length>0,'Material name is required.');text(m.unit,30);check(m.unit.length>0,'Material unit is required.');text(m.supplier,150);text(m.notes);text(m.source,1500);check(optional(m.pack_qty)&&m.pack_qty!==0,'Pack size must be positive or unknown.');check(typeof m.procure==='boolean','Mark whether the material is purchased.');
   const p=m.price;check(p&&optional(p.amount)&&['verified','reference','expired','unknown'].includes(p.status),'Invalid price.');text(p.source,1500);if(p.date!==null)dateKey(p.date);if(p.valid_until!==null)dateKey(p.valid_until);check(p.status!=='verified'||(p.amount!==null&&p.date&&p.source.trim()),'A verified price needs an amount, date and source.');
   const s=m.stock;check(s&&optional(s.qty)&&optional(s.reserve)&&Array.isArray(s.incoming)&&s.incoming.length<=100,'Invalid material stock.');if(s.date!==null)dateKey(s.date);check(s.qty===null||s.date,'Date the usable stock count.');text(s.source,1500);for(const x of s.incoming){check(qty(x.qty),'Invalid incoming quantity.');dateKey(x.date);text(x.reference,200);check(x.reference.trim().length>0,'Incoming stock needs a PO or delivery reference.');}unique(s.incoming,x=>x.reference);
+  if(s.available_from!==undefined){dateKey(s.available_from);check(s.date&&s.available_from>=s.date&&s.available_from<=addDays(s.date,31),'Invalid stock availability date.');check(s.available_from===s.date||s.availability_confirmed===true,'Confirm availability when using an earlier count.');}
  }
  const materials=new Map(r.materials.map(m=>[m.id,m]));
  const line=l=>{check(materials.has(l.material),'Unknown material in recipe/packaging.');check(qty(l.qty)&&l.qty>0,'Ingredient quantities must be positive.');check(l.unit===materials.get(l.material).unit,'Material units differ. Resolve the conversion before importing.');check(['approved','estimate','review'].includes(l.status),'Invalid quantity status.');text(l.note);};
@@ -111,7 +112,7 @@ export function orderGuyReport({register,registry_revision,plans,forecast_days=[
  }
  const rows=[...totals.values()].map(row=>{
   const m=materials.get(row.material),p=priceFor(m,asOf),s=m.stock;
-  const inventory_ready=s.qty!==null&&s.date===from&&s.reserve!==null&&s.source.trim().length>0;
+  const inventory_ready=s.qty!==null&&(s.available_from??s.date)===from&&(s.date===from||s.availability_confirmed===true)&&s.reserve!==null&&s.source.trim().length>0;
   let stock=inventory_ready?s.qty-s.reserve:null,shortage=0,high=0,extra=0;
   const daily=[];for(let date=from;date<=to;date=addDays(date,1)){
    const use=row.contributions.filter(c=>c.date===date).reduce((n,c)=>n+c.qty,0),eligible=m.procure&&Number(date.slice(8))<=EARLY_MONTH_BUFFER.last_day;
