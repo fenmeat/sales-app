@@ -4,17 +4,17 @@ import {emptyRegister,validateRegister,recipeCost,orderGuyReport} from './order-
 import {nextProductionTarget,aggregateProductionDemand,buildProductionPlan,normaliseProductionPlan} from './production.js';
 import {applySupplierCount} from './stocktake.js';
 import {documentedCorrections,margotPackCorrections} from './register-corrections.js';
-export async function readRegister(db){const r=await db.prepare('SELECT * FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();return r?{register:JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at,actor:r.actor}:{register:emptyRegister(),revision:0,saved_at:null,actor:null};}
+export async function readRegister(db){const r=await db.prepare('SELECT * FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();return r?{register:JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at,actor:r.actor,request_id:r.request_id}:{register:emptyRegister(),revision:0,saved_at:null,actor:null};}
 export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,forecastResult}){
  check(['alex','alinda'].includes(user.username),'Recipes, costs and Order Guy are available to Alex and Alinda.',403);
  const path=url.pathname;
  if(path==='/api/recipes/audit'){check(request.method==='GET','Method not allowed.',405);const r=await db.prepare('SELECT revision,actor,saved_at,reason FROM v2_recipe_events ORDER BY revision DESC LIMIT 50').all();return {events:r.results};}
  if(['/api/recipes','/api/import/recipes','/api/stocktake','/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){
-  if(request.method==='GET'){const r=await readRegister(db);if(['/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){const {changes,skipped,applied}=(path.endsWith('/margot-packs')?margotPackCorrections:documentedCorrections)(r.register);return {revision:r.revision,changes,skipped,applied};}return {...r,costs:r.register.recipes.map(recipe=>recipeCost(recipe,r.register))};}
+  if(request.method==='GET'){const r=await readRegister(db);if(['/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){const {changes,skipped,applied}=(path.endsWith('/margot-packs')?margotPackCorrections:documentedCorrections)(r.register);return {revision:r.revision,changes,skipped,applied};}return {...r,current_user:user.username,costs:r.register.recipes.map(recipe=>recipeCost(recipe,r.register))};}
   check(request.method==='POST','Method not allowed.',405);
   const b=await bodyOf(request);check(typeof b.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(b.request_id),'Missing save identifier.');const fingerprint=await hash(JSON.stringify(b));
   const replay=await db.prepare('SELECT * FROM v2_recipe_events WHERE request_id=?').bind(b.request_id).first();
-  if(replay){check(replay.request_hash===fingerprint,'Save identifier reused for different data.',409);return {revision:replay.revision,saved_at:replay.saved_at,replayed:true};}
+  if(replay){check(replay.request_hash===fingerprint,'Save identifier reused for different data.',409);const register=JSON.parse(replay.payload);return {revision:replay.revision,saved_at:replay.saved_at,actor:replay.actor,request_id:b.request_id,replayed:true,...(path==='/api/stocktake'?{register,current_user:user.username,costs:register.recipes.map(recipe=>recipeCost(recipe,register))}:{})};}
   const old=await readRegister(db);check(b.revision===old.revision,'The register changed. Reload before saving; your draft has not replaced it.',409);
   let draft=b.register,reason=b.reason,extra={};
   if(path==='/api/stocktake'){
@@ -36,7 +36,7 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
   for(const recipe of old.register.recipes){const next=register.recipes.find(x=>x.group===recipe.group&&x.version===recipe.version);check(next,'Keep earlier recipe versions.');if(JSON.stringify(next.ingredients)!==JSON.stringify(recipe.ingredients)||next.batch_kg!==recipe.batch_kg||next.effective_date!==recipe.effective_date||(next.plan_version??next.version)!==(recipe.plan_version??recipe.version)||JSON.stringify(next.consumables)!==JSON.stringify(recipe.consumables))throw new UserError('Changed recipe quantities need a new version. Keep the earlier version unchanged.');}
   const revision=old.revision+1,saved_at=new Date().toISOString();
   try{await db.prepare('INSERT INTO v2_recipe_events(request_id,request_hash,revision,payload,actor,saved_at,reason) VALUES(?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,revision,JSON.stringify(register),user.username,saved_at,reason.trim()).run();}catch{throw new UserError('Another save changed the register. Reload before retrying.',409);}
-  return {revision,saved_at,actor:user.username,...extra};
+  return {revision,saved_at,actor:user.username,request_id:b.request_id,...extra,...(path==='/api/stocktake'?{register,current_user:user.username,costs:register.recipes.map(recipe=>recipeCost(recipe,register))}:{})};
  }
  check(request.method==='GET','Method not allowed.',405);
  const from=dateKey(url.searchParams.get('from')??today()),to=dateKey(url.searchParams.get('to')??from);check(to>=from&&to<=addDays(from,30),'Choose at most 31 production days.');

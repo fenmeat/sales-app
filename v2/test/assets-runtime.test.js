@@ -33,7 +33,7 @@ test('real Cloudflare assets follow HTML redirects through the Worker to the pro
   assert.match(await response.text(),new RegExp('<title>[^<]*'+title,'i'));
   assert.match(response.headers.get('cache-control'),/(?:^|,\s*)no-store(?:,|$)/);
  }
- for(const path of ['/decimal-input.js','/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.js','/production.css','/staff-access.js','/staff-access.css','/stocktake.js','/stocktake-view.js'])assert.equal((await mf.dispatchFetch(origin+path)).status,200,path);
+ for(const path of ['/decimal-input.js','/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.js','/production.css','/staff-access.js','/staff-access.css','/stocktake.js','/stocktake-view.js','/stocktake-state.js'])assert.equal((await mf.dispatchFetch(origin+path)).status,200,path);
  assert.equal((await mf.dispatchFetch(origin+'/register-corrections.js')).status,404,'Private register migration is not a browser asset');
  assert.equal((await mf.dispatchFetch(origin+'/not-a-page')).status,404);
  assert.equal((await mf.dispatchFetch(origin+'/api/production?date=2026-10-07')).status,401,'HTML routing does not open business data');

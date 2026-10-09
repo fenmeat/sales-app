@@ -21,9 +21,9 @@ export function stockQuantity(material,packs,loose){
 }
 export function applySupplierCount(register,input,actor,asOf=today()){
  const date=dateKey(input.date),availableFrom=dateKey(input.available_from??date);
- check(date<=asOf,'A physical count cannot be dated in the future.');
- check(availableFrom>=date&&availableFrom<=addDays(date,31),'Choose an availability date within 31 days of the count.');
- check(availableFrom===date||input.availability_confirmed===true,'Confirm that the counted stock, less stock kept aside, is available for the selected production date.');
+ check(date<=asOf,'Die fisiese teldatum is in die toekoms. Kies die dag waarop jy werklik getel het; vandag is '+asOf+'.');
+ check(availableFrom>=date&&availableFrom<=addDays(date,31),'Die beskikbaarheidsdatum moet op of ná die teldatum en binne 31 dae daarvan wees.');
+ check(availableFrom===date||input.availability_confirmed===true,'Bevestig dat die getelde voorraad, ná enige verbruik of voorraad wat jy uitsit, op die gekose produksiedatum beskikbaar sal wees.');
  check(typeof input.supplier==='string','Choose a supplier.');
  const group=supplierGroups(register.materials).find(g=>g.key===input.supplier);check(group,'Supplier not found.');
  check(Array.isArray(input.rows)&&input.rows.length>0&&input.rows.length<=500,'Enter at least one count.');
