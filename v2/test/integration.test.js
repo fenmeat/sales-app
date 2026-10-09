@@ -64,7 +64,7 @@ test('protected pilot: sign-in, save, idempotency, concurrent edit, reconciliati
 });
 test('missing access configuration denies business endpoints and writes',async()=>{const env={APP_ENV:'test',DB:new D1()};for(const path of ['/api/bootstrap','/api/run','/api/sync/export']){const r=await worker.fetch(new Request(origin+path),env);assert.equal(r.status,503);}env.APP_ENV='production';assert.equal((await worker.fetch(new Request(origin+'/api/health'),env)).status,503);});
 
-test('recipe register is private, revisioned, retry-safe and independent of sales/production; Order Guy reads saved plans only',async()=>{
+test('recipe register is private, revisioned, retry-safe and independent of sales/production; Order Guy combines confirmed plans with forecast coverage',async()=>{
  const env={APP_ENV:'test',DB:new D1(),APP_ACCESS_KEYS:JSON.stringify({alex:key,staff:key+'-staff'})};let cookie='';
  async function call(path,body,extra={}){const r=await worker.fetch(new Request(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...extra},body:body?JSON.stringify(body):undefined}),env);return {status:r.status,data:await r.json(),headers:r.headers};}
  assert.equal((await call('/api/recipes')).status,401);assert.equal((await call('/api/sync/order-guy')).status,401);
@@ -79,10 +79,10 @@ test('recipe register is private, revisioned, retry-safe and independent of sale
  assert.equal((await call('/api/recipes',{...body,request_id:crypto.randomUUID()})).status,409);
  assert.equal((await call('/api/catalog',{revision:0,catalog})).status,200);
  let p=(await call('/api/production?date=2026-10-08')).data;p.plan.groups[0].planned=1;
- const saved=await call('/api/production',{plan:p.plan,revision:0,action:'save',request_id:crypto.randomUUID()});assert.equal(saved.status,200);
+ const saved=await call('/api/production',{plan:p.plan,revision:0,action:'confirm',acknowledge_warnings:true,request_id:crypto.randomUUID()});assert.equal(saved.status,200);
  const before=env.DB.db.prepare('SELECT * FROM v2_production_events').all();
  const exportData=(await call('/api/sync/order-guy?from=2026-10-08&to=2026-10-09',{},{Authorization:'Bearer '+key,'X-User':'alex'}));assert.equal(exportData.status,405);
- const report=await call('/api/sync/order-guy?from=2026-10-08&to=2026-10-09',null,{Authorization:'Bearer '+key,'X-User':'alex'});assert.equal(report.status,200);assert.equal(report.data.rows[0].gross,10);assert.equal(report.data.plans.length,1);assert.equal(report.data.coverage[1].status,'no_saved_plan');assert.equal(report.data.complete,false);
+ const report=await call('/api/sync/order-guy?from=2026-10-08&to=2026-10-09',null,{Authorization:'Bearer '+key,'X-User':'alex'});assert.equal(report.status,200);assert.equal(report.data.rows[0].gross,10);assert.equal(report.data.plans.length,1);assert.equal(report.data.coverage[1].status,'covered_by_other_day');assert.equal(report.data.complete,false);
  const changed=structuredClone(body);changed.revision=1;changed.request_id=crypto.randomUUID();changed.register.recipes[0].ingredients[0].qty=11;changed.register.recipes[0].batch_kg=11;assert.equal((await call('/api/recipes',changed)).status,400);
  changed.register=structuredClone(body.register);changed.register.materials[0].price.amount=3;assert.equal((await call('/api/recipes',changed)).status,200);
  assert.equal((await call('/api/recipes/audit')).data.events.length,2);assert.deepEqual(env.DB.db.prepare('SELECT * FROM v2_production_events').all(),before);assert.equal(env.DB.db.prepare('SELECT COUNT(*) n FROM v2_events').get().n,0);
