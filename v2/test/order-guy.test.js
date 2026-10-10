@@ -1,0 +1,63 @@
+import test from 'node:test';import assert from 'node:assert/strict';
+import {emptyRegister,validateRegister,recipeCost,orderGuyReport,priceFor} from '../src/order-guy.js';
+import {buildProductionPlan,productionProfile} from '../src/production.js';
+const date='2026-10-08';
+const material=(id='M1',unit='kg')=>({id,name:'Synthetic '+id,unit,supplier:'Test supplier',pack_qty:5,procure:true,source:'Test invoice',notes:'',price:{amount:10,status:'verified',date:'2026-10-01',valid_until:null,source:'TEST-001'},stock:{qty:0,date,reserve:0,incoming:[],source:'Count before production'}});
+const line=(qty=10,material='M1',unit='kg',status='approved')=>({material,qty,unit,status,note:''});
+const recipe=(group,version=1,mass=10)=>({group,version,effective_date:'2026-10-01',status:'approved',complete:true,batch_kg:mass,name:group,ingredients:[line(mass)],consumables:[],source:'Synthetic approved source',notes:''});
+function fixture(codes){const catalog={products:codes.map(code=>({code,name:code,unit:'bag',active:true,available:true})),routes:[{code:'MB',name:'MB',weekday:5}]};const plan=buildProductionPlan({date,target_date:'2026-10-09',routes:['MB'],items:catalog.products.map(p=>({...p,...productionProfile(p),demand:0,breakdown:[]})),snapshot:'s'});for(const i of plan.items)Object.assign(i,{stock:0,pack_plan:0,casing_plan:0,coldroom_casings:0});for(const g of plan.groups)Object.assign(g,{planned:0,coldroom_batches:0,roll_stock:10,cut_planned:0,rolls_per_batch:10,min_roll_stock:0});plan.phase='confirmed';const saved={plan,revision:2,saved_at:'2026-10-08T06:00:00Z',stale:false};const reg={...emptyRegister(),materials:[material(),material('P1','unit')],recipes:plan.groups.filter(g=>!['buy','pack'].includes(g.mode)).map(g=>recipe(g.id)),packaging:codes.map(product=>({product,complete:true,source:'Test',notes:'',lines:[line(2,'P1','unit')]}))};if(codes.includes('R07')){reg.recipes=reg.recipes.filter(r=>r.group!=='R07');reg.recipes.push(recipe('R07',1,10),{...recipe('R07',2,20),plan_version:2});}
+ const report=(overrides={})=>orderGuyReport({register:reg,registry_revision:1,plans:[saved],from:date,to:date,catalog,asOf:date,...overrides});return {catalog,plan,saved,reg,report};}
+test('shared recipes and trolley assignments count once; half Viennas scale; packing and cutting stock need no fresh ingredients',()=>{const {plan,report}=fixture(['R01','R02','V01','W07','R08','P01']);plan.groups.find(g=>g.id==='RUSSIAN').planned=2;plan.groups.find(g=>g.id==='V01').planned=.5;plan.groups.find(g=>g.id==='W07').cut_planned=4;plan.groups.find(g=>g.id==='R08').planned=3;plan.groups.find(g=>g.id==='P01').planned=1;plan.items.find(i=>i.code==='R01').pack_plan=4;plan.items.find(i=>i.code==='R02').pack_plan=3;plan.trolleys=[{id:'t1',slot1:'RUSSIAN',slot2:'RUSSIAN',casings:{P02:0,P03:0,P04:0}},{id:'t2',slot1:'V01_HALF',slot2:'',casings:{P02:0,P03:0,P04:0}}];const r=report();assert.equal(r.rows.find(x=>x.material==='M1').gross,25);assert.equal(r.rows.find(x=>x.material==='P1').gross,(4+3+6+3+1)*2);assert.equal(r.rows.find(x=>x.material==='M1').contributions.length,2);});
+test('Babalas basis follows saved plan version, including new same-basis recipe revisions',()=>{const {plan,reg,report}=fixture(['R07']);plan.groups[0].planned=1;assert.equal(report().rows.find(r=>r.material==='M1').gross,20);plan.items[0].recipe_version=1;assert.equal(report().rows.find(r=>r.material==='M1').gross,10);plan.items[0].recipe_version=2;reg.recipes.push({...recipe('R07',3,30),plan_version:2,effective_date:date});assert.equal(report().rows.find(r=>r.material==='M1').gross,30);assert.equal(plan.items[0].recipe_version,2);});
+test('unknown, draft, review recipe and missing dates remain explicit; a known zero generates no need',()=>{const {plan,reg,report,saved}=fixture(['W01']);plan.groups[0].planned=null;let r=report({to:'2026-10-09'});assert(r.rows.every(x=>x.net===null));assert.equal(r.coverage[1].status,'forecast_unavailable');assert.equal(r.complete,false);assert(r.warnings.some(w=>w.message.includes('unknown')));plan.groups[0].planned=0;assert.equal(report().rows.length,0);plan.groups[0].planned=1;reg.recipes[0].status='review';r=report();assert(!r.rows.some(x=>x.material==='M1'));assert(r.warnings.some(w=>w.message.includes('No approved recipe')));reg.recipes[0].status='approved';plan.phase='draft';assert.equal(report().rows.length,0);assert.equal(report().coverage[0].status,'forecast_unavailable');saved.revision=0;assert.equal(report().rows.length,0);});
+test('only latest passed plan is used; recipe effective dates and unavailable current products are respected',()=>{const {plan,catalog,reg,report}=fixture(['W01']);plan.groups[0].planned=1;reg.recipes.push({...recipe('W01',2,50),effective_date:'2026-10-09'});assert.equal(report().rows.find(r=>r.material==='M1').gross,10);catalog.products[0].available=false;assert.equal(report().rows.length,0);assert.equal(plan.groups[0].planned,1);});
+test('price gaps, expired specials, future prices and estimated casings cannot produce a complete cost',()=>{const reg={...emptyRegister(),materials:[material()],recipes:[recipe('W01')],packaging:[]};assert.equal(recipeCost(reg.recipes[0],reg,date).total,100);reg.materials[0].price.valid_until='2026-09-30';assert.equal(priceFor(reg.materials[0],date),null);assert.equal(recipeCost(reg.recipes[0],reg,date).total,null);assert.equal(recipeCost(reg.recipes[0],reg,date).known_subtotal,0);reg.materials[0].price.valid_until=null;reg.materials[0].price.date='2026-10-09';assert.equal(priceFor(reg.materials[0],date),null);reg.materials[0].price.date='2026-10-01';reg.recipes[0].ingredients[0].status='estimate';assert.equal(recipeCost(reg.recipes[0],reg,date).total,null);assert.equal(recipeCost(reg.recipes[0],reg,date).known_subtotal,100);});
+test('stock is not deducted twice; reserve and pack rounding apply; late deliveries cannot hide earlier shortages',()=>{const {plan,reg,report,saved}=fixture(['W01']);plan.groups[0].planned=1;const m=reg.materials[0];m.stock.qty=3;m.stock.reserve=1;let r=report().rows.find(x=>x.material==='M1');assert.equal(r.net,9.5);assert.equal(r.order_packs,2);m.stock.incoming=[{date:'2026-10-09',qty:100,reference:'PO1'}];const second=structuredClone(saved);second.plan.date='2026-10-09';second.plan.target_date='2026-10-10';r=report({plans:[saved,second],to:'2026-10-09'}).rows.find(x=>x.material==='M1');assert.equal(r.net,9.5);m.stock.date='2026-10-07';assert.equal(report().rows.find(x=>x.material==='M1').net,null);m.stock.date=date;m.stock.qty=null;assert.equal(report().rows.find(x=>x.material==='M1').net,null);});
+test('validation rejects duplicate identities, negative quantities, bad unit conversions and incorrect batch mass',()=>{const {reg}=fixture(['W01']);assert.doesNotThrow(()=>validateRegister(reg));for(const mutate of [r=>r.materials.push({...r.materials[0]}),r=>r.recipes[0].ingredients[0].qty=-1,r=>r.recipes[0].ingredients[0].unit='L',r=>r.recipes[0].batch_kg=999,r=>r.materials[0].stock.incoming.push({qty:1,date,reference:''})]){const r=structuredClone(reg);mutate(r);assert.throws(()=>validateRegister(r));}});
+
+function forecastDay(plan,demands){const p=structuredClone(plan);p.phase='draft';for(const i of p.items){i.demand=demands[i.code]??0;i.stock=null;i.pack_plan=null;i.coldroom_casings=null;}for(const g of p.groups){g.planned=null;g.coldroom_batches=null;}return {date:p.date,status:'forecast',plan:p,sources:[{route:'MB',snapshot:'current-forecast',model:'current app'}]};}
+function approveYields(reg,plan){for(const r of reg.recipes)r.forecast_yields=plan.items.filter(i=>i.group===r.group&&i.yield_qty>0).map(i=>({product:i.code,qty:i.yield_qty,status:'approved',source:'Synthetic measured output for this exact recipe'}));}
+test('forecast replaces an unconfirmed plan without needing future stock or changing saved decisions',()=>{
+ const {plan,reg,report}=fixture(['W01']);approveYields(reg,plan);plan.phase='draft';plan.groups[0].planned=999;plan.items[0].stock=999;
+ const f=forecastDay(plan,{W01:20}),before=JSON.stringify(plan),r=report({forecast_days:[f]});
+ const m=r.rows.find(x=>x.material==='M1'),pack=r.rows.find(x=>x.material==='P1');
+ assert.equal(m.gross,20);assert.equal(m.early_month_reserve,3);assert.equal(m.net,23);assert.equal(m.order_packs,5);assert.equal(pack.gross,40);assert.equal(r.coverage[0].status,'forecast');assert.equal(r.requirements[0].batches,2);assert.equal(JSON.stringify(plan),before);assert.equal(f.plan.items[0].stock,null);
+ // A confirmed zero wins even if a forecast was supplied; no reserve on zero.
+ plan.phase='confirmed';plan.groups[0].planned=0;assert.equal(report({forecast_days:[f]}).rows.length,0);
+});
+test('shared forecasts round combined batches once; yields must match the approved recipe version',()=>{
+ const {plan,reg,report}=fixture(['R01','R02','V01','R07']);approveYields(reg,plan);
+ const f=forecastDay(plan,{R01:10,R02:10,V01:16,R07:46});let r=report({plans:[],forecast_days:[f]});
+ assert.deepEqual(r.requirements.map(x=>x.batches),[1,1,1]);assert.equal(r.rows.find(x=>x.material==='M1').gross,40);
+ reg.recipes.find(x=>x.group==='R07'&&x.version===2).forecast_yields=[];r=report({plans:[],forecast_days:[f]});
+ assert.equal(r.rows.find(x=>x.material==='M1').net,null);assert(r.rows.find(x=>x.material==='M1').unresolved.some(x=>x.scope==='R07'));assert.equal(r.rows.find(x=>x.material==='P1').quantity_ready,true);
+});
+test('unknown forecast and roll output block shared material totals instead of publishing a partial order',()=>{
+ const {plan,reg,report}=fixture(['W01','W07']);approveYields(reg,plan);reg.recipes.find(x=>x.group==='W07').forecast_yields=[];
+ const f=forecastDay(plan,{W01:13,W07:3});f.plan.groups.find(x=>x.id==='W07').rolls_per_batch=null;
+ let r=report({plans:[],forecast_days:[f]});let m=r.rows.find(x=>x.material==='M1');assert.equal(m.gross,10);assert.equal(m.net,null);assert(m.unresolved.some(x=>x.scope==='W07'));
+ f.plan.items[0].demand=null;r=report({plans:[],forecast_days:[f]});assert.equal(r.rows.find(x=>x.material==='P1').net,null);
+});
+test('early-month reserve splits production dates 14/15 and month boundaries; stock covers the reserve before pack rounding',()=>{
+ const {plan,reg,saved,report}=fixture(['W01']);plan.groups[0].planned=1;
+ function span(from,to){const a=structuredClone(saved),b=structuredClone(saved);a.plan.date=from;b.plan.date=to;reg.materials.forEach(m=>m.stock.date=from);return report({from,to,plans:[a,b]});}
+ let r=span('2026-10-14','2026-10-15').rows.find(x=>x.material==='M1');assert.equal(r.gross,20);assert.equal(r.early_month_gross,10);assert.equal(r.early_month_reserve,1.5);assert.equal(r.net,21.5);assert.deepEqual(r.daily.map(d=>d.early_month_reserve),[1.5,0]);
+ r=span('2026-10-31','2026-11-01').rows.find(x=>x.material==='M1');assert.equal(r.early_month_reserve,1.5);assert.deepEqual(r.daily.map(d=>d.early_month_reserve),[0,1.5]);
+ reg.materials[0].stock.qty=30;r=span('2026-10-14','2026-10-15').rows.find(x=>x.material==='M1');assert.equal(r.net,0);assert.equal(r.order_packs,0);
+ reg.materials[0].procure=false;r=span('2026-10-14','2026-10-15').rows.find(x=>x.material==='M1');assert.equal(r.early_month_reserve,0);
+});
+test('missing recipe or packaging mapping holds final net totals and exports the gap',()=>{
+ const {plan,reg,report}=fixture(['W01','W02']);approveYields(reg,plan);reg.recipes=reg.recipes.filter(x=>x.group!=='W02');
+ const r=report({plans:[],forecast_days:[forecastDay(plan,{W01:13,W02:26})]});assert.equal(r.unmapped_requirements,true);assert(r.rows.every(x=>x.net===null));assert.equal(r.complete,false);
+});
+test('polony forecasts allocate whole casings per size and rolls require the current roll conversion',()=>{
+ const {plan,reg,report}=fixture(['P02','P03','P04','W07']);
+ const f=forecastDay(plan,{P02:20,P03:42,P04:32,W07:6});
+ let r=report({plans:[],forecast_days:[f]});assert.deepEqual(r.requirements.map(x=>x.batches),[2,1]);assert.equal(r.rows.find(x=>x.material==='M1').gross,30);assert.equal(r.rows.find(x=>x.material==='M1').net,null);
+ reg.recipes.find(x=>x.group==='W07').forecast_yields=[{product:'W07',qty:15,status:'approved',source:'Test measured recipe output'}];
+ r=report({plans:[],forecast_days:[f]});assert.equal(r.rows.find(x=>x.material==='M1').net,34.5);
+});
+test('yield evidence validation rejects absent sources, nonpositive output, duplicates and wrong recipe groups',()=>{
+ const {reg,plan}=fixture(['W01']);approveYields(reg,plan);assert.doesNotThrow(()=>validateRegister(reg));
+ for(const change of [y=>y.source='',y=>y.qty=0,y=>y.status='verified',y=>y.product='R01']){const copy=structuredClone(reg);change(copy.recipes[0].forecast_yields[0]);assert.throws(()=>validateRegister(copy));}
+});

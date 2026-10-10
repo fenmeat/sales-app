@@ -1,0 +1,8 @@
+node_modules/
+.wrangler/
+.dev.vars
+public/domain.js
+public/forecast.js
+
+/public/forecast-history.js
+/public/stocktake.js
