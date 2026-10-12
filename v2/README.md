@@ -1,3 +1,7 @@
+## 12 October 2026 — permanent PA read access
+
+Version 0.15.0 adds the owner-authorised read-only ChatGPT connector. See [PA_READ_ACCESS.md](PA_READ_ACCESS.md) for one-time connection, scope, revocation and verification. The endpoint still requires the owner's ChatGPT linking step before live assistant access is established. The 12 October owner instruction authorises this additive change to the chosen operational V2 Worker; historical pilot restrictions below remain history.
+
 # Fen Meat Sales V2 — separate pilot
 
 Pilot 0.10.1 implements the route-day workflow, the measured month-phase forecast trial, the owner-approved task-first interface and separate production planning. It is not ready to replace the current operational system: Zoho mapping checks and operational acceptance are pending. The owner confirmed the live read-only connection on 2 October 2026.
