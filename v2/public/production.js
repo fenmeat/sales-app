@@ -1,5 +1,6 @@
 import {check,dateKey,addDays,weekday,isQty,roundQty,cleanText,today,availableForLoad} from './domain.js';
-// Planning references only. Original production app and Master remain read-only.
+// Legacy references are provisional. Approved register yields take precedence
+// for new days; saved dated plans retain their recorded decisions.
 const yields={W01:13,W02:26,W03:24,W04:55,W05:50,W06:16,W07:29,W08:31,R05:22,R06:24,R07:23,V01:32,V02:36};
 const russianPieces={R01:60,R02:50,R03:40,R04:30};
 export const POLONY_CASING_YIELDS={P02:20,P03:14,P04:8};
@@ -11,7 +12,7 @@ const sumKnown=values=>values.some(v=>v==null)?null:values.reduce((a,v)=>a+v,0);
 const equivalent=(qty,yieldQty)=>qty==null?null:qty===0?0:yieldQty>0?qty/yieldQty:null;
 const has=(object,key)=>Object.prototype.hasOwnProperty.call(object,key);
 export function productionProfile(p){
- if(p.code==='R07'){const version=p.recipe_version??2;return {group:p.code,group_name:p.name,mode:'cooked',recipe_version:version,yield_qty:version===2?46:23,yield_note:version===2?'2 spice packs · 106 kg per batch. Planning yield: double the previous 23 sales units; verify actual packed output.':'Previous recipe basis. Update to the approved 2-pack recipe before new production.'};}
+ if(p.code==='R07'){const version=p.recipe_version??2;return {group:p.code,group_name:p.name,mode:'cooked',recipe_version:version,yield_qty:version===2?null:23,yield_note:version===2?'Current 106 kg recipe: saleable output needs confirmation. The old doubled output is withdrawn.':'Previous recipe basis. Update to the approved 2-pack recipe before new production.'};}
  if(russianPieces[p.code])return {group:'RUSSIAN',group_name:'Russian · shared recipe',mode:'shared',yield_qty:1310/russianPieces[p.code],yield_note:'Existing planner: 1,310 loose Russians per batch; '+russianPieces[p.code]+' per sales bag. Review after recipe changes.'};
  if(POLONY_CASING_YIELDS[p.code])return {group:'POLONY',group_name:'Polony · casing plan',mode:'casings',yield_qty:null,casing_yield_qty:POLONY_CASING_YIELDS[p.code],yield_note:'Owner-confirmed sales units per casing. Sizes remain separate, including cooked stock.'};
  if(p.code==='W07')return {group:p.code,group_name:p.name,mode:'rolls',yield_qty:yields.W07,yield_note:'Frozen rolls are cut into disks: 4 disks per tray, 5 trays per bag. New rolls must be frozen before cutting.'};
@@ -24,7 +25,7 @@ export function productionProfile(p){
 // batch counts as rolls/casings. Existing group.planned ALWAYS remains batches.
 export function normaliseProductionPlan(input){
  const plan=structuredClone(input);plan.planning_version=3;plan.trolleys=plan.trolleys??[];
- plan.items=plan.items.map(i=>{const profile=productionProfile(i.code==='R07'?{...i,recipe_version:i.recipe_version??1}:i);return {...i,...profile,yield_qty:has(i,'yield_qty')?i.yield_qty:profile.yield_qty,stock:i.stock??null,pack_plan:i.pack_plan??null,actual:i.actual??null,coldroom_casings:i.coldroom_casings??null,casing_plan:i.casing_plan??null};});
+ plan.items=plan.items.map(i=>{const profile=productionProfile(i.code==='R07'?{...i,recipe_version:i.recipe_version??1}:i);return {...i,...profile,yield_qty:has(i,'yield_qty')?i.yield_qty:profile.yield_qty,yield_note:i.yield_note??profile.yield_note,stock:i.stock??null,pack_plan:i.pack_plan??null,actual:i.actual??null,coldroom_casings:i.coldroom_casings??null,casing_plan:i.casing_plan??null};});
  plan.groups=plan.groups.map(g=>{const item=plan.items.find(i=>i.group===g.id);return {...g,name:item?.group_name??g.name,mode:item?.mode??g.mode,planned:g.planned??null,coldroom_batches:g.coldroom_batches??null,roll_stock:g.roll_stock??null,cut_planned:g.cut_planned??null,rolls_per_batch:g.rolls_per_batch??null,min_roll_stock:g.min_roll_stock??null,disks_per_roll:g.disks_per_roll??30};});
  return plan;
 }
@@ -33,7 +34,7 @@ export function upgradeBabalasRecipe(input){
  const plan=normaliseProductionPlan(input),item=plan.items.find(i=>i.code==='R07'),group=plan.groups.find(g=>g.id==='R07');
  check(item&&group&&item.recipe_version===1,'The current Babalas recipe is already selected.');
  plan.babalas_recipe_update={from_version:1,to_version:2,previous_yield:item.yield_qty,previous_batches:group.planned,previous_cooked_batches:group.coldroom_batches,previous_trolleys:structuredClone(plan.trolleys.filter(t=>t.slot1==='R07'||t.slot2==='R07'))};
- item.recipe_version=2;item.yield_qty=item.yield_qty>0?item.yield_qty*2:46;
+ item.recipe_version=2;item.yield_qty=null;item.yield_note=productionProfile(item).yield_note;
  group.coldroom_batches=group.coldroom_batches===null?null:group.coldroom_batches/2;
  // Explicit upgrade requires a new cooking decision. Counts, packing, actuals
  // and every unrelated decision remain intact; old revisions retain the past.
@@ -63,12 +64,16 @@ export function aggregateProductionDemand(products,sources){return products.map(
  return {route:s.route,name:s.name,qty,source:manual!=null?'Your route plan':!p.available?'Not available for loading':'Forecast',revision:s.revision,warning:manual==null&&p.available?s.forecasts[p.code]?.warning??null:null};});
  return {code:p.code,name:p.name,unit:p.unit,demand:breakdown.some(x=>x.qty===null)?null:roundQty(breakdown.reduce((a,x)=>a+x.qty,0)),breakdown,...productionProfile(p)};
 });}
-export function buildProductionPlan({date,target_date,routes,items,snapshot,previous=null,yieldSettings=null,settingsPlan=null}){
+export function buildProductionPlan({date,target_date,routes,items,snapshot,previous=null,yieldSettings=null,settingsPlan=null,register=null}){
  const prev=previous?normaliseProductionPlan(previous):null,old=new Map((prev?.items??[]).map(i=>[i.code,i]));
  const plan={...(prev?.babalas_recipe_update?{babalas_recipe_update:structuredClone(prev.babalas_recipe_update)}:{}),planning_version:3,trolleys:structuredClone(prev?.trolleys??[]),date,target_date,routes,phase:'draft',demand_snapshot:snapshot,notes:prev?.notes??'',items:items.map(i=>{
   const prior=old.get(i.code),setting=yieldSettings?.find(x=>x.code===i.code);
   const sameRecipe=i.code!=='R07'||setting?.recipe_version===i.recipe_version;
-  return {...i,...(prior&&i.code==='R07'?{recipe_version:prior.recipe_version}:{}),stock:prior?.stock??null,yield_qty:prior?prior.yield_qty:setting&&sameRecipe?setting.yield_qty:i.yield_qty,pack_plan:prior?.pack_plan??null,actual:prior?.actual??null,coldroom_casings:prior?.coldroom_casings??null,casing_plan:prior?.casing_plan??null};
+  const recipe=register?.recipes.filter(r=>r.group===i.group&&r.effective_date<=date&&(i.code!=='R07'||(r.plan_version??r.version)===i.recipe_version)).sort((a,b)=>b.effective_date.localeCompare(a.effective_date)||b.version-a.version)[0];
+  const approved=recipe?.status==='approved'?recipe.forecast_yields?.find(y=>y.product===i.code&&y.status==='approved'):null;
+  // Never carry the withdrawn doubled Babalas reference into a new day.
+  const reference=i.code==='R07'&&i.recipe_version===2?null:setting&&sameRecipe?setting.yield_qty:i.yield_qty;
+  return {...i,...(prior&&i.code==='R07'?{recipe_version:prior.recipe_version}:{}),stock:prior?.stock??null,yield_qty:prior?prior.yield_qty:approved?.qty??reference,yield_note:prior?.yield_note??(approved?approved.source:i.yield_note),pack_plan:prior?.pack_plan??null,actual:prior?.actual??null,coldroom_casings:prior?.coldroom_casings??null,casing_plan:prior?.casing_plan??null};
  }),groups:[]};
  for(const i of prev?.items??[])if(!plan.items.some(x=>x.code===i.code))plan.items.push({...i,demand:0,breakdown:[],retained:true});
  for(const i of plan.items)if(!plan.groups.some(g=>g.id===i.group)){

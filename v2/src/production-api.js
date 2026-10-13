@@ -1,5 +1,6 @@
 import {check,UserError,dateKey,weekday} from './domain.js';
 import {hash} from './auth.js';
+import {readRegister} from './order-guy-api.js';
 import {productionContext,nextProductionTarget,aggregateProductionDemand,buildProductionPlan,validateProductionEdits,productionSummary,normaliseProductionPlan,productionPlanningView,upgradeBabalasRecipe,babalasRecipeUpdateNeeded} from './production.js';
 export async function productionApi({request,url,db,user,catalog,forecastResult,runResult,bodyOf}){
  const last=date=>db.prepare('SELECT * FROM v2_production_events WHERE production_date=? ORDER BY revision DESC LIMIT 1').bind(date).first();
@@ -20,7 +21,8 @@ export async function productionApi({request,url,db,user,catalog,forecastResult,
   const target_date=nextProductionTarget(date,catalog.routes),routes=catalog.routes.filter(r=>r.weekday===weekday(target_date)).map(r=>r.code);productionContext({date,target_date,routes},catalog);
   const fresh=await needs(target_date,routes),recent=await db.prepare('SELECT payload FROM v2_production_events WHERE production_date<? ORDER BY production_date DESC,revision DESC LIMIT 1').bind(date).first();
   const settingsPlan=recent?normaliseProductionPlan(JSON.parse(recent.payload)):null;
-  const plan=buildProductionPlan({date,target_date,routes,...fresh,yieldSettings:settingsPlan?.items,settingsPlan});return {plan,revision:0,summary:productionSummary(productionPlanningView(plan,catalog)),stale:false};
+  const {register}=await readRegister(db,catalog);
+  const plan=buildProductionPlan({date,target_date,routes,...fresh,yieldSettings:settingsPlan?.items,settingsPlan,register});return {plan,revision:0,summary:productionSummary(productionPlanningView(plan,catalog)),stale:false};
  }
  const b=await bodyOf(request);check(['save','refresh','confirm','actuals','update_recipe'].includes(b.action),'Unknown production action.');check(typeof b.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(b.request_id),'Missing save identifier.');check(Number.isSafeInteger(b.revision)&&b.revision>=0,'Invalid revision.');
  const fingerprint=await hash(JSON.stringify(b)),replay=await db.prepare('SELECT * FROM v2_production_events WHERE request_id=?').bind(b.request_id).first();
@@ -29,7 +31,7 @@ export async function productionApi({request,url,db,user,catalog,forecastResult,
  const previous=old?normaliseProductionPlan(JSON.parse(old.payload)):null;
  if(previous&&b.action!=='refresh')check(previous.target_date===b.plan.target_date&&JSON.stringify(previous.routes)===JSON.stringify(b.plan.routes),'Refresh route needs after changing dates or routes.');
  let base=previous;
- if(!base){const fresh=await needs(b.plan.target_date,b.plan.routes);base=buildProductionPlan({date:b.plan.date,target_date:b.plan.target_date,routes:b.plan.routes,...fresh});}
+ if(!base){const fresh=await needs(b.plan.target_date,b.plan.routes),{register}=await readRegister(db,catalog);base=buildProductionPlan({date:b.plan.date,target_date:b.plan.target_date,routes:b.plan.routes,...fresh,register});}
  let plan=validateProductionEdits(b.plan,base);
  if(b.action==='update_recipe'){plan=upgradeBabalasRecipe(plan);}
  if(b.action==='refresh'){const fresh=await needs(b.plan.target_date,b.plan.routes);plan=buildProductionPlan({date:b.plan.date,target_date:b.plan.target_date,routes:b.plan.routes,...fresh,previous:plan});}

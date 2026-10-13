@@ -26,7 +26,7 @@ test('forecast replaces an unconfirmed plan without needing future stock or chan
  plan.phase='confirmed';plan.groups[0].planned=0;assert.equal(report({forecast_days:[f]}).rows.length,0);
 });
 test('shared forecasts round combined batches once; yields must match the approved recipe version',()=>{
- const {plan,reg,report}=fixture(['R01','R02','V01','R07']);approveYields(reg,plan);
+ const {plan,reg,report}=fixture(['R01','R02','V01','R07']);plan.items.find(i=>i.code==='R07').yield_qty=46;approveYields(reg,plan);
  const f=forecastDay(plan,{R01:10,R02:10,V01:16,R07:46});let r=report({plans:[],forecast_days:[f]});
  assert.deepEqual(r.requirements.map(x=>x.batches),[1,1,1]);assert.equal(r.rows.find(x=>x.material==='M1').gross,40);
  reg.recipes.find(x=>x.group==='R07'&&x.version===2).forecast_yields=[];r=report({plans:[],forecast_days:[f]});
@@ -48,7 +48,7 @@ test('early-month reserve splits production dates 14/15 and month boundaries; st
 });
 test('missing recipe or packaging mapping holds final net totals and exports the gap',()=>{
  const {plan,reg,report}=fixture(['W01','W02']);approveYields(reg,plan);reg.recipes=reg.recipes.filter(x=>x.group!=='W02');
- const r=report({plans:[],forecast_days:[forecastDay(plan,{W01:13,W02:26})]});assert.equal(r.unmapped_requirements,true);assert(r.rows.every(x=>x.net===null));assert.equal(r.complete,false);
+ const r=report({plans:[],forecast_days:[forecastDay(plan,{W01:13,W02:26})]});assert.equal(r.unmapped_requirements,true);assert.equal(r.rows.find(x=>x.material==='M1').net,null);assert.equal(r.rows.find(x=>x.material==='P1').quantity_ready,true);assert.equal(r.complete,false);
 });
 test('polony forecasts allocate whole casings per size and rolls require the current roll conversion',()=>{
  const {plan,reg,report}=fixture(['P02','P03','P04','W07']);
@@ -60,4 +60,20 @@ test('polony forecasts allocate whole casings per size and rolls require the cur
 test('yield evidence validation rejects absent sources, nonpositive output, duplicates and wrong recipe groups',()=>{
  const {reg,plan}=fixture(['W01']);approveYields(reg,plan);assert.doesNotThrow(()=>validateRegister(reg));
  for(const change of [y=>y.source='',y=>y.qty=0,y=>y.status='verified',y=>y.product='R01']){const copy=structuredClone(reg);change(copy.recipes[0].forecast_yields[0]);assert.throws(()=>validateRegister(copy));}
+});
+
+test('unknown packaging cannot block a verified ingredient but shared packing remains unresolved',()=>{
+ const {plan,reg,report}=fixture(['W01','W02']);plan.groups.forEach(g=>g.planned=1);reg.packaging[1].complete=false;
+ const r=report();assert.equal(r.rows.find(x=>x.material==='M1').net,23);assert.equal(r.rows.find(x=>x.material==='P1').net,null);assert.equal(r.complete,false);
+});
+test('mixed recipe and resale material converts sachets, reserves only manufacture and nets stock once',()=>{
+ const {plan,reg,report}=fixture(['W01','S02']);Object.assign(reg.materials[0],{resale_product:'S02',resale_qty_per_sales_unit:.2});reg.materials[0].stock.qty=5;
+ plan.groups.find(g=>g.id==='W01').planned=1;plan.items.find(i=>i.code==='S02').demand=50;
+ assert.doesNotThrow(()=>validateRegister(reg));const m=report().rows.find(x=>x.material==='M1');assert.equal(m.gross,20);assert.equal(m.early_month_reserve,1.5);assert.equal(m.net,16.5);assert.equal(m.order_packs,4);
+ reg.materials[0].resale_qty_per_sales_unit=0;assert.throws(()=>validateRegister(reg));
+});
+test('changed purchase pack cannot silently reinterpret an old physical count',()=>{
+ const {plan,reg,report}=fixture(['W01']);plan.groups[0].planned=1;const m=reg.materials[0];m.stock.count={packs:2,loose:0,pack_qty:10,unit:'kg'};m.stock.qty=20;
+ let row=report().rows.find(x=>x.material==='M1');assert.equal(row.net,null);assert.match(row.inventory_reason,/pakgrootte/);assert.equal(m.stock.qty,20);
+ m.stock.count={packs:0,loose:20,pack_qty:10,unit:'kg'};row=report().rows.find(x=>x.material==='M1');assert.equal(row.net,0,'loose-unit count is independent of changed purchase pack');
 });

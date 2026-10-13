@@ -44,6 +44,7 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
  const plans=[];for(const e of saved.results){try{plans.push(await readPlan(e.production_date));}catch{plans.push({plan:JSON.parse(e.payload),revision:e.revision,saved_at:e.saved_at,actor:e.actor,stale:null,source_warning:'Current route demand could not be verified.'});}}
  // A forecast is a read-only purchasing estimate, never a synthetic saved plan.
  // Confirmed plans claim their route coverage first, including explicit zero.
+ const r=await readRegister(db,catalog);
  const claimed=new Map();for(const p of plans.filter(p=>p.plan.phase==='confirmed'))for(const route of p.plan.routes)claimed.set(p.plan.target_date+'|'+route,p.plan.date);
  const forecast_days=[];
  for(let date=from;date<=to;date=addDays(date,1)){
@@ -62,9 +63,9 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
    const settingsPlan=savedPlan?normaliseProductionPlan(savedPlan.plan):recent?normaliseProductionPlan(JSON.parse(recent.payload)):null;
    const items=aggregateProductionDemand(catalog.products.filter(p=>p.active&&p.available),sources);
    const snapshot=await hash(JSON.stringify({target_date,routes,sources:sources.map(s=>s.snapshot)}));
-   const plan=buildProductionPlan({date,target_date,routes,items,snapshot,yieldSettings:settingsPlan?.items,settingsPlan});
+   const plan=buildProductionPlan({date,target_date,routes,items,snapshot,yieldSettings:settingsPlan?.items,settingsPlan,register:r.register});
    forecast_days.push({...base,status:'forecast',plan,sources:sources.map(({run,forecasts,...s})=>s),settings_date:settingsPlan?.date??null});
   }catch{forecast_days.push({...base,status:'forecast_unavailable',source_warning:'The current app forecast could not be read. Requirements remain unresolved.'});}
  }
- const r=await readRegister(db,catalog);return {...orderGuyReport({register:r.register,registry_revision:r.revision,plans,forecast_days,from,to,catalog}),register:r.register,registry_saved_at:r.saved_at,plans,catalog};
+ return {...orderGuyReport({register:r.register,registry_revision:r.revision,plans,forecast_days,from,to,catalog}),register:r.register,registry_saved_at:r.saved_at,plans,catalog};
 }
