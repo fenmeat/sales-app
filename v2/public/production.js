@@ -1,4 +1,4 @@
-import {check,dateKey,addDays,weekday,isQty,roundQty,cleanText,today,availableForLoad} from './domain.js';
+import {check,dateKey,addDays,routeScheduled,isQty,roundQty,cleanText,today,availableForLoad} from './domain.js';
 // Legacy references are provisional. Approved register yields take precedence
 // for new days; saved dated plans retain their recorded decisions.
 const yields={W01:13,W02:26,W03:24,W04:55,W05:50,W06:16,W07:29,W08:31,R05:22,R06:24,R07:23,V01:32,V02:36};
@@ -51,7 +51,7 @@ export function productionPlanningView(input,catalog,asOf=today()){
  for(const row of plan.trolleys){for(const slot of ['slot1','slot2'])if(!recipes.has(row[slot]))row[slot]='';for(const code of Object.keys(row.casings))if(!plan.items.some(i=>i.code===code))row.casings[code]=0;}
  return plan;
 }
-export function nextProductionTarget(date,routes){for(let n=1;n<=7;n++){const d=addDays(date,n);if(routes.some(r=>r.weekday===weekday(d)))return d;}return addDays(date,1);}
+export function nextProductionTarget(date,routes){for(let n=1;n<=28;n++){const d=addDays(date,n);if(routes.some(r=>routeScheduled(r,d)))return d;}return addDays(date,1);}
 export function productionContext(plan,catalog){
  dateKey(plan.date);dateKey(plan.target_date);check(plan.target_date>plan.date&&plan.target_date<=addDays(plan.date,14),'Choose a route date after production, within 14 days.');
  check(Array.isArray(plan.routes)&&plan.routes.length>0&&plan.routes.length<=50,'Choose at least one route.');
@@ -244,6 +244,7 @@ function trolleySummary(plan,groups){
   if(total>capacity)notes.push('Casings exceed the selected polony batch capacity');
   if(capacity>total)notes.push((capacity-total)+' casing spaces still need sizes');
   if(!slots.some(s=>s.id)&&total===0)notes.push('No recipes selected');
+  if(slots.filter(s=>s.id).length===1&&slots.some(s=>s.fraction===1))notes.push('Fill both batch positions before cooking this trolley');
   warnings.push(...notes.map(note=>'Trolley '+(index+1)+': '+note));
   return {...row,number:index+1,slots,casing_capacity:capacity,casing_total:total,show_casings:capacity>0||total>0,warnings:notes};
  });

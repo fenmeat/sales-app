@@ -46,3 +46,9 @@ test('server rejects unknown recipes, duplicate IDs, extra positions, invalid ca
  for(const change of bads){const q=structuredClone(p);change(q);assert.throws(()=>validateProductionEdits(q,p));}
  p.trolleys=Array.from({length:8},()=>row());assert.equal(validateProductionEdits(p,p).trolleys.length,8);p.groups.find(g=>g.id==='RUSSIAN').planned=17;assert.ok(productionSummary(p).trolley.warnings.some(w=>w.includes('More than eight')));
 });
+
+// Russian/Polony extra batches may be intentional to fill both positions.
+test('a single full batch needs a second trolley position; a mixed full trolley is valid',()=>{
+ const p=chosen(make());p.groups.find(g=>g.id==='RUSSIAN').planned=1;p.trolleys=[row('RUSSIAN','')];assert(productionSummary(p).trolley.warnings.some(w=>w.includes('Fill both batch positions')));
+ p.groups.find(g=>g.id==='R06').planned=1;p.trolleys[0].slot2='R06';assert(!productionSummary(p).trolley.warnings.some(w=>w.includes('Fill both batch positions')));
+});

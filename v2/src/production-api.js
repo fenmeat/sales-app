@@ -1,11 +1,11 @@
-import {check,UserError,dateKey,weekday} from './domain.js';
+import {check,UserError,dateKey,routeScheduled,routeName} from './domain.js';
 import {hash} from './auth.js';
 import {readRegister} from './order-guy-api.js';
 import {productionContext,nextProductionTarget,aggregateProductionDemand,buildProductionPlan,validateProductionEdits,productionSummary,normaliseProductionPlan,productionPlanningView,upgradeBabalasRecipe,babalasRecipeUpdateNeeded} from './production.js';
 export async function productionApi({request,url,db,user,catalog,forecastResult,runResult,bodyOf}){
  const last=date=>db.prepare('SELECT * FROM v2_production_events WHERE production_date=? ORDER BY revision DESC LIMIT 1').bind(date).first();
  async function needs(target,routes){
-  const sources=await Promise.all(routes.map(async route=>{const [saved,f]=await Promise.all([runResult(db,target,route),forecastResult(db,target,route,catalog)]);return {route,name:catalog.routes.find(r=>r.code===route).name,revision:saved?.revision??0,run:saved?.run??null,forecasts:f.forecasts,forecast_snapshot:f.snapshot};}));
+  const sources=await Promise.all(routes.map(async route=>{const [saved,f]=await Promise.all([runResult(db,target,route),forecastResult(db,target,route,catalog)]);return {route,name:routeName(catalog.routes.find(r=>r.code===route),target),revision:saved?.revision??0,run:saved?.run??null,forecasts:f.forecasts,forecast_snapshot:f.snapshot};}));
   const products=catalog.products.filter(p=>p.active&&p.available);
   const items=aggregateProductionDemand(products,sources);
   return {items,snapshot:await hash(JSON.stringify({target,routes,items}))};
@@ -18,7 +18,7 @@ export async function productionApi({request,url,db,user,catalog,forecastResult,
  if(request.method==='GET'){
   const date=dateKey(url.searchParams.get('date')),old=await last(date);
   if(old){const r=result(old);try{const fresh=await needs(r.plan.target_date,r.plan.routes);r.stale=fresh.snapshot!==r.plan.demand_snapshot;}catch{r.stale=true;r.source_warning='Current route needs could not be checked. Saved plan retained.';}return r;}
-  const target_date=nextProductionTarget(date,catalog.routes),routes=catalog.routes.filter(r=>r.weekday===weekday(target_date)).map(r=>r.code);productionContext({date,target_date,routes},catalog);
+  const target_date=nextProductionTarget(date,catalog.routes),routes=catalog.routes.filter(r=>routeScheduled(r,target_date)).map(r=>r.code);productionContext({date,target_date,routes},catalog);
   const fresh=await needs(target_date,routes),recent=await db.prepare('SELECT payload FROM v2_production_events WHERE production_date<? ORDER BY production_date DESC,revision DESC LIMIT 1').bind(date).first();
   const settingsPlan=recent?normaliseProductionPlan(JSON.parse(recent.payload)):null;
   const {register}=await readRegister(db,catalog);

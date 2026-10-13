@@ -45,3 +45,14 @@ test('removed adjustments cannot be newly entered and historical amounts remain 
  const previous=structuredClone(r);previous.phase='loaded';validateRun(r,previous,'save');
  assert.equal(summarise(r).items[0].sold,17);assert.equal(r.cash.float,10000);
 });
+
+test('route cycles alternate across month/year boundaries, preserve weekly routes and validate inputs',async()=>{
+ const {routeScheduled,routeName,comparableRouteVisit,previousRouteVisit,validateCatalog}=await import('../src/domain.js');
+ const a={code:'A',name:'Friday A',weekday:5,schedule:{anchor_date:'2026-10-09',weeks:2,active_weeks:[0]}},b={...a,code:'B',schedule:{...a.schedule,anchor_date:'2026-10-16'}};
+ for(const d of ['2026-10-09','2026-10-23','2026-11-06','2027-01-01']){assert(routeScheduled(a,d));assert(!routeScheduled(b,d));}
+ assert(routeScheduled(b,'2026-10-16'));assert(!routeScheduled(a,'2026-10-10'));assert(routeScheduled({...a,schedule:null},'2026-10-16'));
+ assert.equal(previousRouteVisit(b,'2026-10-16','2026-10-13'),'2026-10-02');assert.equal(previousRouteVisit(a,'2026-10-16','2026-10-13'),null);
+ const t={code:'T',name:'Tuesday',weekday:2,schedule:{anchor_date:'2026-10-06',weeks:2,active_weeks:[0,1],names:['Tuesday + extension','Tuesday']}};
+ assert.equal(routeName(t,'2026-10-06'),'Tuesday + extension');assert.equal(routeName(t,'2026-10-13'),'Tuesday');assert.equal(routeName(t,'2026-09-29'),'Tuesday');assert(comparableRouteVisit(t,'2026-10-13','2026-09-29'));assert(!comparableRouteVisit(t,'2026-10-13','2026-10-06'));
+ const c={products:[product],routes:[a,b,t]};validateCatalog(c);for(const invalid of [{...a.schedule,active_weeks:[]},{...a.schedule,active_weeks:[2]},{...a.schedule,anchor_date:'2026-10-08'},{...a.schedule,weeks:0},{...a.schedule,names:['only one']}])assert.throws(()=>validateCatalog({...c,routes:[{...a,schedule:invalid}]}));
+});

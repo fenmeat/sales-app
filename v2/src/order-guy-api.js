@@ -1,4 +1,4 @@
-import {check,UserError,dateKey,addDays,today,weekday} from './domain.js';
+import {check,UserError,dateKey,addDays,today,routeScheduled,routeName} from './domain.js';
 import {hash} from './auth.js';
 import {emptyRegister,validateRegister,recipeCost,orderGuyReport,withResaleMaterials} from './order-guy.js';
 import {nextProductionTarget,aggregateProductionDemand,buildProductionPlan,normaliseProductionPlan} from './production.js';
@@ -50,7 +50,7 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
  for(let date=from;date<=to;date=addDays(date,1)){
   const savedPlan=plans.find(p=>p.plan.date===date);if(savedPlan?.plan.phase==='confirmed')continue;
   const target_date=savedPlan?.plan.target_date??nextProductionTarget(date,catalog.routes);
-  const requested=savedPlan?.plan.routes??catalog.routes.filter(r=>r.weekday===weekday(target_date)).map(r=>r.code);
+  const requested=(savedPlan?.plan.routes??catalog.routes.map(r=>r.code)).filter(code=>routeScheduled(catalog.routes.find(r=>r.code===code),target_date));
   const overlaps=requested.filter(route=>claimed.has(target_date+'|'+route)).map(route=>({route,date:claimed.get(target_date+'|'+route)}));
   const routes=requested.filter(route=>!claimed.has(target_date+'|'+route));
   const base={date,target_date,routes,overlaps,replaced_draft_revision:savedPlan?.revision??null};
@@ -58,7 +58,7 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
   // Claim even failed reads: a later date must not disguise a gap by shifting it.
   for(const route of routes)claimed.set(target_date+'|'+route,date);
   try{
-   const sources=await Promise.all(routes.map(async route=>{const f=await forecastResult(db,target_date,route,catalog);return {route,name:catalog.routes.find(r=>r.code===route)?.name??route,revision:0,run:null,...f};}));
+   const sources=await Promise.all(routes.map(async route=>{const f=await forecastResult(db,target_date,route,catalog);return {route,name:routeName(catalog.routes.find(r=>r.code===route),target_date)||route,revision:0,run:null,...f};}));
    const recent=savedPlan?null:await db.prepare('SELECT payload FROM v2_production_events WHERE production_date<? ORDER BY production_date DESC,revision DESC LIMIT 1').bind(date).first();
    const settingsPlan=savedPlan?normaliseProductionPlan(savedPlan.plan):recent?normaliseProductionPlan(JSON.parse(recent.payload)):null;
    const items=aggregateProductionDemand(catalog.products.filter(p=>p.active&&p.available),sources);

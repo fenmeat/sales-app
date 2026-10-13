@@ -77,3 +77,8 @@ test('changed purchase pack cannot silently reinterpret an old physical count',(
  let row=report().rows.find(x=>x.material==='M1');assert.equal(row.net,null);assert.match(row.inventory_reason,/pakgrootte/);assert.equal(m.stock.qty,20);
  m.stock.count={packs:0,loose:20,pack_qty:10,unit:'kg'};row=report().rows.find(x=>x.material==='M1');assert.equal(row.net,0,'loose-unit count is independent of changed purchase pack');
 });
+
+test('non-purchased uncounted ingredients retain usage and cost without blocking purchasable quantities',()=>{
+ const {plan,reg,report}=fixture(['W01']);plan.groups[0].planned=1;reg.materials[0].procure=false;reg.materials[0].stock={qty:null,date:null,reserve:null,incoming:[],source:''};
+ const r=report(),raw=r.rows.find(x=>x.material==='M1');assert.equal(raw.gross,10);assert.equal(raw.stock.qty,null);assert.equal(raw.procure,false);assert.equal(raw.order_packs,null);assert.equal(r.complete,true);assert.equal(recipeCost(reg.recipes[0],reg,date).total,100);
+});

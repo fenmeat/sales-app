@@ -1,4 +1,4 @@
-import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,summarise,isQty,effectiveAvailability} from './domain.js';
+import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,summarise,isQty,effectiveAvailability,routeScheduled,routeName,comparableRouteVisit,previousRouteVisit} from './domain.js';
 import {orderGuyApi} from './order-guy-api.js';
 import {productionApi} from './production-api.js';
 import {forecastRoute} from './month-cycle.js';
@@ -23,13 +23,14 @@ async function forecastResult(db,date,route,c){
  (SELECT payload FROM v2_events a WHERE a.run_id=e.run_id AND a.action IN ('returns','close','reopen','load') ORDER BY revision DESC LIMIT 1) AS confirmation_payload
  FROM v2_events e JOIN (SELECT run_id,MAX(revision) revision FROM v2_events WHERE route=? AND service_date>=? AND service_date<? GROUP BY run_id) latest ON e.run_id=latest.run_id AND e.revision=latest.revision`).bind(route,from,date).all();
  const effective=effectiveHistory(history.results,events.results,{from,to:date,asOf});
- const {forecasts,month_cycle}=forecastRoute(effective.rows,date,c.products.map(p=>p.code));
- let expected=addDays(date,-7);while(expected>=asOf)expected=addDays(expected,-7);
- const expectedRows=effective.rows.filter(r=>r.date===expected);
- const snapshot=await hash(JSON.stringify({version:'1.2-month-phase',date,route,products:c.products.map(p=>p.code).sort(),rows:effective.rows,excluded:effective.excluded}));
- return {forecasts,snapshot,model:'8/12-week baseline with measured route month phase',month_cycle,expected_visit:expected,latest_actual:effective.rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,provisional_count:effective.rows.filter(r=>r.quality==='provisional').length};
+ const definition=c.routes.find(r=>r.code===route),rows=effective.rows.filter(r=>comparableRouteVisit(definition,date,r.date));
+ const {forecasts,month_cycle}=forecastRoute(rows,date,c.products.map(p=>p.code));
+ for(const f of Object.values(forecasts)){if(f.missing_dates)f.missing_dates=f.missing_dates.filter(d=>comparableRouteVisit(definition,date,d));if(!routeScheduled(definition,date))f.warning='This route is not scheduled for this date. Choose a scheduled date, or enter an explicit exceptional load.';}
+ const expected=previousRouteVisit(definition,date,asOf),expectedRows=rows.filter(r=>r.date===expected);
+ const snapshot=await hash(JSON.stringify({version:'1.3-route-cycle',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
+ return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline from comparable route-cycle visits with measured month phase',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.16.1',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.16.2',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);

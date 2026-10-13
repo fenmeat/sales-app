@@ -4,6 +4,16 @@ export function dateKey(value) { const stamp=typeof value==='string'?Date.parse(
 export const today = () => new Date(Date.now()+7200000).toISOString().slice(0,10);
 export const addDays = (date,n) => new Date(Date.parse(date+'T12:00:00Z')+n*86400000).toISOString().slice(0,10);
 export const weekday = date => new Date(date+'T12:00:00Z').getUTCDay();
+// A dated cycle belongs to the route catalogue, not to an individual sales run.
+export function routeCycle(route,date){const s=route?.schedule;if(!s)return 0;const weeks=Math.floor((Date.parse(date+'T12:00:00Z')-Date.parse(s.anchor_date+'T12:00:00Z'))/604800000);return ((weeks%s.weeks)+s.weeks)%s.weeks;}
+export function routeScheduled(route,date){return !!route&&route.weekday===weekday(date)&&(!route.schedule||route.schedule.active_weeks.includes(routeCycle(route,date)));}
+export function routeName(route,date){return route?.schedule?.names?.[routeCycle(route,date)]??route?.name??'';}
+export function comparableRouteVisit(route,target,date){return routeScheduled(route,target)&&routeScheduled(route,date)&&(!route.schedule?.names||routeName(route,target)===routeName(route,date));}
+export function previousRouteVisit(route,date,asOf=today()){
+ if(!routeScheduled(route,date))return null;
+ let previous=addDays(date,-7);while(previous>=asOf||!comparableRouteVisit(route,date,previous))previous=addDays(previous,-7);
+ return previous;
+}
 export const roundQty = x => Math.round(x*1000)/1000;
 export const isQty = x => typeof x==='number' && Number.isFinite(x) && x>=0 && x<=100000 && Math.abs(x*1000-Math.round(x*1000))<0.00001;
 export const isMoney = x => Number.isSafeInteger(x) && x>=0 && x<=1000000000;
@@ -36,7 +46,10 @@ export function validateCatalog(c) {
   check(c && Array.isArray(c.products) && c.products.length>0 && c.products.length<=200 && Array.isArray(c.routes) && c.routes.length>0 && c.routes.length<=50,'Invalid product/route catalogue.');
   for(const list of [c.products,c.routes]) { const seen=new Set(); for(const p of list) { check(/^[A-Z0-9_-]{1,25}$/.test(p.code) && !seen.has(p.code),'Duplicate or invalid catalogue code.'); seen.add(p.code); cleanText(p.name,120); } }
   for(const p of c.products) check(isMoney(p.price_cents) && typeof p.available==='boolean' && typeof p.active==='boolean' && typeof p.unit==='string' && p.unit.length<=30,'Invalid product price, unit or availability.');
-  for(const r of c.routes) check(Number.isInteger(r.weekday) && r.weekday>=0 && r.weekday<=6,'Invalid route weekday.');
+  for(const r of c.routes){
+    check(Number.isInteger(r.weekday) && r.weekday>=0 && r.weekday<=6,'Invalid route weekday.');
+    if(r.schedule!=null){const s=r.schedule;check(s&&typeof s==='object'&&!Array.isArray(s),'Invalid route schedule.');dateKey(s.anchor_date);check(weekday(s.anchor_date)===r.weekday,'Route cycle anchor must match its weekday.');check(Number.isInteger(s.weeks)&&s.weeks>=1&&s.weeks<=4,'Route cycles support one to four weeks.');check(Array.isArray(s.active_weeks)&&s.active_weeks.length>0&&new Set(s.active_weeks).size===s.active_weeks.length&&s.active_weeks.every(n=>Number.isInteger(n)&&n>=0&&n<s.weeks),'Choose valid active weeks in the route cycle.');if(s.names!=null){check(Array.isArray(s.names)&&s.names.length===s.weeks,'Name every week in the route cycle.');for(const name of s.names)check(cleanText(name,120).length>0,'Route cycle names cannot be empty.');}if(s.source!=null)cleanText(s.source,500);}
+  }
   return c;
 }
 export function emptyRun(date,route,products,forecasts={}) {

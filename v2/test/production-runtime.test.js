@@ -93,3 +93,22 @@ test('trolley choices persist through D1 saves, reload, refresh, old clients, ac
  r.plan.trolleys=[];r=(await save(r)).data;assert.deepEqual((await call('/api/production?date=2026-10-07')).data.plan.trolleys,[]);
  assert.deepEqual((await db.prepare('SELECT * FROM v2_events ORDER BY run_id,revision').all()).results,before);
 });
+
+test('alternating routes drive forecast history, production defaults and draft purchasing coverage without rewriting saved records',async t=>{
+ const {call,save,mf}=await fixture(t),db=await mf.getD1Database('DB');
+ const products=[{code:'W01',name:'Synthetic product',unit:'bag',price_cents:100,active:true,available:true}];
+ const routes=[{code:'F',name:'Every Friday',weekday:5},{code:'A',name:'Friday A',weekday:5},{code:'B',name:'Friday B',weekday:5},{code:'T',name:'Tuesday',weekday:2}];
+ assert.equal((await call('/api/catalog',{revision:1,catalog:{products,routes}})).status,200);
+ let draft=(await call('/api/production?date=2026-10-15')).data;draft=(await save(draft)).data;assert.deepEqual(draft.plan.routes,['F','A','B']);
+ routes[1].schedule={anchor_date:'2026-10-09',weeks:2,active_weeks:[0]};routes[2].schedule={anchor_date:'2026-10-16',weeks:2,active_weeks:[0]};routes[3].schedule={anchor_date:'2026-10-06',weeks:2,active_weeks:[0,1],names:['Tuesday + extension','Tuesday']};
+ assert.equal((await call('/api/catalog',{revision:2,catalog:{products,routes}})).status,200);
+ const {addDays,routeName}=await import('../src/domain.js');
+ for(let d='2026-08-04';d<'2026-10-07';d=addDays(d,7))await db.prepare('INSERT INTO v2_history VALUES(?,?,?,?,?,?,?)').bind(d,'T','W01',routeName(routes[3],d)==='Tuesday'?10:100,'verified','Synthetic observed sales',0).run();
+ const tables=['v2_events','v2_production_events','v2_history','v2_catalog'];const snapshot=()=>Promise.all(tables.map(async table=>(await db.prepare('SELECT * FROM '+table).all()).results));const before=await snapshot();
+ const forecast=(await call('/api/run?date=2026-10-13&route=T')).data;assert.equal(forecast.run.items[0].forecast.base,10);assert.equal(forecast.forecast_status.route_name,'Tuesday');assert.equal(forecast.forecast_status.expected_visit,'2026-09-29');assert(forecast.forecast_status.expected_visit_present);assert(!forecast.run.items[0].forecast.missing_dates.includes('2026-10-06'));
+ assert.deepEqual((await call('/api/production?date=2026-10-15')).data.plan,draft.plan,'Saved draft remains unchanged');
+ assert.deepEqual((await call('/api/production?date=2026-10-22')).data.plan.routes,['F','A']);
+ const order=(await call('/api/order-guy?from=2026-10-15&to=2026-10-15')).data;assert.deepEqual(order.coverage[0].routes,['F','B']);
+ const off=(await call('/api/run?date=2026-10-16&route=A')).data;assert.equal(off.forecast_status.scheduled,false);assert.equal(off.run.items[0].forecast.qty,null);assert.equal(off.forecast_status.expected_visit,null);
+ assert.deepEqual(await snapshot(),before,'Forecast reads do not change actuals, counts, catalog or saved plans');
+});
