@@ -207,7 +207,8 @@ export async function readZoho(env,user,input={}) {
  }
  if(resource==='invoices'||resource==='payments'){params.date=previewDate(input.date);if(resource==='payments'){path='customerpayments';key='customer_payments';}}
  if(resource==='salespersons'){path='salespersons';key='data';}
- const d=await readFenBooks(env,user,path,params),rows=d[key]??(resource==='salespersons'?d.salespersons:null);
+ const d=await readFenBooks(env,user,path,params),rows=d[key]??(resource==='salespersons'?d.salespersons:resource==='payments'?d.customerpayments:null);
+ if(resource==='payments'&&!Array.isArray(rows))check(false,'Zoho payment list is unavailable (customer_payments: '+(Array.isArray(d.customer_payments)?'array':typeof d.customer_payments)+', customerpayments: '+(Array.isArray(d.customerpayments)?'array':typeof d.customerpayments)+').',502);
  check(Array.isArray(rows)&&rows.length<=200,'Zoho returned an incomplete list.',502);
  const pg=d.page_context;
  check(resource==='salespersons'||(pg&&Number(pg.page)===page&&typeof pg.has_more_page==='boolean'),'Zoho did not confirm pagination; completeness is unknown.',502);

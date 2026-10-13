@@ -16,7 +16,7 @@ const routes=new Map([['5173603000000932936','R07']]);
 // Reviewed catalogue IDs extend (or explicitly replace) the original pilot IDs.
 export function zohoMatch(catalog,kind,id){
  const list=kind==='product'?catalog.products:catalog.routes,key=kind==='product'?'zoho_item_ids':'zoho_salesperson_ids';
- const explicit=list.filter(x=>x[key]?.includes(id));
+ const explicit=list.filter(x=>x[key]?.includes(id)||(kind==='product'&&x[key]===undefined&&x.zoho_item_id===id));
  if(explicit.length===1)return explicit[0];
  if(explicit.length)return null;
  const code=(kind==='product'?products:routes).get(id);
@@ -34,7 +34,7 @@ export function applyZohoMappings(catalog,input){
   check(typeof entry.id==='string'&&/^[0-9]{1,40}$/.test(entry.id),'Choose a real Zoho record ID.');
   const list=entry.kind==='product'?next.products:next.routes,key=entry.kind==='product'?'zoho_item_ids':'zoho_salesperson_ids',defaults=entry.kind==='product'?products:routes;
   check(list.some(e=>e.code===entry.code),'Choose an app catalogue entry.');
-  for(const e of list){const ids=e[key]??[...defaults].filter(([,code])=>code===e.code).map(([id])=>id);if(e.code===entry.code||ids.includes(entry.id)){e[key]=ids.filter(id=>id!==entry.id);if(e.code===entry.code)e[key].push(entry.id);e.zoho_mapping_source='Owner-reviewed Zoho matching, 1 app sales unit = 1 Zoho sales unit; '+new Date().toISOString();}}
+  for(const e of list){const ids=e[key]??(entry.kind==='product'&&e.zoho_item_id?[e.zoho_item_id]:[...defaults].filter(([,code])=>code===e.code).map(([id])=>id));if(e.code===entry.code||ids.includes(entry.id)){e[key]=ids.filter(id=>id!==entry.id);if(e.code===entry.code)e[key].push(entry.id);e.zoho_mapping_source='Owner-reviewed Zoho matching, 1 app sales unit = 1 Zoho sales unit; '+new Date().toISOString();}}
  }
  return validateCatalog(next);
 }

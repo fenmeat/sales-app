@@ -50,7 +50,7 @@ async function fixture(t){
    if(url.origin==='https://www.zohoapis.com'&&/^\/books\/v3\/customerpayments(?:\/8001)?$/.test(url.pathname)){
     assert.equal(request.method,'GET');assert.equal(url.searchParams.get('organization_id'),'852102281');
     if(url.pathname.endsWith('/8001'))return Response.json({code:0,payment:fake.payment});
-    assert.equal(url.searchParams.get('date'),'2026-10-01');return Response.json({code:0,customer_payments:[fake.payment],page_context:{page:1,has_more_page:false}});
+    assert.equal(url.searchParams.get('date'),'2026-10-01');return Response.json({code:0,customerpayments:[fake.payment],page_context:{page:1,has_more_page:false}});
    }
    throw new Error('Unexpected outbound destination in runtime test');
   }

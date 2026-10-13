@@ -35,3 +35,10 @@ test('reviewed stable-ID mappings retain pilot matches and source evidence; dupl
  assert.throws(()=>applyZohoMappings(c,{entries:[{kind:'product',id:'BRAAI WORS',code:'W01'}]}),/real Zoho/);
  const j=fixture();j.payments['8001'].method='POS receipt';assert.equal(assembleZohoReconciliation(j,{...cat(),routes:changed.routes}).complete,true);
 });
+
+test('existing catalogue Zoho IDs match directly; explicit reviewed replacement wins and legacy duplicate IDs are refused',()=>{
+ const c=cat();delete c.products[0].zoho_item_ids;c.products[0].zoho_item_id='201';assert.equal(zohoMatch(c,'product','201').code,'W01');assert.equal(assembleZohoReconciliation(fixture(),c).complete,true);
+ const changed=applyZohoMappings(c,{entries:[{kind:'product',id:'202',code:'W01'}]});assert.deepEqual(changed.products[0].zoho_item_ids,['201','202']);
+ changed.products[0].zoho_item_ids=['202'];assert.equal(zohoMatch(changed,'product','201'),null);
+ c.products.push({...c.products[0],code:'W02'});assert.throws(()=>validateCatalog(c),/unique/);
+});

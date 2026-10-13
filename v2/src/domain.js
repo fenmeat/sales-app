@@ -44,6 +44,7 @@ export function captureItems(run,evening,products=[]) {
 }
 export function validateCatalog(c) {
   check(c && Array.isArray(c.products) && c.products.length>0 && c.products.length<=200 && Array.isArray(c.routes) && c.routes.length>0 && c.routes.length<=50,'Invalid product/route catalogue.');
+  const effectiveZohoIds=c.products.flatMap(p=>p.zoho_item_ids??(p.zoho_item_id?[p.zoho_item_id]:[]));check(effectiveZohoIds.every(id=>typeof id==='string'&&/^[0-9]{1,40}$/.test(id))&&new Set(effectiveZohoIds).size===effectiveZohoIds.length,'Product Zoho IDs must be valid and unique.');
   for(const [list,key] of [[c.products,'zoho_item_ids'],[c.routes,'zoho_salesperson_ids']]){
     const ids=new Set();for(const entry of list){if(entry[key]===undefined)continue;check(Array.isArray(entry[key])&&entry[key].length<=100,'Invalid Zoho mapping.');for(const id of entry[key]){check(typeof id==='string'&&/^[0-9]{1,40}$/.test(id)&&!ids.has(id),'A Zoho ID can match only one catalogue entry.');ids.add(id);}check(typeof entry.zoho_mapping_source==='string'&&entry.zoho_mapping_source.trim().length>=5&&entry.zoho_mapping_source.length<=500,'Record the evidence for the Zoho mapping.');}
   }
