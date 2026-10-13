@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import worker from '../src/worker.js';
-import {ZOHO_ORIGIN as origin,ZOHO_REDIRECT_URI,ZOHO_SCOPES} from '../src/zoho.js';
+import {ZOHO_ORIGIN as origin,ZOHO_REDIRECT_URI,ZOHO_SCOPES,readZoho} from '../src/zoho.js';
 
 class D1{
  constructor(){this.db=new DatabaseSync(':memory:');}
@@ -160,4 +160,25 @@ test('callback app failures report the safe stage and keep raw database/encrypti
   assert.equal(await response.text(),'');assert.ok(!JSON.stringify([...response.headers]).includes(testSecret));
   assert.equal(calls.length,stage==='connection_save'?1:0);t.mock.restoreAll();
  }
+});
+
+test('owner Zoho reads sanitize lists/allocations, fail closed on incomplete paging and never alter saved sales',async t=>{
+ const calls=mockZoho(t),f=await fixture(),pending=await f.start();await f.call(f.callback(pending),{cookie:pending.cookie});
+ f.env.DB.db.exec(`UPDATE v2_zoho_connection SET organisations='[{"id":"852102281","name":"FEN","currency":"ZAR","active":true}]'`);
+ const upstream=globalThis.fetch;let missingPage=false;
+ t.mock.method(globalThis,'fetch',async(url,options)=>{
+  if(!String(url).includes('/books/v3/customerpayments')&&!String(url).includes('/books/v3/items'))return upstream(url,options);
+  assert.equal(options.method,'GET');assert.equal(new URL(url).searchParams.get('organization_id'),'852102281');
+  if(String(url).includes('customerpayments/990'))return Response.json({code:0,payment:{payment_id:'990',date:'2026-10-12',payment_mode:'cash',amount:300,currency_code:'ZAR',customer_id:'42',email:'secret@example.test',unused_amount:50,amount_refunded:0,invoices:[{invoice_id:'33',date:'2026-09-01',amount_applied:250}],refresh_token:'never expose'}});
+  if(String(url).includes('customerpayments'))return Response.json({code:0,customer_payments:[{payment_id:'990',date:'2026-10-12',amount:300,payment_mode:'cash'}],page_context:missingPage?null:{page:1,has_more_page:false}});
+  return Response.json({code:0,items:[{item_id:'42',name:'Product',rate:99,secret:'hidden'}],page_context:{page:1,has_more_page:false}});
+ });
+ const before=f.env.DB.db.prepare('SELECT * FROM v2_events').all();
+ const items=await readZoho(f.env,{username:'alex'},{resource:'items'});assert.equal(items.records[0].id,'42');assert.ok(!JSON.stringify(items).includes('hidden'));
+ const payments=await readZoho(f.env,{username:'alex'},{resource:'payments',date:'2026-10-12'});assert.equal(payments.has_more,false);
+ const detail=await readZoho(f.env,{username:'alex'},{resource:'payment',id:'990'});assert.equal(detail.payment.invoices[0].applied,250);assert.equal(detail.payment.unused_amount,50);assert.ok(!JSON.stringify(detail).includes('never expose'));assert.ok(!JSON.stringify(detail).includes('secret@example'));
+ missingPage=true;await assert.rejects(readZoho(f.env,{username:'alex'},{resource:'payments',date:'2026-10-12'}),/pagination/);
+ await assert.rejects(readZoho(f.env,{username:'alinda'},{resource:'items'}),/Owner/);
+ await assert.rejects(readZoho(f.env,{username:'alex'},{resource:'payment',id:'../secrets'}),/invalid/);
+ assert.deepEqual(f.env.DB.db.prepare('SELECT * FROM v2_events').all(),before);
 });

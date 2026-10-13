@@ -167,7 +167,7 @@ function previewHeader(invoice,date){
 }
 async function readFenBooks(env,user,path,params){
  check(isOwner(user),'Sign in as Alex to check Zoho invoices.',403);
- check(/^invoices(?:\/[0-9]{1,40})?$/.test(path),'Invalid invoice request.');
+ check(/^(?:invoices(?:\/[0-9]{1,40})?|customerpayments(?:\/[0-9]{1,40})?|items|salespersons)$/.test(path),'Invalid read request.');
  const saved=await connection(env.DB);
  check(saved&&JSON.parse(saved.organisations).some(o=>o.id===ZOHO_ORGANISATION.id&&o.active&&o.currency==='ZAR'),'FEN is not available in the saved connection. Press Check connection first.',409);
  const {row,tokens}=await authorisedClient(env);
@@ -175,8 +175,47 @@ async function readFenBooks(env,user,path,params){
  const query=new URLSearchParams({...params,organization_id:ZOHO_ORGANISATION.id});
  const {response,data}=await requestJson(row.api_domain+'/books/v3/'+path+'?'+query,{method:'GET',headers:{Authorization:'Zoho-oauthtoken '+tokens.access_token}});
  check(response.status!==429,'Zoho is busy or its request limit was reached. Try again later.',429);
- check(response.ok&&data.code===0,'Zoho could not read the FEN invoices. Press Check connection and try again.',502);
+ check(response.ok&&data.code===0,'Zoho could not read the requested FEN records. Check the connection and its read permissions.',502);
  return data;
+}
+
+// Owner-only, bounded reads through the existing server-side Zoho grant. Never
+// return credentials, arbitrary upstream fields, contact details or request URLs.
+export async function readZoho(env,user,input={}) {
+ check(isOwner(user),'Owner access is required to read Zoho.',403);
+ const resource=input.resource??'status';
+ if(resource==='status')return {...await zohoStatus(env,user),live_checked:false};
+ if(resource==='check')return {...await checkZoho(env,user),live_checked:true};
+ const allowed=['items','salespersons','invoices','invoice','payments','payment'];
+ check(allowed.includes(resource),'Choose a supported Zoho read.');
+ const page=input.page??1;check(Number.isSafeInteger(page)&&page>=1&&page<=100,'Choose a valid page.');
+ const amount=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
+ const common=p=>({id:zohoId(p.payment_id),number:textValue(p.payment_number,100),date:p.date,method:textValue(p.payment_mode,80),amount:amount(p.amount),currency:textValue(p.currency_code,10),customer_id:p.customer_id?zohoId(p.customer_id):null,customer:textValue(p.customer_name),status:textValue(p.status,60)});
+ const invoice=i=>({...previewHeader(i,i.date),customer_id:i.customer_id?zohoId(i.customer_id):null,sub_total:amount(i.sub_total),tax_total:amount(i.tax_total),discount_total:amount(i.discount_total),adjustment:amount(i.adjustment),shipping_charge:amount(i.shipping_charge),exchange_rate:amount(i.exchange_rate),credits_applied:amount(i.credits_applied),write_off_amount:amount(i.write_off_amount),lines:(i.line_items??[]).map(l=>({id:zohoId(l.line_item_id),item_id:l.item_id?zohoId(l.item_id):null,name:textValue(l.name),sku:textValue(l.sku,100),unit:textValue(l.unit,80),quantity:amount(l.quantity),rate:amount(l.rate),total:amount(l.item_total),tax_id:textValue(l.tax_id,40)}))});
+ const params={page:String(page),per_page:'100'};
+ let path=resource,key=resource;
+ if(resource==='invoice'||resource==='payment'){
+  const id=zohoId(input.id);path=(resource==='invoice'?'invoices/':'customerpayments/')+id;
+  const d=await readFenBooks(env,user,path,{}),record=resource==='invoice'?d.invoice:d.payment;
+  check(record&&String(record[resource==='invoice'?'invoice_id':'payment_id'])===id,'Zoho returned a different record.',502);dateKey(record.date);check(record.date<=today(),'Zoho returned a future record.',502);
+  if(resource==='invoice'){
+   check(Array.isArray(record.line_items)&&record.line_items.length<=500,'Incomplete invoice lines.',502);
+   return {organisation:ZOHO_ORGANISATION,invoice:invoice(record),generated_at:new Date().toISOString()};
+  }
+  check(Array.isArray(record.invoices)&&record.invoices.length<=500,'Incomplete payment allocations.',502);
+  return {organisation:ZOHO_ORGANISATION,payment:{...common(record),unused_amount:amount(record.unused_amount),refunded:amount(record.amount_refunded),bank_charges:amount(record.bank_charges),exchange_rate:amount(record.exchange_rate),account_id:textValue(record.account_id,40),account_name:textValue(record.account_name),invoices:record.invoices.map(a=>({invoice_id:zohoId(a.invoice_id),number:textValue(a.invoice_number,100),date:a.date,applied:amount(a.amount_applied),withheld:amount(a.tax_amount_withheld)}))},generated_at:new Date().toISOString()};
+ }
+ if(resource==='invoices'||resource==='payments'){params.date=previewDate(input.date);if(resource==='payments'){path='customerpayments';key='customer_payments';}}
+ if(resource==='salespersons'){path='salespersons';key='data';}
+ const d=await readFenBooks(env,user,path,params),rows=d[key]??(resource==='salespersons'?d.salespersons:null);
+ check(Array.isArray(rows)&&rows.length<=200,'Zoho returned an incomplete list.',502);
+ const pg=d.page_context;
+ check(resource==='salespersons'||(pg&&Number(pg.page)===page&&typeof pg.has_more_page==='boolean'),'Zoho did not confirm pagination; completeness is unknown.',502);
+ const values=resource==='items'?rows.map(i=>({id:zohoId(i.item_id),name:textValue(i.name),sku:textValue(i.sku,100),unit:textValue(i.unit,80),rate:amount(i.rate),status:textValue(i.status,60)})):
+  resource==='salespersons'?rows.map(s=>({id:zohoId(s.salesperson_id),name:textValue(s.salesperson_name),active:s.is_active??null})):
+  resource==='payments'?rows.map(p=>{check(p.date===params.date,'Payment date differs from requested date.',502);return common(p);}):rows.map(i=>previewHeader(i,params.date));
+ check(new Set(values.map(v=>v.id)).size===values.length,'Zoho returned duplicate records.',502);
+ return {organisation:ZOHO_ORGANISATION,resource,date:params.date??null,page,has_more:pg?.has_more_page??false,records:values,generated_at:new Date().toISOString(),read_only:true};
 }
 export async function previewZohoInvoices(env,user,input){
  check(isOwner(user),'Sign in as Alex to check Zoho invoices.',403);
