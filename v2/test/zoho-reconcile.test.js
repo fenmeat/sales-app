@@ -42,3 +42,7 @@ test('existing catalogue Zoho IDs match directly; explicit reviewed replacement 
  changed.products[0].zoho_item_ids=['202'];assert.equal(zohoMatch(changed,'product','201'),null);
  c.products.push({...c.products[0],code:'W02'});assert.throws(()=>validateCatalog(c),/unique/);
 });
+
+test('live FEN Shop 2 Shop wording and standard Zoho channel spellings retain their separate receipt methods',()=>{
+ for(const [source,target] of [['Shop 2 Shop','shop2shop'],['creditcard','card'],['banktransfer','eft']]){const j=fixture();j.payments['8001'].method=source;const r=assembleZohoReconciliation(j,cat());assert.equal(r.complete,true);assert.ok(r.recon.payments.every(p=>p.method===target));}
+});

@@ -5,7 +5,7 @@ import {zohoMatch} from './zoho-matching.js';
 const excluded=status=>['draft','void'].includes(status);
 const active=status=>['sent','paid','overdue','partially_paid','unpaid'].includes(status);
 const money=value=>typeof value==='number'&&Number.isFinite(value)&&Math.abs(value*100-Math.round(value*100))<0.00001&&isMoney(Math.round(value*100))?Math.round(value*100):null;
-const channels={cash:'cash',shop2shop:'shop2shop',card:'card','credit card':'card','debit card':'card',eft:'eft','bank transfer':'eft'};
+const channels={cash:'cash',shop2shop:'shop2shop','shop 2 shop':'shop2shop',card:'card',creditcard:'card','credit card':'card','debit card':'card',eft:'eft',banktransfer:'eft','bank transfer':'eft'};
 const canonical=rows=>JSON.stringify([...rows].sort((a,b)=>a.id.localeCompare(b.id)));
 
 // Pure comparison: never turns invoice totals/balances into receipts, never
