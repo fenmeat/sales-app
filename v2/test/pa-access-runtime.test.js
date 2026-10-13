@@ -28,13 +28,79 @@ async function fixture(t) {
     const r=await req('/oauth/authorize?'+query);const html=await r.text();
     return {response:r,html,verifier,handle:html.match(/name="handle" value="([^"]+)"/)?.[1],cookie:cookies(r.headers).join('; '),query};
   }
-  async function approve(start,session) {return req('/oauth/authorize',{form:{handle:start.handle,decision:'approve'},headers:{Cookie:[start.cookie,session].filter(Boolean).join('; ')}});}
+  async function approve(start,session,write=false) {return req('/oauth/authorize',{form:{handle:start.handle,decision:'approve',...(write?{write_access:'yes'}:{})},headers:{Cookie:[start.cookie,session].filter(Boolean).join('; ')}});}
   async function exchange(client,code,verifier='p'.repeat(64),extra={}) {return req('/oauth/token',{form:{grant_type:'authorization_code',client_id:client.client_id,code,code_verifier:verifier,redirect_uri:callback,resource:origin+'/mcp',...extra}});}
-  async function connect() {const session=await login(),c=await client(),start=await begin(c);assert.equal(start.response.status,200,start.html);assert.equal(start.response.headers.get('referrer-policy'),'same-origin');const response=await approve(start,session);assert.equal(response.status,302,await response.clone().text());const location=new URL(response.headers.get('location'));assert.equal(location.origin,'https://chatgpt.com');assert.equal(location.searchParams.get('iss'),origin);assert.equal(location.searchParams.get('state'),'synthetic-state');const code=location.searchParams.get('code'),r=await exchange(c,code);assert.equal(r.status,200,await r.clone().text());const tokens=await r.json();assert.ok(tokens.refresh_token);return {session,client:c,tokens,code,start};}
+  async function connect(write=false) {const session=await login(),c=await client(),start=await begin(c);assert.equal(start.response.status,200,start.html);assert.equal(start.response.headers.get('referrer-policy'),'same-origin');const response=await approve(start,session,write);assert.equal(response.status,302,await response.clone().text());const location=new URL(response.headers.get('location'));assert.equal(location.origin,'https://chatgpt.com');assert.equal(location.searchParams.get('iss'),origin);assert.equal(location.searchParams.get('state'),'synthetic-state');const code=location.searchParams.get('code'),r=await exchange(c,code);assert.equal(r.status,200,await r.clone().text());const tokens=await r.json();assert.ok(tokens.refresh_token);return {session,client:c,tokens,code,start};}
   async function rpc(tokens,method,params={}) {const r=await req('/mcp',{body:{jsonrpc:'2.0',id:1,method,params},headers:{Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-06-18',...(tokens?{Authorization:'Bearer '+tokens.access_token}:{})}});const text=await r.text();if(r.ok)assert.ok(text,'Empty RPC response: '+method+' '+(params.name??''));return {response:r,data:text?JSON.parse(text):{}};}
   return {mf,db,req,login,client,begin,approve,exchange,connect,rpc};
 }
 async function businessSnapshot(db) {const result={};for(const table of ['v2_catalog','v2_events','v2_production_events','v2_recipe_events','v2_history','v2_sync','v2_zoho_connection'])result[table]=(await db.prepare('SELECT * FROM '+table).all()).results;return result;}
+const change=(target,revision,data,extra={})=>({target,revision,data,request_id:crypto.randomUUID(),reason:'Synthetic owner instruction for isolated test',...extra});
+async function call(f,tokens,name,args={}){const r=await f.rpc(tokens,'tools/call',{name,arguments:args});assert.equal(r.response.status,200,JSON.stringify(r.data));return r.data.result;}
+async function ok(f,tokens,name,args={}){const r=await call(f,tokens,name,args);assert.ok(!r.isError,JSON.stringify(r));return r.structuredContent;}
+async function seedRegister(f,session){
+ const material={id:'M1',name:'Synthetic meat',unit:'kg',supplier:'Synthetic Supplier',pack_qty:3,procure:true,source:'Synthetic source',notes:'',price:{amount:30,status:'verified',date:'2026-10-01',valid_until:null,source:'Synthetic invoice'},stock:{qty:11,date:'2026-10-12',reserve:0,incoming:[{qty:3,date:'2026-10-15',reference:'SYNTHETIC-PO'}],source:'Synthetic count'}};
+ const recipe={group:'W01',version:1,name:'Synthetic recipe',effective_date:'2026-10-01',status:'approved',batch_kg:1,complete:true,source:'Synthetic approved recipe',notes:'',ingredients:[{material:'M1',qty:1,unit:'kg',status:'approved',note:''}],consumables:[]};
+ const r=await f.req('/api/recipes',{headers:{Cookie:session},body:{request_id:crypto.randomUUID(),revision:0,reason:'Synthetic initial register',register:{schema_version:1,materials:[material],recipes:[recipe],packaging:[],notes:''}}});assert.equal(r.status,200,await r.clone().text());return {material,recipe};
+}
+
+test('Old read grants never gain writes; only explicit owner write consent grants and refreshes that scope',async t=>{
+ const f=await fixture(t),old=await f.connect(),before=await businessSnapshot(f.db);
+ for(const name of ['save_app_data','restore_app_change','test_app_write_access']){const denied=await f.rpc(old.tokens,'tools/call',{name,arguments:{}});assert.equal(denied.response.status,403);assert.match(denied.response.headers.get('www-authenticate'),/fenmeat:write/);}
+ const refreshed=await f.req('/oauth/token',{form:{grant_type:'refresh_token',client_id:old.client.client_id,refresh_token:old.tokens.refresh_token,resource:origin+'/mcp'}});assert.equal(refreshed.status,200);const readTokens=await refreshed.json();assert.ok(!readTokens.scope.includes('fenmeat:write'));
+ const status=await ok(f,readTokens,'get_access_status');assert.equal(status.write_access,false);
+ const write=await f.connect(true);assert.ok(write.tokens.scope.includes('fenmeat:write'));assert.equal((await ok(f,write.tokens,'get_access_status')).write_access,true);
+ const testResult=await ok(f,write.tokens,'test_app_write_access');assert.equal(testResult.write_access_verified,true);assert.equal(testResult.business_data_changed,false);assert.equal((await f.db.prepare('SELECT count(*) n FROM v2_pa_write_probes').first()).n,0);
+ assert.deepEqual(await businessSnapshot(f.db),before);
+ const renewed=await f.req('/oauth/token',{form:{grant_type:'refresh_token',client_id:write.client.client_id,refresh_token:write.tokens.refresh_token,resource:origin+'/mcp'}});assert.equal(renewed.status,200);assert.ok((await renewed.json()).scope.includes('fenmeat:write'));
+ const grants=(await(await f.req('/api/pa/connections',{headers:{Cookie:write.session}})).json()).grants;assert.equal(grants.filter(g=>g.write_access).length,1);
+ await f.req('/api/pa/connections',{body:{grant_id:grants.find(g=>g.write_access).id},headers:{Cookie:write.session}});assert.equal((await f.rpc(write.tokens,'tools/call',{name:'test_app_write_access',arguments:{}})).response.status,401);
+});
+
+test('Register patches retain stock, record before/after, reject invalid versions and support idempotent save/restore',async t=>{
+ const f=await fixture(t),{tokens,session}=await f.connect(true),{recipe}=await seedRegister(f,session);
+ const args=change('register',1,{materials:[{id:'M1',price:{amount:35}}]});const saved=await ok(f,tokens,'save_app_data',args);assert.equal(saved.revision,2);assert.equal(saved.saved_value.materials[0].price.amount,35);assert.equal(saved.saved_value.materials[0].stock.incoming.length,1);assert.equal(saved.saved_value.materials[0].price.source,'Synthetic invoice');
+ const replay=await ok(f,tokens,'save_app_data',args);assert.equal(replay.replayed,true);assert.equal(replay.revision,2);
+ assert.equal((await call(f,tokens,'save_app_data',{...args,data:{notes:'Different'}})).isError,true);
+ assert.equal((await call(f,tokens,'save_app_data',change('register',1,{notes:'Stale'}))).isError,true);
+ assert.equal((await call(f,tokens,'save_app_data',change('register',2,{recipes:[{group:'W01',version:1,batch_kg:2,ingredients:[{...recipe.ingredients[0],qty:2}]}]}))).isError,true);
+ const history=await ok(f,tokens,'get_app_change_history',{request_id:args.request_id});assert.equal(history.change.before_value.materials[0].price.amount,30);assert.equal(history.change.saved_value.materials[0].price.amount,35);
+ const restore={change_id:args.request_id,revision:2,request_id:crypto.randomUUID(),reason:'Synthetic correction: restore prior price'};
+ const restored=await ok(f,tokens,'restore_app_change',restore);assert.equal(restored.revision,3);assert.equal(restored.saved_value.materials[0].price.amount,30);assert.equal((await ok(f,tokens,'restore_app_change',restore)).replayed,true);
+ const read=await ok(f,tokens,'get_recipes');assert.equal(read.revision,3);assert.equal(read.register.materials[0].price.amount,30);
+ const results=await Promise.all([call(f,tokens,'save_app_data',change('register',3,{notes:'Concurrent A'})),call(f,tokens,'save_app_data',change('register',3,{notes:'Concurrent B'}))]);assert.equal(results.filter(r=>!r.isError).length,1);
+ assert.equal((await f.db.prepare('SELECT count(*) n FROM v2_pa_changes').first()).n,3);assert.equal((await f.db.prepare('SELECT count(*) n FROM v2_recipe_events').first()).n,4);
+ assert.equal((await call(f,tokens,'restore_app_change',{...restore,request_id:crypto.randomUUID()})).isError,true);
+});
+
+test('Catalogue and stocktake writes use native validation, preserve null/zero and never double-receive deliveries',async t=>{
+ const f=await fixture(t),{tokens,session}=await f.connect(true);await seedRegister(f,session);
+ const args=change('catalog',1,{products:[{code:'W01',price_cents:17000}]});const saved=await ok(f,tokens,'save_app_data',args);assert.equal(saved.revision,2);assert.equal(saved.saved_value.products[0].name,'Braai wors');
+ const changed=await ok(f,tokens,'save_app_data',change('availability',2,{code:'W01',available:false}));assert.equal(changed.revision,3);assert.equal((await ok(f,tokens,'get_catalog')).catalog.products[0].available,false);
+ await ok(f,tokens,'restore_app_change',{change_id:changed.request_id,revision:3,request_id:crypto.randomUUID(),reason:'Synthetic restore availability'});assert.equal((await ok(f,tokens,'get_catalog')).catalog.products[0].available,true);
+ const rows=[{material:'M1',packs:0,loose:0,reserve:0,included_incoming:['SYNTHETIC-PO']}];const count=change('stocktake',1,{supplier:'synthetic supplier',date:'2026-10-12',rows});const counted=await ok(f,tokens,'save_app_data',count);assert.equal(counted.saved_value.materials[0].stock.qty,0);assert.equal(counted.saved_value.materials[0].stock.incoming.length,0);assert.equal((await ok(f,tokens,'save_app_data',count)).replayed,true);
+ assert.equal((await call(f,tokens,'save_app_data',change('stocktake',2,{supplier:'synthetic supplier',date:'2099-01-01',rows}))).isError,true);
+ assert.equal((await call(f,tokens,'save_app_data',change('stocktake',2,{supplier:'synthetic supplier',date:'2026-10-12',rows}))).isError,true);
+ const before=await businessSnapshot(f.db);
+ await f.db.exec("CREATE TRIGGER synthetic_audit_failure BEFORE INSERT ON v2_pa_changes BEGIN SELECT RAISE(ABORT,'synthetic failure'); END");
+ assert.equal((await call(f,tokens,'save_app_data',change('catalog',4,{products:[{code:'W01',price_cents:18000}]}))).isError,true);assert.deepEqual(await businessSnapshot(f.db),before);
+ await f.db.exec('DROP TRIGGER synthetic_audit_failure');
+ const concurrent=await Promise.all([call(f,tokens,'save_app_data',change('catalog',4,{products:[{code:'W01',price_cents:19000}]})),call(f,tokens,'save_app_data',change('catalog',4,{products:[{code:'W01',price_cents:20000}]}))]);assert.equal(concurrent.filter(x=>!x.isError).length,1);assert.equal((await ok(f,tokens,'get_catalog')).catalog.revision,5);
+});
+
+test('Sales and production saves share native workflow rules and preserve other business areas',async t=>{
+ const f=await fixture(t),{tokens}=await f.connect(true);
+ const sales=await ok(f,tokens,'get_app_edit_context',{target:'sales',date:'2026-10-12',route:'MB'});sales.run.items[0].planned=0;sales.run.notes='Synthetic route note';
+ const saved=await ok(f,tokens,'save_app_data',change('sales',sales.revision,sales.run));assert.equal(saved.revision,1);assert.equal(saved.saved_value.items[0].planned,0);assert.equal(saved.saved_value.items[0].loaded,null);
+ const before=await businessSnapshot(f.db);assert.equal((await call(f,tokens,'save_app_data',change('sales',1,saved.saved_value,{action:'close'}))).isError,true);assert.deepEqual(await businessSnapshot(f.db),before);
+ const prod=await ok(f,tokens,'get_app_edit_context',{target:'production',date:'2026-10-12'});prod.plan.groups[0].planned=0;
+ const production=await ok(f,tokens,'save_app_data',change('production',0,prod.plan));assert.equal(production.revision,1);assert.equal(production.saved_value.groups[0].planned,0);
+ assert.equal((await call(f,tokens,'save_app_data',change('production',1,production.saved_value,{action:'actuals'}))).isError,true);
+ const after=await businessSnapshot(f.db);assert.deepEqual(after.v2_history,before.v2_history);assert.deepEqual(after.v2_events,before.v2_events);assert.deepEqual(after.v2_zoho_connection,before.v2_zoho_connection);
+ // Ordinary browser writes still work, but must prevent a stale connector save.
+ const browserSession=await f.login();sales.run.notes='Newer browser edit';assert.equal((await f.req('/api/run',{headers:{Cookie:browserSession},body:{request_id:crypto.randomUUID(),revision:1,action:'save',run:sales.run}})).status,200);
+ assert.equal((await call(f,tokens,'save_app_data',change('sales',1,sales.run))).isError,true);
+});
 
 test('OAuth discovery, owner consent, SDK handshake, all seven read tools and database immutability',async t=>{
   const f=await fixture(t),before=await businessSnapshot(f.db);
@@ -42,7 +108,7 @@ test('OAuth discovery, owner consent, SDK handshake, all seven read tools and da
   const unauth=await f.rpc(null,'tools/list');assert.equal(unauth.response.status,401);assert.match(unauth.response.headers.get('www-authenticate'),/oauth-protected-resource/);
   const {tokens,session}=await f.connect();
   const init=await f.rpc(tokens,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'synthetic',version:'1'}});assert.equal(init.response.status,200);assert.equal(init.data.result.serverInfo.name,'fenmeat-read-access');
-  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,7);for(const tool of list.data.result.tools){assert.equal(tool.annotations.readOnlyHint,true);assert.equal(tool.annotations.destructiveHint,false);}
+  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,13);for(const tool of list.data.result.tools){const write=['save_app_data','restore_app_change','test_app_write_access'].includes(tool.name);assert.equal(tool.annotations.readOnlyHint,!write);assert.deepEqual(tool._meta.securitySchemes[0].scopes,write?['fenmeat:read','fenmeat:write']:['fenmeat:read']);}
   for(const [name,args] of [['get_catalog',{}],['get_sales',{from:'2026-10-12',to:'2026-10-12'}],['get_forecast',{date:'2026-10-13',route:'MB'}],['get_production',{date:'2026-10-12'}],['get_recipes',{}],['get_material_stock',{}],['get_order_requirements',{from:'2026-10-12',to:'2026-10-12'}]]) {
     const r=await f.rpc(tokens,'tools/call',{name,arguments:args});assert.equal(r.response.status,200);assert.equal(r.data.result?.isError,undefined,JSON.stringify(r.data));assert.equal(r.data.result.structuredContent.connection.access,'read_only');
     if(name==='get_production')assert.equal(r.data.result.structuredContent.source_kind,'unsaved_suggestion');

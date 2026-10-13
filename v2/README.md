@@ -1,3 +1,7 @@
+## 13 October 2026 — controlled PA write access
+
+Version 0.16.0 implements the owner's step-1 instruction: sufficient access to edit existing app data. It adds explicit OAuth write consent, validated native business saves, atomic before/after audit, optimistic revisions, idempotent receipts and guarded recovery. Existing read grants remain read-only. See [PA_WRITE_ACCESS.md](PA_WRITE_ACCESS.md) for connection and acceptance; actual owner write access remains pending until the owner reconnects with write consent and the assistant verifies it through that connection. Step 2 data reconciliation and step 3 expansion are separate work.
+
 ## 12 October 2026 — permanent PA read access
 
 Version 0.15.0 adds the owner-authorised read-only ChatGPT connector. See [PA_READ_ACCESS.md](PA_READ_ACCESS.md) for one-time connection, scope, revocation and verification. The endpoint still requires the owner's ChatGPT linking step before live assistant access is established. The 12 October owner instruction authorises this additive change to the chosen operational V2 Worker; historical pilot restrictions below remain history.
