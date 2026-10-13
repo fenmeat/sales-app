@@ -16,7 +16,7 @@ async function fixture(t){
   invoice:{invoice_id:'9001',invoice_number:'INV-TEST-1',date:'2026-10-01',status:'paid',customer_name:'Test customer',salesperson_id:'5001',salesperson_name:'07. THURSDAY MOSSEL BAY',currency_code:'ZAR',total:160,billing_address:{address:'private address'},notes:'private notes',
    line_items:[{line_item_id:'101',item_id:'201',name:'BRAAI WORS',sku:'W01',unit:'pack',quantity:1}]}};
  const mf=new Miniflare(convertV4MiniflareOptions({
-  name:'zoho-runtime-test',modules:['worker','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching'].map(name=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+name+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',
+  name:'zoho-runtime-test',modules:['worker','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching','zoho-reconcile'].map(name=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+name+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',
   d1Databases:{DB:'zoho-runtime-test'},
   bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key}),ZOHO_CLIENT_ID:'1000.LOCAL_RUNTIME_CLIENT_ID',ZOHO_CLIENT_SECRET:'local-runtime-client-secret-01234567890123456789'},
   outboundService:async request=>{
@@ -40,11 +40,17 @@ async function fixture(t){
     if(fake.orgRedirect)return new Response(null,{status:fake.orgRedirect,headers:{Location:'https://blocked.example/organizations'}});
     return Response.json({code:0,organizations:[{organization_id:'12345',name:'Runtime test company',currency_code:'ZAR'},{organization_id:'852102281',name:'FEN',currency_code:'ZAR'}]});
    }
-   if(url.origin==='https://www.zohoapis.com'&&/^\/books\/v3\/invoices(?:\/9001)?$/.test(url.pathname)){
+   if(url.origin==='https://www.zohoapis.com'&&/^\/books\/v3\/invoices(?:\/[0-9]+)?$/.test(url.pathname)){
     assert.equal(request.method,'GET');assert.equal(url.searchParams.get('organization_id'),'852102281');
     if(url.pathname.endsWith('/9001'))return Response.json({code:0,invoice:fake.invoice});
-    assert.equal(url.searchParams.get('date'),'2026-10-01');assert.equal(url.searchParams.get('per_page'),'20');
+    if(/\/[0-9]+$/.test(url.pathname))return Response.json({code:0,invoice:fake.oldInvoice});
+    assert.equal(url.searchParams.get('date'),'2026-10-01');assert.ok(['20','100'].includes(url.searchParams.get('per_page')));
     return Response.json({code:0,...fake.invoicePages[url.searchParams.get('page')]});
+   }
+   if(url.origin==='https://www.zohoapis.com'&&/^\/books\/v3\/customerpayments(?:\/8001)?$/.test(url.pathname)){
+    assert.equal(request.method,'GET');assert.equal(url.searchParams.get('organization_id'),'852102281');
+    if(url.pathname.endsWith('/8001'))return Response.json({code:0,payment:fake.payment});
+    assert.equal(url.searchParams.get('date'),'2026-10-01');return Response.json({code:0,customer_payments:[fake.payment],page_context:{page:1,has_more_page:false}});
    }
    throw new Error('Unexpected outbound destination in runtime test');
   }
@@ -189,4 +195,45 @@ test('workerd refuses all token redirects and preserves authorisation on a redir
  assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_zoho_connection').first()).n,1);
  const checked=await f.call('/api/zoho/check',{body:{},cookie:f.session});assert.equal(checked.status,502);assert.match((await checked.json()).error,/unexpected redirect/);
  assert.ok(f.calls.every(c=>!c.url.includes('blocked.example')));
+});
+
+test('real Worker reads every page and old receipt allocation, saves only a complete comparison, preserves cash/revisions, and rejects forged snapshots',async t=>{
+ const f=await fixture(t);await f.finish(await f.start());
+ const c={products:[{code:'W01',name:'Test product',unit:'bag',price_cents:100,active:true,available:true,zoho_item_ids:['201'],zoho_mapping_source:'Synthetic reviewed item'}],routes:[{code:'R01',name:'GEORGE',weekday:1,zoho_salesperson_ids:['5001'],zoho_mapping_source:'Synthetic reviewed route'}]};
+ const call=async(path,body)=>{const r=await f.call(path,{body,cookie:f.session});return {status:r.status,data:await r.json()};};
+ assert.equal((await call('/api/catalog',{revision:0,catalog:c})).status,200);
+ f.fake.oldInvoice={...f.fake.invoice,invoice_id:'9002',invoice_number:'OLD-TEST',date:'2026-09-10'};
+ f.fake.payment={payment_id:'8001',payment_number:'PAY-TEST',date:'2026-10-01',payment_mode:'Cash',amount:300,currency_code:'ZAR',unused_amount:0,invoices:[{invoice_id:'9001',amount_applied:100},{invoice_id:'9002',amount_applied:200}]};
+ let saved=(await call('/api/run?date=2026-10-01&route=R01')).data;saved.run.rep='Tester';saved.run.items[0].loaded=2;saved=(await call('/api/run',{run:saved.run,revision:0,action:'load',request_id:crypto.randomUUID()})).data;
+ saved.run.items[0].returned=1;saved=(await call('/api/run',{run:saved.run,revision:saved.revision,action:'returns',request_id:crypto.randomUUID()})).data;
+ saved.run.cash.counted=30000;saved.run.cash.eft=0;saved.run.cash.card=0;saved.run.cash.shop2shop=0;saved.run.notes='Retain original capture';saved=(await call('/api/run',{run:saved.run,revision:saved.revision,action:'save',request_id:crypto.randomUUID()})).data;
+ const before=structuredClone(saved),db=await f.mf.getD1Database('DB');
+ assert.equal((await f.call('/api/zoho/reconcile',{body:{date:'2026-10-01',route:'R01'}})).status,401);
+ let j=(await call('/api/zoho/reconcile',{date:'2026-10-01',route:'R01'})).data;
+ assert.equal((await call('/api/zoho/reconcile',{job_id:j.id,version:999})).status,409);
+ for(let n=0;!j.done&&n<20;n++){
+  // Avoid real delays in this isolated fixture; production enforces spacing.
+  const row=await db.prepare('SELECT payload FROM v2_zoho_recon_jobs WHERE id=?').bind(j.id).first(),p=JSON.parse(row.payload);p.last_request_at=0;await db.prepare('UPDATE v2_zoho_recon_jobs SET payload=? WHERE id=?').bind(JSON.stringify(p),j.id).run();
+  const r=await call('/api/zoho/reconcile',{job_id:j.id,version:j.version});assert.equal(r.status,200,JSON.stringify(r));j=r.data;
+ }
+ assert.equal(j.done,true);assert.equal(j.result.complete,true,JSON.stringify(j.result));assert.equal(j.result.recon.payments.length,2);assert.equal(j.result.recon.invoice_lines.length,1);
+ assert.deepEqual((await call('/api/run?date=2026-10-01&route=R01')).data,before);
+ const forged=structuredClone(j.result.recon);forged.payments[0].cents=1;
+ assert.equal((await call('/api/run',{run:{...saved.run,recon:forged},revision:saved.revision,action:'reconcile',request_id:crypto.randomUUID()})).status,409);
+ const request={run:{...saved.run,recon:j.result.recon},revision:saved.revision,action:'reconcile',request_id:crypto.randomUUID()};const imported=await call('/api/run',request);assert.equal(imported.status,200,JSON.stringify(imported));
+ assert.deepEqual(imported.data.run.cash,before.run.cash);assert.deepEqual(imported.data.run.items,before.run.items);assert.equal(imported.data.run.notes,before.run.notes);assert.equal(imported.data.run.phase,'returned');assert.equal(imported.data.summary.oldCash,20000);assert.equal(imported.data.summary.expected,30000);
+ assert.equal((await call('/api/run',request)).data.replayed,true);assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_history').first()).n,0);
+ const stale={...request,request_id:crypto.randomUUID()};assert.equal((await call('/api/run',stale)).status,409);
+ assert.equal(f.calls.filter(c=>c.url.includes('/customerpayments')).length,3);assert.equal(f.calls.filter(c=>c.url.includes('/invoices?')).length,4);
+ assert.ok(f.calls.filter(c=>c.url.includes('/books/v3/')).every(c=>c.method==='GET'));
+ // A source edit between listing and final verification cannot produce a complete result.
+ let changed=(await call('/api/zoho/reconcile',{date:'2026-10-01',route:'R01'})).data;
+ for(let n=0;changed.stage!=='verify_invoices'&&n<20;n++){
+  const row=await db.prepare('SELECT payload FROM v2_zoho_recon_jobs WHERE id=?').bind(changed.id).first(),p=JSON.parse(row.payload);p.last_request_at=0;await db.prepare('UPDATE v2_zoho_recon_jobs SET payload=? WHERE id=?').bind(JSON.stringify(p),changed.id).run();changed=(await call('/api/zoho/reconcile',{job_id:changed.id,version:changed.version})).data;
+ }
+ f.fake.invoicePages[1].invoices[0].total=999;
+ let last;
+ for(let n=0;n<2;n++){last=await call('/api/zoho/reconcile',{job_id:changed.id,version:changed.version});if(last.status!==200)break;changed=last.data;}
+ assert.equal(last.status,409);assert.match(last.data.error,/changed while/);
+ assert.equal((await call('/api/run?date=2026-10-01&route=R01')).data.revision,imported.data.revision);
 });

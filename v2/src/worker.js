@@ -3,7 +3,9 @@ import {orderGuyApi} from './order-guy-api.js';
 import {productionApi} from './production-api.js';
 import {forecastRoute} from './month-cycle.js';
 import {effectiveHistory,applyForecastRefresh} from './forecast-history.js';
-import {zohoStatus,beginZoho,completeZoho,checkZoho,previewZohoInvoices,previewZohoInvoice} from './zoho.js';
+import {zohoStatus,beginZoho,completeZoho,checkZoho,previewZohoInvoices,previewZohoInvoice,readZoho} from './zoho.js';
+import {zohoReconciliation,verifyZohoSnapshot} from './zoho-reconcile.js';
+import {applyZohoMappings} from './zoho-matching.js';
 import {ensureSchema} from './schema.js';
 import {keys,authenticate,login,sameOrigin,hash} from './auth.js';
 const initialized=new WeakMap();
@@ -30,7 +32,7 @@ async function forecastResult(db,date,route,c){
  const snapshot=await hash(JSON.stringify({version:'1.3-route-cycle',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
  return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline from comparable route-cycle visits with measured month phase',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.16.3',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.17.0',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
@@ -48,6 +50,12 @@ async function handle(request,env,paUser=null){
  if((path==='/api/production'||path==='/api/production/audit')&&['GET','POST'].includes(method))return json(await productionApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),forecastResult,runResult,bodyOf}));
  if(path==='/api/logout'&&method==='POST'){const token=request.headers.get('Cookie')?.match(/fm_session=([a-f0-9]{64})/)?.[1];if(token)await env.DB.prepare('DELETE FROM v2_sessions WHERE token_hash=?').bind(await hash(token)).run();return json({ok:true},200,{'Set-Cookie':'fm_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0'});}
  if(path==='/api/zoho/status'&&method==='GET')return json(await zohoStatus(env,user));
+ if(path==='/api/zoho/read'&&method==='POST')return json(await readZoho(env,user,await bodyOf(request)));
+ if(path==='/api/zoho/reconcile'&&method==='POST')return json(await zohoReconciliation(env,user,await bodyOf(request),await catalog(env.DB)));
+ if(path==='/api/zoho/mappings'&&method==='POST'){
+  check(user.username==='alex','Alex reviews Zoho matches.',403);const b=await bodyOf(request),c=await catalog(env.DB);check(c.revision===b.revision,'The catalogue changed. Reload before reviewing matches.',409);
+  return handle(new Request(url.origin+'/api/catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:c.revision,catalog:applyZohoMappings(c,b)})}),env,user);
+ }
  if(path==='/api/zoho/connect'&&method==='POST'){const result=await beginZoho(request,env,user);return json({authorization_url:result.authorization_url},200,{'Set-Cookie':result.cookie});}
  if(path==='/api/zoho/check'&&method==='POST')return json(await checkZoho(env,user));
  if(path==='/api/zoho/invoices/preview'&&method==='POST')return json(await previewZohoInvoices(env,user,await bodyOf(request)));
@@ -76,6 +84,7 @@ async function handle(request,env,paUser=null){
  const b=await bodyOf(request);check(typeof b.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(b.request_id),'Missing save identifier.');const fingerprint=await hash(JSON.stringify(b));const replay=await env.DB.prepare('SELECT * FROM v2_events WHERE request_id=?').bind(b.request_id).first();if(replay){check(replay.request_hash===fingerprint,'Save identifier was reused for different data.',409);return json({run:JSON.parse(replay.payload),revision:replay.revision,saved_at:replay.saved_at,actor:replay.actor,summary:summarise(JSON.parse(replay.payload)),replayed:true});}
  const old=await lastEvent(env.DB,dateKey(b.run.date),b.run.route);check(b.revision===(old?.revision??0),'Another person saved this route. Reload before making further changes.',409);const previous=old?JSON.parse(old.payload):null;
  const c=await catalog(env.DB);check(c.routes.some(r=>r.code===b.run.route),'Unknown route.');check(Array.isArray(b.run.items),'Missing route items.');for(const i of b.run.items)check(c.products.some(p=>p.code===i.code),'Unknown product.');
+ await verifyZohoSnapshot(env.DB,b.run.recon,previous,c);
  if(previous)check(previous.items.every(p=>b.run.items.some(i=>i.code===p.code)),'Saved products cannot be removed from a run.');
  let latest=null;
  if(b.action==='forecast'){check((previous?.phase??'plan')==='plan','Forecast refresh is only available before confirming the load.');latest=await forecastResult(env.DB,b.run.date,b.run.route,c);b.run=applyForecastRefresh(b.run,latest);}

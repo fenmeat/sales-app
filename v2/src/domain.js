@@ -44,6 +44,10 @@ export function captureItems(run,evening,products=[]) {
 }
 export function validateCatalog(c) {
   check(c && Array.isArray(c.products) && c.products.length>0 && c.products.length<=200 && Array.isArray(c.routes) && c.routes.length>0 && c.routes.length<=50,'Invalid product/route catalogue.');
+  for(const [list,key] of [[c.products,'zoho_item_ids'],[c.routes,'zoho_salesperson_ids']]){
+    const ids=new Set();for(const entry of list){if(entry[key]===undefined)continue;check(Array.isArray(entry[key])&&entry[key].length<=100,'Invalid Zoho mapping.');for(const id of entry[key]){check(typeof id==='string'&&/^[0-9]{1,40}$/.test(id)&&!ids.has(id),'A Zoho ID can match only one catalogue entry.');ids.add(id);}check(typeof entry.zoho_mapping_source==='string'&&entry.zoho_mapping_source.trim().length>=5&&entry.zoho_mapping_source.length<=500,'Record the evidence for the Zoho mapping.');}
+  }
+  for(const r of c.routes)if(r.zoho_payment_methods!==undefined){check(r.zoho_payment_methods&&typeof r.zoho_payment_methods==='object'&&!Array.isArray(r.zoho_payment_methods)&&Object.keys(r.zoho_payment_methods).length<=40,'Invalid payment method mapping.');for(const [name,method] of Object.entries(r.zoho_payment_methods))check(name.length>0&&name.length<=80&&['cash','shop2shop','card','eft'].includes(method),'Choose a valid payment method.');}
   for(const list of [c.products,c.routes]) { const seen=new Set(); for(const p of list) { check(/^[A-Z0-9_-]{1,25}$/.test(p.code) && !seen.has(p.code),'Duplicate or invalid catalogue code.'); seen.add(p.code); cleanText(p.name,120); } }
   for(const p of c.products) check(isMoney(p.price_cents) && typeof p.available==='boolean' && typeof p.active==='boolean' && typeof p.unit==='string' && p.unit.length<=30,'Invalid product price, unit or availability.');
   for(const r of c.routes){

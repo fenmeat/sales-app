@@ -45,7 +45,7 @@ export async function zohoStatus(env,user){
  let config;try{config=settings(env);}catch{return {configured:false,connected:false,can_manage:isOwner(user),sync_enabled:false,organisations:[]};}
  const row=await connection(env.DB),matches=row&&row.client_fingerprint===await fingerprint(config);
  const organisations=matches?JSON.parse(row.organisations):[];
- return {configured:true,connected:!!matches,can_manage:isOwner(user),sync_enabled:false,credentials_changed:!!row&&!matches,
+ return {configured:true,connected:!!matches,can_manage:isOwner(user),sync_enabled:false,reconciliation_enabled:true,credentials_changed:!!row&&!matches,
   connected_at:matches?row.connected_at:null,last_checked:matches?row.last_checked:null,api_domain:matches?row.api_domain:null,
   organisations,selected_organisation:organisations.find(o=>o.id===ZOHO_ORGANISATION.id&&o.active&&o.currency==='ZAR')??null,scopes:ZOHO_SCOPES};
 }
@@ -163,7 +163,7 @@ function previewHeader(invoice,date){
  if(invoice.organization_id!==undefined)check(String(invoice.organization_id)===ZOHO_ORGANISATION.id,'Zoho returned a different organisation. Nothing was imported.',502);
  return {id:zohoId(invoice.invoice_id),number:textValue(invoice.invoice_number,100),date,status:textValue(invoice.status,60),customer:textValue(invoice.customer_name),
   salesperson_id:invoice.salesperson_id?zohoId(invoice.salesperson_id):null,salesperson:textValue(invoice.salesperson_name),currency:textValue(invoice.currency_code,10),
-  total:typeof invoice.total==='number'&&Number.isFinite(invoice.total)&&invoice.total>=0?invoice.total:null};
+  last_modified:textValue(invoice.last_modified_time,80),total:typeof invoice.total==='number'&&Number.isFinite(invoice.total)&&invoice.total>=0?invoice.total:null};
 }
 async function readFenBooks(env,user,path,params){
  check(isOwner(user),'Sign in as Alex to check Zoho invoices.',403);
@@ -190,9 +190,9 @@ export async function readZoho(env,user,input={}) {
  check(allowed.includes(resource),'Choose a supported Zoho read.');
  const page=input.page??1;check(Number.isSafeInteger(page)&&page>=1&&page<=100,'Choose a valid page.');
  const amount=v=>typeof v==='number'&&Number.isFinite(v)?v:null;
- const common=p=>({id:zohoId(p.payment_id),number:textValue(p.payment_number,100),date:p.date,method:textValue(p.payment_mode,80),amount:amount(p.amount),currency:textValue(p.currency_code,10),customer_id:p.customer_id?zohoId(p.customer_id):null,customer:textValue(p.customer_name),status:textValue(p.status,60)});
+ const common=p=>({id:zohoId(p.payment_id),number:textValue(p.payment_number,100),date:p.date,method:textValue(p.payment_mode,80),amount:amount(p.amount),currency:textValue(p.currency_code,10),customer_id:p.customer_id?zohoId(p.customer_id):null,customer:textValue(p.customer_name),status:textValue(p.status,60),last_modified:textValue(p.last_modified_time,80)});
  const invoice=i=>({...previewHeader(i,i.date),customer_id:i.customer_id?zohoId(i.customer_id):null,sub_total:amount(i.sub_total),tax_total:amount(i.tax_total),discount_total:amount(i.discount_total),adjustment:amount(i.adjustment),shipping_charge:amount(i.shipping_charge),exchange_rate:amount(i.exchange_rate),credits_applied:amount(i.credits_applied),write_off_amount:amount(i.write_off_amount),lines:(i.line_items??[]).map(l=>({id:zohoId(l.line_item_id),item_id:l.item_id?zohoId(l.item_id):null,name:textValue(l.name),sku:textValue(l.sku,100),unit:textValue(l.unit,80),quantity:amount(l.quantity),rate:amount(l.rate),total:amount(l.item_total),tax_id:textValue(l.tax_id,40)}))});
- const params={page:String(page),per_page:'100'};
+ const params={page:String(page),per_page:'100'};if(resource==='invoices')Object.assign(params,{sort_column:'invoice_number',sort_order:'A'});
  let path=resource,key=resource;
  if(resource==='invoice'||resource==='payment'){
   const id=zohoId(input.id);path=(resource==='invoice'?'invoices/':'customerpayments/')+id;
