@@ -249,3 +249,9 @@ footer p{margin:7px 0}
 
 /* Shared product availability controls. */
 #product-availability{width:min(580px,calc(100% - 24px));max-height:90dvh;border:1px solid #c7d9e8;border-radius:16px;padding:20px;color:#172e45}#product-availability::backdrop{background:#172e4580}.availability-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}.availability-heading h2{margin:0}#product-availability input{width:100%;min-width:0}#availability-message{min-height:1.5em}.availability-product{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:15px 0;border-bottom:1px solid #d5e3ee}.availability-product strong{display:block;font-size:16px;overflow-wrap:anywhere}.availability-product small{display:block;color:#607589;margin-top:5px}.availability-product button{flex:0 0 68px;border-radius:24px;background:#e9eff4;color:#52697d}.availability-product button[aria-checked=true]{background:#14558a;color:white;border-color:#14558a}@media print{#product-availability{display:none!important}}
+
+/* Route-wide stock sales value stays visible above evening product filters. */
+.sales-total{margin:0 0 18px;padding:18px 20px;border:1px solid #bfd8ed;border-radius:12px;background:#e5f2fc;color:#173f62;min-width:0}
+.sales-total h2{font-size:16px;letter-spacing:0;margin:0 0 8px}
+.sales-total>strong{display:block;font-size:clamp(28px,5vw,36px);line-height:1.2;font-weight:750;letter-spacing:-.5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.sales-total p{font-size:14px;line-height:1.5;margin:8px 0 0;color:#43627e}

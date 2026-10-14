@@ -1,3 +1,21 @@
+## 14 October 2026 — Evening returns sales value (0.17.8)
+
+Evening returns now shows **Total sales value** above the product search. It uses
+all route items and their saved selling prices through the existing stock-sales
+summary, including any historical non-sale adjustments. Changing returns updates
+the amount immediately; filtering products does not change the route total.
+Blank or invalid stock quantities show a dash and a short instruction, while a
+complete zero-sale route shows R0.00. The existing save indicator still identifies
+unsaved changes. This stock value does not represent cash receipts or certify
+invoice reconciliation. No business records or calculations are changed by this
+display update. Rollback is the previous app version, with no migration required.
+
+Verification: all 190 existing tests and the Worker deployment dry-run pass.
+Local Chromium with isolated synthetic D1 verifies totals, decimal rounding,
+missing/invalid returns, explicit zero, product filtering, route switching and
+save/reload retention. Layouts at 320, 390, 834 and 1280px have no horizontal
+overflow; mobile and tablet screenshots were visually reviewed.
+
 ## 14 October 2026 — explicit Zoho save status (0.17.7)
 
 The Reconcile read panel now distinguishes no Zoho snapshot, a complete read not
