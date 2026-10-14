@@ -1,3 +1,10 @@
+## 14 October 2026 — Shop2Shop automatic receipt display (0.17.6)
+
+Cash-up and Reconcile automatically show Shop2Shop from a complete saved Zoho
+read, labelled **Volgens Zoho**, without overwriting a manual total or physical
+cash. Source time, statement-check limits and rollback are documented in
+[SHOP2SHOP_AUTOFILL.md](SHOP2SHOP_AUTOFILL.md). Existing close checks remain.
+
 ## 14 October 2026 — Alinda is an equal administrator (0.17.4)
 
 Alex explicitly authorised Alinda to have the same app access without repeated

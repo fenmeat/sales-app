@@ -76,8 +76,13 @@ export function summarise(run) {
   const c=run.cash;const expected=receipts.cash===null?null:c.float+receipts.cash+c.extra-c.banked-c.expenses;
   const counted=c.denominations==null?c.counted:cashCountTotal(c.denominations);
   const cashVariance=expected===null||counted===null?null:counted-expected;
+  // A Zoho-derived receipt is useful for display, but is not an independent
+  // statement check. Keep the saved manual field and variance untouched.
+  const shop2shopFromZoho=c.shop2shop==null&&comparison?.complete===true&&comparison.date===run.date&&comparison.route===run.route&&typeof comparison.zoho_job_id==='string'&&comparison.zoho_job_id.length>0;
+  const received={cash:counted,shop2shop:shop2shopFromZoho?receipts.shop2shop:c.shop2shop,card:c.card,eft:c.eft};
+  const receipt_sources={shop2shop:shop2shopFromZoho?'zoho':c.shop2shop==null?null:'manual'};
   const variances={cash:cashVariance,...Object.fromEntries(['shop2shop','card','eft'].map(k=>[k,receipts[k]===null||c[k]===null?null:c[k]-receipts[k]]))};
-  return {items,receipts,currentCash,oldCash,unallocatedCash,expected,cashVariance,variances,stock_complete:items.every(i=>i.sold!==null),stock_matches:!!comparison?.complete&&items.every(i=>i.variance===0),cash_matches:Object.values(variances).every(v=>v===0),estimated_value_cents:items.every(i=>i.sold!==null)?Math.round(items.reduce((s,i)=>s+i.sold*i.price_cents,0)):null};
+  return {items,receipts,received,receipt_sources,currentCash,oldCash,unallocatedCash,expected,cashVariance,variances,stock_complete:items.every(i=>i.sold!==null),stock_matches:!!comparison?.complete&&items.every(i=>i.variance===0),cash_matches:Object.values(variances).every(v=>v===0),estimated_value_cents:items.every(i=>i.sold!==null)?Math.round(items.reduce((s,i)=>s+i.sold*i.price_cents,0)):null};
 }
 export function validateRecon(recon,run) {
   check(recon && recon.complete===true,'Confirm that the invoice and payment extract is complete.');

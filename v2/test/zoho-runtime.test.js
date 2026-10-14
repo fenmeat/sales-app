@@ -206,7 +206,7 @@ test('real Worker reads every page and old receipt allocation, saves only a comp
  f.fake.payment={payment_id:'8001',payment_number:'PAY-TEST',date:'2026-10-01',payment_mode:'Cash',amount:300,currency_code:'ZAR',unused_amount:0,invoices:[{invoice_id:'9001',amount_applied:100},{invoice_id:'9002',amount_applied:200}]};
  let saved=(await call('/api/run?date=2026-10-01&route=R01')).data;saved.run.rep='Tester';saved.run.items[0].loaded=2;saved=(await call('/api/run',{run:saved.run,revision:0,action:'load',request_id:crypto.randomUUID()})).data;
  saved.run.items[0].returned=1;saved=(await call('/api/run',{run:saved.run,revision:saved.revision,action:'returns',request_id:crypto.randomUUID()})).data;
- saved.run.cash.counted=30000;saved.run.cash.eft=0;saved.run.cash.card=0;saved.run.cash.shop2shop=0;saved.run.notes='Retain original capture';saved=(await call('/api/run',{run:saved.run,revision:saved.revision,action:'save',request_id:crypto.randomUUID()})).data;
+ saved.run.cash.counted=30000;saved.run.cash.eft=0;saved.run.cash.card=0;saved.run.cash.shop2shop=null;saved.run.notes='Retain original capture';saved=(await call('/api/run',{run:saved.run,revision:saved.revision,action:'save',request_id:crypto.randomUUID()})).data;
  const before=structuredClone(saved),db=await f.mf.getD1Database('DB');
  assert.equal((await f.call('/api/zoho/reconcile',{body:{date:'2026-10-01',route:'R01'}})).status,401);
  let j=(await call('/api/zoho/reconcile',{date:'2026-10-01',route:'R01'})).data;
@@ -222,6 +222,8 @@ test('real Worker reads every page and old receipt allocation, saves only a comp
  assert.equal((await call('/api/run',{run:{...saved.run,recon:forged},revision:saved.revision,action:'reconcile',request_id:crypto.randomUUID()})).status,409);
  const request={run:{...saved.run,recon:j.result.recon},revision:saved.revision,action:'reconcile',request_id:crypto.randomUUID()};const imported=await call('/api/run',request);assert.equal(imported.status,200,JSON.stringify(imported));
  assert.deepEqual(imported.data.run.cash,before.run.cash);assert.deepEqual(imported.data.run.items,before.run.items);assert.equal(imported.data.run.notes,before.run.notes);assert.equal(imported.data.run.phase,'returned');assert.equal(imported.data.summary.oldCash,20000);assert.equal(imported.data.summary.expected,30000);
+ assert.equal(imported.data.summary.received.shop2shop,0);assert.equal(imported.data.summary.receipt_sources.shop2shop,'zoho');assert.equal(imported.data.summary.variances.shop2shop,null);
+ const reloaded=(await call('/api/run?date=2026-10-01&route=R01')).data;assert.deepEqual(reloaded.run,imported.data.run);assert.deepEqual(reloaded.summary,imported.data.summary);
  assert.equal((await call('/api/run',request)).data.replayed,true);assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_history').first()).n,0);
  const stale={...request,request_id:crypto.randomUUID()};assert.equal((await call('/api/run',stale)).status,409);
  assert.equal(f.calls.filter(c=>c.url.includes('/customerpayments')).length,3);assert.equal(f.calls.filter(c=>c.url.includes('/invoices?')).length,4);
