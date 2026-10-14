@@ -38,7 +38,7 @@ test('real Worker saves supplier counts privately, rejects stale writes, replays
  const report=(await call('/api/order-guy?from='+addDays(date,3)+'&to='+addDays(date,3))).data;const ordered=report.rows.find(r=>r.material==='RM83');assert.equal(ordered.stock.qty,1);assert.equal(ordered.inventory_ready,true);assert.equal(ordered.order_packs,1);
  const wrongDate=(await call('/api/order-guy?from='+date+'&to='+date)).data.rows.find(r=>r.material==='RM83');assert.equal(wrongDate.stock.qty,1);assert.equal(wrongDate.inventory_ready,false);assert.match(wrongDate.inventory_reason,/telling is gestoor/);
  const db=await mf.getD1Database('DB');assert.equal((await db.prepare('SELECT count(*) n FROM v2_production_events').first()).n,0);assert.equal((await db.prepare('SELECT count(*) n FROM v2_events').first()).n,0);
- cookie=(await call('/api/login',{username:'xavier',key:'synthetic-staff-stocktake-key-0123456789'})).headers.get('set-cookie').split(';')[0];assert.equal((await call('/api/stocktake')).status,403);assert.equal((await call('/api/stocktake',{...body,revision:3,request_id:crypto.randomUUID()})).status,403);assert.equal((await call('/api/recipes/documented-update')).status,403);assert.equal((await call('/api/recipes/margot-packs')).status,403);assert.equal((await call('/api/recipes/margot-packs',{revision:4,request_id:crypto.randomUUID()})).status,403);
+ cookie=(await call('/api/login',{username:'xavier',key:'synthetic-staff-stocktake-key-0123456789'})).headers.get('set-cookie').split(';')[0];assert.equal((await call('/api/stocktake')).status,200);assert.equal((await call('/api/stocktake',{...body,revision:3,request_id:crypto.randomUUID()})).status,409);assert.equal((await call('/api/recipes/documented-update')).status,403);assert.equal((await call('/api/recipes/margot-packs')).status,403);assert.equal((await call('/api/recipes/margot-packs',{revision:4,request_id:crypto.randomUUID()})).status,403);
 });
 
 test('Brito resale entries appear automatically, save alongside MDM and persist across reads without mutating on GET',async t=>{
@@ -60,4 +60,50 @@ test('Brito resale entries appear automatically, save alongside MDM and persist 
  assert.deepEqual(reload.register.materials[0],mdm);assert.equal(reload.register.materials.find(m=>m.id==='BUY_B03').stock.qty,19);assert.equal(reload.register.materials.find(m=>m.id==='BUY_B06').stock.qty,0);
  const persisted=JSON.parse((await db.prepare('SELECT payload FROM v2_recipe_events WHERE revision=2').first()).payload);assert.deepEqual(persisted,reload.register);
  assert.equal((await db.prepare('SELECT count(*) n FROM v2_events').first()).n,0);assert.equal((await db.prepare('SELECT count(*) n FROM v2_production_events').first()).n,0);
+});
+
+
+test('Xavier and Xalinda save and reload only stock, keep audit identities and cannot edit manager data',async t=>{
+ const origin='https://staff-stock.example';
+ const names=['alex','alinda','xavier','xalinda','other'];
+ const access=Object.fromEntries(names.map(name=>[name,('synthetic-'+name+'-stocktake-only-').padEnd(64,'x')]));
+ const mf=new Miniflare(convertV4MiniflareOptions({name:'staff-stock-test',modules:['worker','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching','zoho-reconcile'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'staff-stock-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify(access)},outboundService:()=>{throw Error('No outbound calls');}}));
+ t.after(()=>mf.dispose());
+ const call=async(path,{body,cookie='',originHeader=origin}={})=>{const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:originHeader,'Content-Type':'application/json',Cookie:cookie},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json(),headers:r.headers};};
+ const login=async name=>(await call('/api/login',{body:{username:name,key:access[name]}})).headers.get('set-cookie').split(';')[0];
+ const cookies=Object.fromEntries(await Promise.all(names.map(async name=>[name,await login(name)])));
+ const date=today(),material={id:'RAW',name:'Synthetic stock material',unit:'kg',supplier:'Test supplier',pack_qty:20,procure:true,source:'Private cost evidence',notes:'Manager note',price:{amount:99,status:'verified',date,valid_until:null,source:'Private price'},stock:{qty:null,date:null,reserve:0,incoming:[],source:''}};
+ const register={schema_version:1,notes:'Private register notes',materials:[material],packaging:[],recipes:[]};
+ const seeded=await call('/api/recipes',{cookie:cookies.alex,body:{register,revision:0,request_id:crypto.randomUUID(),reason:'Synthetic staff stock fixture'}});assert.equal(seeded.status,200,JSON.stringify(seeded.data));
+ const privateBefore=(await call('/api/recipes',{cookie:cookies.alinda})).data.register;
+ assert.equal((await call('/api/stocktake')).status,401);
+ assert.equal((await call('/api/stocktake',{cookie:cookies.other})).status,403);
+ let revision=1,previousRequest;
+ const assertRestricted=data=>{
+  assert.equal(data.stocktake_only,true);assert.equal(data.costs,undefined);assert.deepEqual(data.register.recipes,[]);assert.deepEqual(data.register.packaging,[]);
+  assert.equal(data.register.notes,undefined);assert.equal(data.register.materials[0].price,undefined);assert.equal(data.register.materials[0].source,undefined);assert.equal(data.register.materials[0].notes,undefined);
+ };
+ for(const [index,name] of ['xavier','xalinda'].entries()){
+  const cookie=cookies[name],read=await call('/api/stocktake',{cookie});assert.equal(read.status,200);assert.equal(read.data.current_user,name);assertRestricted(read.data);
+  for(const path of ['/api/recipes','/api/recipes/audit','/api/import/recipes','/api/recipes/documented-update','/api/recipes/margot-packs','/api/order-guy','/api/sync/order-guy']){
+   assert.equal((await call(path,{cookie})).status,403,path);
+   assert.equal((await call(path,{cookie,body:{register,revision,request_id:crypto.randomUUID(),reason:'Attempt outside stock scope'}})).status,403,path);
+  }
+  assert.equal((await call('/api/products/availability',{cookie,body:{revision:0,code:'RAW',available:false}})).status,403);
+  if(previousRequest)assert.equal((await call('/api/stocktake',{cookie,body:previousRequest})).status,409,'another user cannot replay the previous user save');
+  const body={revision,request_id:crypto.randomUUID(),supplier:'test supplier',date,rows:[{material:'RAW',packs:index+2,loose:3,reserve:0}],register:{...register,materials:[]}};
+  assert.equal((await call('/api/stocktake',{cookie,body,originHeader:'https://other.example'})).status,403);
+  const saved=await call('/api/stocktake',{cookie,body});assert.equal(saved.status,200,JSON.stringify(saved.data));revision++;
+  assert.equal(saved.data.revision,revision);assert.equal(saved.data.actor,name);assertRestricted(saved.data);assert.equal(saved.data.register.materials[0].stock.qty,(index+2)*20+3);assert.match(saved.data.register.materials[0].stock.source,new RegExp(name));
+  const retry=await call('/api/stocktake',{cookie,body});assert.equal(retry.status,200);assert.equal(retry.data.replayed,true);assertRestricted(retry.data);
+  assert.equal((await call('/api/stocktake',{cookie,body:{...body,request_id:crypto.randomUUID()}})).status,409);
+  const freshCookie=await login(name),reloaded=await call('/api/stocktake',{cookie:freshCookie});assert.equal(reloaded.status,200);assert.equal(reloaded.data.revision,revision);assert.equal(reloaded.data.register.materials[0].stock.qty,(index+2)*20+3);assertRestricted(reloaded.data);
+  previousRequest=body;
+ }
+ for(const name of ['alex','alinda']){
+  const read=(await call('/api/stocktake',{cookie:cookies[name]})).data;assert.equal(read.stocktake_only,false);assert.deepEqual(read.register.materials[0].price,privateBefore.materials[0].price);
+  assert.deepEqual({...read.register,materials:read.register.materials.map(m=>({...m,stock:privateBefore.materials.find(x=>x.id===m.id).stock}))},privateBefore,'stock saves preserve all other fields');
+ }
+ const audit=(await call('/api/recipes/audit',{cookie:cookies.alex})).data.events;assert.deepEqual(audit.map(e=>e.actor),['xalinda','xavier','alex']);
+ const db=await mf.getD1Database('DB');assert.equal((await db.prepare('SELECT count(*) n FROM v2_events').first()).n,0);assert.equal((await db.prepare('SELECT count(*) n FROM v2_production_events').first()).n,0);
 });

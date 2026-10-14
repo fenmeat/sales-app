@@ -92,3 +92,14 @@ test('Brito view shows all requested products, clear box/bale labels and saves p
  assert.equal(h.root.querySelector('[data-stock-field="packs"][data-material="BUY_B03"]').value,'2');
  assert.equal(h.root.querySelector('[data-stock-field="loose"][data-material="BUY_B03"]').value,'3');
 });
+
+
+test('staff stock screen saves normally and has no Order Guy action',async()=>{
+ const h=viewHarness();h.result.stocktake_only=true;h.render();
+ assert.equal(h.root.querySelector('#stock-orders').hidden,true);
+ h.root.querySelector('#stock-orders').onclick();assert.equal(h.orderDate,undefined);
+ h.root.querySelector('[data-stock-field="packs"][data-material="BAGS"]').input('5');
+ await h.root.querySelector('#save-stock').onclick();assert.equal(h.result.register.materials[0].stock.qty,128);
+ await h.root.querySelector('#reload-stock').onclick();assert.equal(h.root.querySelector('[data-stock-field="packs"][data-material="BAGS"]').value,'5');
+ assert.equal(h.root.querySelector('#stock-orders').hidden,true);
+});
