@@ -18,6 +18,11 @@ footer p{margin:7px 0}
 .recon-row strong{font-variant-numeric:tabular-nums;text-align:right;overflow-wrap:anywhere}
 #stock-print{display:none}
 .zoho-lines td{overflow-wrap:anywhere}
+.zoho-read-state{border:1px solid var(--line);border-radius:9px;background:#f0f7fc;padding:15px;margin:16px 0;overflow-wrap:anywhere}
+.zoho-read-state.saved{border-color:#9ac8b3;background:#edf8f2;color:#174b36}
+.zoho-read-state.unsaved{border-color:#e2bd72;background:#fff7e7;color:#694410}
+.zoho-read-state>strong{display:block;font-size:18px;line-height:1.4}
+.zoho-read-state p{margin:7px 0 0}
 .zoho-quantities{margin:12px 0}
 .zoho-quantities>div{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:15px;padding:10px 0;border-bottom:1px solid var(--line)}
 .zoho-quantities dt{overflow-wrap:anywhere}

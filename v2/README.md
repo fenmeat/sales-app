@@ -1,3 +1,14 @@
+## 14 October 2026 — explicit Zoho save status (0.17.7)
+
+The Reconcile read panel now distinguishes no Zoho snapshot, a complete read not
+yet saved, and the exact snapshot persisted in the current route/date revision.
+Saved data shows **Zoho-data gestoor**, read/save times in SAST, and **Herlaai uit
+Zoho**. A completed read alone never implies a save. Failed/interrupted refreshes
+retain and identify the previous saved snapshot. Other unsaved cash/stock edits
+do not erase the fact that the unchanged Zoho snapshot was already saved.
+This is a display-only change; reads, saves, close rules and business data remain
+unchanged. Rollback needs only the previous app version, not a migration.
+
 ## 14 October 2026 — Shop2Shop automatic receipt display (0.17.6)
 
 Cash-up and Reconcile automatically show Shop2Shop from a complete saved Zoho
