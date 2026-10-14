@@ -1,3 +1,15 @@
+## 14 October 2026 — Alinda is an equal administrator (0.17.4)
+
+Alex explicitly authorised Alinda to have the same app access without repeated
+Alex approval. [ADMIN_ACCESS.md](ADMIN_ACCESS.md) describes her own OAuth
+identity/consent, equal validated app and existing read-only Zoho capabilities,
+unchanged staff boundaries and the one-time ChatGPT connection. All 175 tests
+and the Worker deployment dry-run pass. Alex explicitly approved publication
+to the existing public repository and Cloudflare app at 11:30 SAST.
+Verify live version 0.17.4 separately; deployment does not establish a connection
+in Alinda's account. The older Alex-only descriptions below are historical and
+are superseded by the 0.17.4 admin policy.
+
 ## 13 October 2026 — controlled PA write access
 
 Version 0.16.0 implements the owner's step-1 instruction: sufficient access to edit existing app data. It adds explicit OAuth write consent, validated native business saves, atomic before/after audit, optimistic revisions, idempotent receipts and guarded recovery. Existing read grants remain read-only. See [PA_WRITE_ACCESS.md](PA_WRITE_ACCESS.md) for connection and acceptance; actual owner write access remains pending until the owner reconnects with write consent and the assistant verifies it through that connection. Step 2 data reconciliation and step 3 expansion are separate work.

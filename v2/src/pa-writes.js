@@ -1,5 +1,5 @@
 import {check,UserError,dateKey} from './domain.js';
-import {hash} from './auth.js';
+import {hash,isAdmin} from './auth.js';
 import {catalog,paBusinessRequest} from './worker.js';
 
 export const WRITE_TOOLS=new Set(['save_app_data','restore_app_change','test_app_write_access']);
@@ -62,7 +62,7 @@ function auditedDatabase(db,change,before) {
 }
 
 export async function getEditContext(args,env,username) {
-  check(username==='alex','Owner access is required.',403);
+  check(isAdmin(username),'Admin access is required.',403);
   if(args.target==='catalog')return {target:'catalog',catalog:await catalog(env.DB),editing:'Supply products/routes keyed by code. Omitted entries and fields stay unchanged. Use availability target for availability switches.'};
   const path=paths[args.target];check(path,'Unsupported data target.');
   if(['register','stocktake'].includes(args.target))return {target:args.target,...await app(request('/api/recipes'),env,username),editing:'Register patches merge materials by id, recipes by group + version, packaging by product; nested objects merge and arrays replace. Existing recipe quantities require a new version.'};
@@ -72,20 +72,20 @@ export async function getEditContext(args,env,username) {
 }
 
 export async function getChangeHistory(args,env,username) {
-  check(username==='alex','Owner access is required.',403);
+  check(isAdmin(username),'Admin access is required.',403);
   if(args.request_id){const row=await env.DB.prepare('SELECT * FROM v2_pa_changes WHERE request_id=?').bind(args.request_id).first();check(row,'Change not found.',404);return {change:{...receipt(row),before_value:row.before_payload===null?null:JSON.parse(row.before_payload),action:row.action}};}
   const rows=await env.DB.prepare('SELECT request_id,target,resource_key,revision,action,reason,actor,saved_at FROM v2_pa_changes ORDER BY saved_at DESC,request_id DESC LIMIT 50').all();return {changes:rows.results};
 }
 
 export async function saveAppData(args,env,username,{fingerprintArgs=args,restore=false}={}) {
-  check(username==='alex','Owner access is required.',403);
+  check(isAdmin(username),'Admin access is required.',403);
   check(Object.hasOwn(paths,args.target),'Unsupported data target.');
   check(typeof args.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(args.request_id),'Use a unique save identifier.');
   check(Number.isSafeInteger(args.revision)&&args.revision>=0,'Read the current revision before saving.');
   check(typeof args.reason==='string'&&args.reason.trim().length>=5&&args.reason.length<=500,'Record the instruction or evidence for this change.');
   check(plain(args.data),'Supply the changed data.');safeKeys(args.data);
   const fingerprint=await hash(JSON.stringify(fingerprintArgs)),replay=await env.DB.prepare('SELECT * FROM v2_pa_changes WHERE request_id=?').bind(args.request_id).first();
-  if(replay){check(replay.request_hash===fingerprint,'Save identifier reused for different data.',409);return receipt(replay,true);}
+  if(replay){check(replay.actor===username&&replay.request_hash===fingerprint,'Save identifier reused for different data or user.',409);return receipt(replay,true);}
   const target=family(args.target),key=resource(target,args.data);
   // Ensure the original app schema exists before querying a never-used database.
   const context=await getEditContext({target,date:args.data.date,route:args.data.route},env,username);
@@ -134,9 +134,9 @@ export async function saveAppData(args,env,username,{fingerprintArgs=args,restor
 }
 
 export async function restoreAppChange(args,env,username) {
-  check(username==='alex','Owner access is required.',403);
+  check(isAdmin(username),'Admin access is required.',403);
   const replay=await env.DB.prepare('SELECT * FROM v2_pa_changes WHERE request_id=?').bind(args.request_id).first();
-  if(replay){check(replay.request_hash===await hash(JSON.stringify(args)),'Save identifier reused for different data.',409);return receipt(replay,true);}
+  if(replay){check(replay.actor===username&&replay.request_hash===await hash(JSON.stringify(args)),'Save identifier reused for different data or user.',409);return receipt(replay,true);}
   const row=await env.DB.prepare('SELECT * FROM v2_pa_changes WHERE request_id=?').bind(args.change_id).first();check(row,'Change not found.',404);
   check(row.before_payload!==null,'There is no earlier saved record to restore. Make a correction through the normal save tool.');
   check(args.revision===row.revision,'A restore must start from the changed revision. Review later changes first.',409);
@@ -152,7 +152,7 @@ export async function restoreAppChange(args,env,username) {
 }
 
 export async function testWriteAccess(env,username) {
-  check(username==='alex','Owner access is required.',403);
+  check(isAdmin(username),'Admin access is required.',403);
   const id=crypto.randomUUID(),value=crypto.randomUUID();
   await env.DB.prepare('INSERT INTO v2_pa_write_probes(id,payload) VALUES(?,?)').bind(id,value).run();
   let readBack;

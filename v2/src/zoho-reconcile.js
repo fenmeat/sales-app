@@ -1,6 +1,7 @@
 import {check,dateKey,today,isMoney,isQty,validateRecon} from './domain.js';
 import {readZoho,ZOHO_ORGANISATION} from './zoho.js';
 import {zohoMatch} from './zoho-matching.js';
+import {isAdmin} from './auth.js';
 
 const excluded=status=>['draft','void'].includes(status);
 const active=status=>['sent','paid','overdue','partially_paid','unpaid'].includes(status);
@@ -67,7 +68,7 @@ function publicJob(job,version){return {id:job.id,version,date:job.date,route:jo
 // One bounded upstream read per step makes a large day resumable and avoids a
 // long HTTP request. CAS prevents competing responses overwriting newer steps.
 export async function zohoReconciliation(env,user,input,catalog,read=readZoho){
- check(user.username==='alex','Alex manages the Zoho reconciliation read.',403);
+ check(isAdmin(user.username),'Alex or Alinda manages the Zoho reconciliation read.',403);
  if(!input.job_id){
   const date=dateKey(input.date);check(date>='2026-10-01'&&date<=today(),'Choose a date from 1 October 2026 up to today.');check(catalog.routes.some(r=>r.code===input.route),'Choose an app route.');
   const job={id:crypto.randomUUID(),date,route:input.route,catalog_revision:catalog.revision,started_at:new Date().toISOString(),stage:'invoices',invoice_page:1,payment_page:1,invoice_headers:[],payment_headers:[],invoices:{},payments:{},verify:[],verify_page:1};

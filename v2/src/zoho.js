@@ -1,5 +1,5 @@
 import {check,UserError,dateKey,today} from './domain.js';
-import {hash,keys,randomToken} from './auth.js';
+import {hash,keys,randomToken,isAdmin} from './auth.js';
 import {matchZohoInvoice} from './zoho-matching.js';
 
 export const ZOHO_ORIGIN='https://fenmeat-sales-test.alexander-fenwick.workers.dev';
@@ -26,7 +26,7 @@ function settings(env){
  return {clientId,secret,accountsUrl};
 }
 const fingerprint=config=>hash(config.clientId+'|'+config.secret);
-const isOwner=user=>user.username==='alex';
+const isAdminUser=user=>isAdmin(user?.username);
 async function encryptionKey(config){
  const material=await crypto.subtle.importKey('raw',encoder.encode(config.secret),'HKDF',false,['deriveKey']);
  return crypto.subtle.deriveKey({name:'HKDF',hash:'SHA-256',salt:encoder.encode(config.clientId),info:encoder.encode('fenmeat-sales-v2:zoho:v1')},material,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
@@ -42,15 +42,15 @@ async function unseal(config,value,purpose){
  return JSON.parse(new TextDecoder().decode(plain));
 }
 export async function zohoStatus(env,user){
- let config;try{config=settings(env);}catch{return {configured:false,connected:false,can_manage:isOwner(user),sync_enabled:false,organisations:[]};}
+ let config;try{config=settings(env);}catch{return {configured:false,connected:false,can_manage:isAdminUser(user),sync_enabled:false,organisations:[]};}
  const row=await connection(env.DB),matches=row&&row.client_fingerprint===await fingerprint(config);
  const organisations=matches?JSON.parse(row.organisations):[];
- return {configured:true,connected:!!matches,can_manage:isOwner(user),sync_enabled:false,reconciliation_enabled:true,credentials_changed:!!row&&!matches,
+ return {configured:true,connected:!!matches,can_manage:isAdminUser(user),sync_enabled:false,reconciliation_enabled:true,credentials_changed:!!row&&!matches,
   connected_at:matches?row.connected_at:null,last_checked:matches?row.last_checked:null,api_domain:matches?row.api_domain:null,
   organisations,selected_organisation:organisations.find(o=>o.id===ZOHO_ORGANISATION.id&&o.active&&o.currency==='ZAR')??null,scopes:ZOHO_SCOPES};
 }
 export async function beginZoho(request,env,user){
- check(isOwner(user),'Sign in as Alex to manage the Zoho connection.',403);
+ check(isAdminUser(user),'Sign in as Alex or Alinda to manage the Zoho connection.',403);
  check(new URL(request.url).origin===ZOHO_ORIGIN,'Connect Zoho from the test app address.',400);
  const config=settings(env);check(!await connection(env.DB),'Zoho already has a saved authorisation. Use Check connection.',409);
  const session=request.headers.get('Cookie')?.match(/(?:^|;\s*)fm_session=([a-f0-9]{64})(?:;|$)/)?.[1];check(session,'Sign in again.',401);
@@ -108,7 +108,7 @@ export async function completeZoho(request,env){
   stage='session_check';
   const session=await env.DB.prepare('SELECT username,key_hash,expires FROM v2_sessions WHERE token_hash=?').bind(pending.session_hash).first();
   const accounts=keys(env);
-  if(!session||!isOwner(session)||session.expires<=Date.now()||!accounts[session.username]||session.key_hash!==await hash(accounts[session.username]))return returnToApp('expired');
+  if(!session||!isAdminUser(session)||session.expires<=Date.now()||!accounts[session.username]||session.key_hash!==await hash(accounts[session.username]))return returnToApp('expired');
   stage='configuration';
   const config=settings(env);if(pending.client_fingerprint!==await fingerprint(config))return returnToApp('configuration');
   if(url.searchParams.has('error'))return returnToApp(url.searchParams.get('error')==='access_denied'?'denied':'consent_failed');
@@ -145,7 +145,7 @@ async function authorisedClient(env){
  return {row,tokens};
 }
 export async function checkZoho(env,user){
- check(isOwner(user),'Sign in as Alex to manage the Zoho connection.',403);
+ check(isAdminUser(user),'Sign in as Alex or Alinda to manage the Zoho connection.',403);
  const {row,tokens}=await authorisedClient(env);
  const organisations=await listOrganisations(row.api_domain,tokens.access_token);
  await env.DB.prepare('UPDATE v2_zoho_connection SET organisations=?,last_checked=? WHERE id=1').bind(JSON.stringify(organisations),new Date().toISOString()).run();
@@ -166,7 +166,7 @@ function previewHeader(invoice,date){
   last_modified:textValue(invoice.last_modified_time,80),total:typeof invoice.total==='number'&&Number.isFinite(invoice.total)&&invoice.total>=0?invoice.total:null};
 }
 async function readFenBooks(env,user,path,params){
- check(isOwner(user),'Sign in as Alex to check Zoho invoices.',403);
+ check(isAdminUser(user),'Sign in as Alex or Alinda to check Zoho invoices.',403);
  check(/^(?:invoices(?:\/[0-9]{1,40})?|customerpayments(?:\/[0-9]{1,40})?|items|salespersons)$/.test(path),'Invalid read request.');
  const saved=await connection(env.DB);
  check(saved&&JSON.parse(saved.organisations).some(o=>o.id===ZOHO_ORGANISATION.id&&o.active&&o.currency==='ZAR'),'FEN is not available in the saved connection. Press Check connection first.',409);
@@ -182,7 +182,7 @@ async function readFenBooks(env,user,path,params){
 // Owner-only, bounded reads through the existing server-side Zoho grant. Never
 // return credentials, arbitrary upstream fields, contact details or request URLs.
 export async function readZoho(env,user,input={}) {
- check(isOwner(user),'Owner access is required to read Zoho.',403);
+ check(isAdminUser(user),'Admin access is required to read Zoho.',403);
  const resource=input.resource??'status';
  if(resource==='status')return {...await zohoStatus(env,user),live_checked:false};
  if(resource==='check')return {...await checkZoho(env,user),live_checked:true};
@@ -219,7 +219,7 @@ export async function readZoho(env,user,input={}) {
  return {organisation:ZOHO_ORGANISATION,resource,date:params.date??null,page,has_more:pg?.has_more_page??false,records:values,generated_at:new Date().toISOString(),read_only:true};
 }
 export async function previewZohoInvoices(env,user,input){
- check(isOwner(user),'Sign in as Alex to check Zoho invoices.',403);
+ check(isAdminUser(user),'Sign in as Alex or Alinda to check Zoho invoices.',403);
  const date=previewDate(input.date),page=input.page??1;
  check(Number.isInteger(page)&&page>=1&&page<=100,'Invalid invoice page.');
  const data=await readFenBooks(env,user,'invoices',{date,page:String(page),per_page:'20',sort_column:'invoice_number',sort_order:'A'});
@@ -229,7 +229,7 @@ export async function previewZohoInvoices(env,user,input){
  return {preview:true,organisation:ZOHO_ORGANISATION,date,page,has_more:data.page_context.has_more_page,invoices};
 }
 export async function previewZohoInvoice(env,user,input,catalog={products:[],routes:[]}){
- check(isOwner(user),'Sign in as Alex to check Zoho invoices.',403);
+ check(isAdminUser(user),'Sign in as Alex or Alinda to check Zoho invoices.',403);
  const date=previewDate(input.date);check(typeof input.invoice_id==='string'&&/^[0-9]{1,40}$/.test(input.invoice_id),'Choose an invoice from the FEN list.');const id=input.invoice_id;
  const data=await readFenBooks(env,user,'invoices/'+id,{}),invoice=data.invoice;
  const result=previewHeader(invoice,date);

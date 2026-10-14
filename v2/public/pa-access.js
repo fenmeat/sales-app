@@ -7,6 +7,7 @@ async function api(path,body) {
 async function refresh() {
   try {
     const data=await api('/api/pa/connections');
+    $('current-user').textContent='Aangemeld as '+(data.username==='alinda'?'Alinda':'Alex')+'.';
     $('sign-in').hidden=true;$('signed-in').hidden=false;if($('approve'))$('approve').disabled=false;
     if($('connections')) {
       $('connections').hidden=false;const list=$('grants');list.replaceChildren();
@@ -17,6 +18,9 @@ async function refresh() {
 }
 $('login-form').onsubmit=async event=>{
   event.preventDefault();const button=event.currentTarget.querySelector('button');button.disabled=true;message('Meld aan…');
-  try{await api('/api/login',{username:'alex',key:$('key').value});$('key').value='';await refresh();message('Aangemeld. Bevestig nou jou gekose toegang.');}catch(error){message(error.message);}finally{button.disabled=false;}
+  try{await api('/api/login',{username:$('username').value,key:$('key').value});$('key').value='';await refresh();message('Aangemeld. Bevestig nou jou gekose toegang.');}catch(error){message(error.message);}finally{button.disabled=false;}
+};
+$('switch-account').onclick=async()=>{
+  try{await api('/api/logout',{});await refresh();message('Kies jou eie admin-aanmelding.');}catch(error){message(error.message);}
 };
 refresh();

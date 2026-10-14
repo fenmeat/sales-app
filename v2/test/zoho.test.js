@@ -12,7 +12,7 @@ class D1{
 const key='local-test-access-key-01234567890123456789';
 const testSecret='local-zoho-client-secret-01234567890123456789';
 async function fixture(){
- const env={APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key,alinda:key+'a'}),DB:new D1(),ZOHO_CLIENT_ID:'1000.LOCAL_TEST_CLIENT_ID',ZOHO_CLIENT_SECRET:testSecret};
+ const env={APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key,alinda:key+'a',xavier:key+'x'}),DB:new D1(),ZOHO_CLIENT_ID:'1000.LOCAL_TEST_CLIENT_ID',ZOHO_CLIENT_SECRET:testSecret};
  async function call(path,{body,cookie='',headers={}}={}){return worker.fetch(new Request(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...headers},body:body?JSON.stringify(body):undefined}),env);}
  const login=await call('/api/login',{body:{username:'alex',key}});assert.equal(login.status,200);
  const session=login.headers.get('set-cookie').split(';')[0];
@@ -42,10 +42,10 @@ function mockZoho(t,{tokenError=false,orgError=false,apiDomain='https://www.zoho
   return Response.json({code:0,organizations:[{organization_id:'12345',name:'Local test company',currency_code:'ZAR',is_org_active:true}]});
  });return calls;
 }
-test('Zoho requires Alex, a session and same-origin initiation; unavailable configuration stays closed',async()=>{
+test('Zoho requires an admin, a session and same-origin initiation; staff and missing configuration stay closed',async()=>{
  const f=await fixture();assert.equal((await f.call('/api/zoho/status')).status,401);
  assert.equal((await f.call('/api/zoho/connect',{body:{},cookie:f.session,headers:{Origin:'https://evil.example'}})).status,403);
- const staff=await f.call('/api/login',{body:{username:'alinda',key:key+'a'}});const staffCookie=staff.headers.get('set-cookie').split(';')[0];
+ const staff=await f.call('/api/login',{body:{username:'xavier',key:key+'x'}});const staffCookie=staff.headers.get('set-cookie').split(';')[0];
  assert.equal((await f.call('/api/zoho/connect',{body:{},cookie:staffCookie})).status,403);
  assert.equal((await f.call('/api/zoho/check',{body:{},cookie:staffCookie})).status,403);
  for(const path of ['/api/zoho/invoices/preview','/api/zoho/invoice/preview']){
@@ -55,6 +55,18 @@ test('Zoho requires Alex, a session and same-origin initiation; unavailable conf
  delete f.env.ZOHO_CLIENT_SECRET;const status=await (await f.call('/api/zoho/status',{cookie:f.session})).json();assert.equal(status.configured,false);
  assert.equal((await f.call('/api/zoho/connect',{body:{},cookie:f.session})).status,503);
 });
+test('Alinda independently manages the existing read-only Zoho connection using her own bound session',async t=>{
+ mockZoho(t);const f=await fixture();
+ const login=await f.call('/api/login',{body:{username:'alinda',key:key+'a'}});assert.equal(login.status,200);const session=login.headers.get('set-cookie').split(';')[0];
+ const response=await f.call('/api/zoho/connect',{body:{},cookie:session});assert.equal(response.status,200);
+ const pending={url:new URL((await response.json()).authorization_url),cookie:response.headers.get('set-cookie').split(';')[0]};
+ assert.equal(pending.url.searchParams.get('scope'),ZOHO_SCOPES.join(','));
+ const completed=await f.call(f.callback(pending),{cookie:pending.cookie});assert.match(completed.headers.get('location'),/zoho=connected/);
+ const status=await(await f.call('/api/zoho/status',{cookie:session})).json();assert.equal(status.can_manage,true);assert.equal(status.connected,true);assert(status.scopes.every(s=>s.endsWith('.READ')));
+ assert.equal((await f.call('/api/zoho/check',{body:{},cookie:session})).status,200);
+ assert.equal(f.env.DB.db.prepare('SELECT COUNT(*) n FROM v2_events').get().n,0);
+});
+
 test('Zoho uses read-only scopes, PKCE, browser-bound expiring state and encrypted tokens; refresh keeps route records intact',async t=>{
  const calls=mockZoho(t),f=await fixture();
  const catalog={products:[{code:'W01',name:'Test product',unit:'bag',price_cents:100,active:true,available:true}],routes:[{code:'R07',name:'Test route',weekday:4}]};
@@ -178,7 +190,8 @@ test('owner Zoho reads sanitize lists/allocations, fail closed on incomplete pag
  const payments=await readZoho(f.env,{username:'alex'},{resource:'payments',date:'2026-10-12'});assert.equal(payments.has_more,false);
  const detail=await readZoho(f.env,{username:'alex'},{resource:'payment',id:'990'});assert.equal(detail.payment.invoices[0].applied,250);assert.equal(detail.payment.unused_amount,50);assert.ok(!JSON.stringify(detail).includes('never expose'));assert.ok(!JSON.stringify(detail).includes('secret@example'));
  missingPage=true;await assert.rejects(readZoho(f.env,{username:'alex'},{resource:'payments',date:'2026-10-12'}),/pagination/);
- await assert.rejects(readZoho(f.env,{username:'alinda'},{resource:'items'}),/Owner/);
+ assert.deepEqual((await readZoho(f.env,{username:'alinda'},{resource:'items'})).records,items.records);
+ await assert.rejects(readZoho(f.env,{username:'xavier'},{resource:'items'}),/Admin/);
  await assert.rejects(readZoho(f.env,{username:'alex'},{resource:'payment',id:'../secrets'}),/invalid/);
  assert.deepEqual(f.env.DB.db.prepare('SELECT * FROM v2_events').all(),before);
 });

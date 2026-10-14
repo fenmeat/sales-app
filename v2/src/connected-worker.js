@@ -1,6 +1,6 @@
 import app from './worker.js';
 import {OAuthProvider,OAuthError,AuthorizationError,insufficientScope} from '@cloudflare/workers-oauth-provider';
-import {authenticate,keys,hash,sameOrigin} from './auth.js';
+import {authenticate,keys,hash,sameOrigin,isAdmin} from './auth.js';
 import {UserError,check} from './domain.js';
 import {initPaStorage,oauthStore,rateLimit,cleanPaStorage} from './pa-storage.js';
 import {mcpResponse} from './pa-mcp.js';
@@ -15,13 +15,14 @@ const challenge=()=>json({error:'invalid_token'},401,{'WWW-Authenticate':`Bearer
 function allowedRedirect(uri) {
   try {const u=new URL(uri);return u.origin==='https://chatgpt.com'&&!u.search&&!u.hash&&!u.username&&!u.password&&(u.pathname==='/connector_platform_oauth_redirect'||/^\/connector\/oauth\/[a-zA-Z0-9_-]{8,100}$/.test(u.pathname));}catch{return false;}
 }
-async function validOwner(env,props) {
-  const key=keys(env).alex;
-  return props?.username==='alex'&&!!key&&props.keyFingerprint===await hash(key);
+async function validAdmin(env,props) {
+  if(!isAdmin(props?.username))return false;
+  const key=keys(env)[props.username];
+  return !!key&&props.keyFingerprint===await hash(key);
 }
-async function owner(request,env) {
+async function administrator(request,env) {
   const user=await authenticate(request,env);
-  check(user.username==='alex','Net Alex kan hierdie verbinding bestuur.',403);
+  check(isAdmin(user.username),'Net Alex of Alinda kan hierdie verbinding bestuur.',403);
   return user;
 }
 function page(body,extraHeaders={}) {
@@ -29,7 +30,7 @@ function page(body,extraHeaders={}) {
   for(const [key,value] of Object.entries(headers))pageHeaders.set(key,value);
   pageHeaders.set('Content-Type','text/html; charset=utf-8');
   pageHeaders.set('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; form-action 'self' https://chatgpt.com; frame-ancestors 'none'; base-uri 'none'");
-  return new Response(`<!doctype html><html lang="af"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FenMeat · ChatGPT-toegang</title><link rel="stylesheet" href="/pa-access.css"><script src="/pa-access.js" defer></script></head><body><main><a href="/">← FenMeat</a><h1>ChatGPT-toegang</h1>${body}<p id="message" role="status"></p><section id="sign-in"><h2>Meld eenmalig aan</h2><p>Gebruik Alex se bestaande FenMeat-wagwoord hier op die FenMeat-webwerf.</p><form id="login-form"><label for="key">Wagwoord</label><input id="key" type="password" autocomplete="current-password" maxlength="200" required><button>Meld aan</button></form></section><p id="signed-in" hidden>Aangemeld as Alex.</p></main></body></html>`,{headers:pageHeaders});
+  return new Response(`<!doctype html><html lang="af"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FenMeat · ChatGPT-toegang</title><link rel="stylesheet" href="/pa-access.css"><script src="/pa-access.js" defer></script></head><body><main><a href="/">← FenMeat</a><h1>ChatGPT-toegang</h1>${body}<p id="message" role="status"></p><section id="sign-in"><h2>Meld eenmalig aan</h2><p>Gebruik jou eie Alex- of Alinda-aanmelding hier op die FenMeat-webwerf.</p><form id="login-form"><label for="username">Admin</label><select id="username" name="username" autocomplete="username"><option value="alinda">Alinda</option><option value="alex">Alex</option></select><label for="key">Wagwoord</label><input id="key" type="password" autocomplete="current-password" maxlength="200" required><button>Meld aan</button></form></section><p id="signed-in" hidden><span id="current-user"></span> <button id="switch-account" type="button" class="secondary">Gebruik ander admin</button></p></main></body></html>`,{headers:pageHeaders});
 }
 async function consent(request,env) {
   const oauth=env.OAUTH_PROVIDER;
@@ -44,16 +45,16 @@ async function consent(request,env) {
   const form=await request.formData(),handle=String(form.get('handle')??'');
   if(form.get('decision')==='deny'){const denied=await oauth.denyConsent(request,handle);return new Response(null,{status:302,headers:denied.headers});}
   check(form.get('decision')==='approve','Choose Allow or Cancel.');
-  await owner(request,env);
+  const user=await administrator(request,env);
   const scope=form.get('write_access')==='yes'?SCOPES:['fenmeat:read','offline_access'];
   const approved=await oauth.approveConsent(request,handle,{scope});
   check(allowedRedirect(approved.request.redirectUri),'Invalid redirect URI.');
-  const {redirectTo}=await oauth.completeAuthorization({request:approved.request,userId:'alex',metadata:{name:scope.includes('fenmeat:write')?'ChatGPT · FenMeat lees en skryf':'ChatGPT · FenMeat lees'},scope,props:{username:'alex',keyFingerprint:await hash(keys(env).alex)}});
+  const {redirectTo}=await oauth.completeAuthorization({request:approved.request,userId:user.username,metadata:{name:'ChatGPT · '+user.username+' · '+(scope.includes('fenmeat:write')?'FenMeat lees en skryf':'FenMeat lees')},scope,props:{username:user.username,keyFingerprint:await hash(keys(env)[user.username])}});
   approved.headers.set('Location',redirectTo);
   return new Response(null,{status:302,headers:approved.headers});
 }
 async function management(request,env) {
-  const user=await owner(request,env),oauth=env.OAUTH_PROVIDER;
+  const user=await administrator(request,env),oauth=env.OAUTH_PROVIDER;
   if(request.method==='GET') {
     const grants=await oauth.listUserGrants(user.username,{limit:100});
     return json({username:user.username,endpoint:RESOURCE,grants:grants.items.map(g=>({id:g.id,name:g.metadata?.name??'ChatGPT',write_access:g.scope.includes('fenmeat:write'),created_at:new Date(g.createdAt*1000).toISOString(),expires_at:g.expiresAt?new Date(g.expiresAt*1000).toISOString():null})),more:!!grants.cursor});
@@ -75,16 +76,16 @@ const provider=new OAuthProvider({
     if(!Array.isArray(clientMetadata.redirect_uris)||!clientMetadata.redirect_uris.length||!clientMetadata.redirect_uris.every(allowedRedirect)||clientMetadata.software_statement)return {description:'Only registered ChatGPT HTTPS callbacks are allowed.'};
   },
   async tokenExchangeCallback({env,props}) {
-    if(!await validOwner(env,props))throw new OAuthError('invalid_grant',{description:'App access was revoked. Connect again as Alex.'});
+    if(!await validAdmin(env,props))throw new OAuthError('invalid_grant',{description:'App access was revoked. Connect again using your own Alex or Alinda admin account.'});
   },
   apiHandler:{async fetch(request,env,ctx) {
     if(new URL(request.url).pathname!=='/mcp')return json({error:'Not found.'},404);
     if(!ctx.auth?.scope?.includes('fenmeat:read'))return insufficientScope(ctx.auth,['fenmeat:read']);
-    if(!await validOwner(env,ctx.props))return challenge();
+    if(!await validAdmin(env,ctx.props))return challenge();
     if(!await rateLimit(env.DB,'mcp:'+ctx.auth.userId,120,60))return json({error:'Too many app requests. Try again shortly.'},429,{'Retry-After':'60'});
     if(request.method==='POST'){
       let rpc;try{rpc=await request.clone().json();}catch{}
-      if(rpc?.method==='tools/call'&&WRITE_TOOLS.has(rpc.params?.name)&&!ctx.auth.scope.includes('fenmeat:write'))return insufficientScope(ctx.auth,['fenmeat:read','fenmeat:write'],'Approve write access as Alex before saving.');
+      if(rpc?.method==='tools/call'&&WRITE_TOOLS.has(rpc.params?.name)&&!ctx.auth.scope.includes('fenmeat:write'))return insufficientScope(ctx.auth,['fenmeat:read','fenmeat:write'],'Approve write access using your own Alex or Alinda admin account before saving.');
     }
     return mcpResponse(request,env,ctx.props.username,ctx.auth.scope);
   }},

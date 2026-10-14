@@ -1,5 +1,10 @@
 # FenMeat read access — 0.15.0
 
+**0.17.4 update:** Alex and Alinda are both authorised
+administrators under Alex's 14 October instruction. With live 0.17.4, use
+the person's own account and consent; see [ADMIN_ACCESS.md](ADMIN_ACCESS.md).
+The Alex-only flow below records the original implementation, not the new policy.
+
 Owner instruction, 12 October 2026: continue building permanent read access for
 ChatGPT without repeated sign-in during conversations (PA task TSK-00110).
 

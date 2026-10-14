@@ -1,5 +1,11 @@
 # Owner-authorised ChatGPT writes — 0.16.0
 
+**0.17.4 update:** Alex and Alinda have equal admin
+authority. Each authorises their own OAuth connection and writes are audited
+under the actual account; see [ADMIN_ACCESS.md](ADMIN_ACCESS.md). No repeated
+Alex approval is required for Alinda's authorised work. Actual connection
+verification remains separate from local tests and deployment.
+
 The owner's 13 October 2026 instruction authorises sufficient access to change
 the existing app's data (step 1). This release extends the existing Worker and
 MCP endpoint. It does not certify or migrate the business data (step 2), expand

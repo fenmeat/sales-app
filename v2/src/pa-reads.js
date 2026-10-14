@@ -3,6 +3,7 @@ import {catalog,runResult,forecastResult} from './worker.js';
 import {productionApi} from './production-api.js';
 import {orderGuyApi,readRegister} from './order-guy-api.js';
 import {recipeCost} from './order-guy.js';
+import {isAdmin} from './auth.js';
 
 // A second boundary: even a future mistake in a business read cannot write D1.
 export function readOnlyDatabase(db) {
@@ -12,7 +13,7 @@ export function readOnlyDatabase(db) {
 }
 
 export async function readPaData(name, args, env, username) {
-  check(username==='alex','Owner-authorised read access is required.',403);
+  check(isAdmin(username),'Admin-authorised read access is required.',403);
   const db=readOnlyDatabase(env.DB), c=await catalog(db), user={username};
   const source={app:'FenMeat Sales V2',generated_at:new Date().toISOString(),timezone:'Africa/Johannesburg',access:'read_only',catalog_revision:c.revision};
   // Keep business `source` fields intact (Order Guy already has one).

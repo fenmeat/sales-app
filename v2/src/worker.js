@@ -7,7 +7,7 @@ import {zohoStatus,beginZoho,completeZoho,checkZoho,previewZohoInvoices,previewZ
 import {zohoReconciliation,verifyZohoSnapshot} from './zoho-reconcile.js';
 import {applyZohoMappings} from './zoho-matching.js';
 import {ensureSchema} from './schema.js';
-import {keys,authenticate,login,sameOrigin,hash} from './auth.js';
+import {keys,authenticate,login,sameOrigin,hash,isAdmin} from './auth.js';
 const initialized=new WeakMap();
 const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"};
 const json=(body,status=200,extra={})=>Response.json(body,{status,headers:{...headers,...extra}});
@@ -32,7 +32,7 @@ async function forecastResult(db,date,route,c){
  const snapshot=await hash(JSON.stringify({version:'1.3-route-cycle',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
  return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline from comparable route-cycle visits with measured month phase',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.17.3',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.17.4',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
@@ -53,7 +53,7 @@ async function handle(request,env,paUser=null){
  if(path==='/api/zoho/read'&&method==='POST')return json(await readZoho(env,user,await bodyOf(request)));
  if(path==='/api/zoho/reconcile'&&method==='POST')return json(await zohoReconciliation(env,user,await bodyOf(request),await catalog(env.DB)));
  if(path==='/api/zoho/mappings'&&method==='POST'){
-  check(user.username==='alex','Alex reviews Zoho matches.',403);const b=await bodyOf(request),c=await catalog(env.DB);check(c.revision===b.revision,'The catalogue changed. Reload before reviewing matches.',409);
+  check(isAdmin(user.username),'Alex or Alinda reviews Zoho matches.',403);const b=await bodyOf(request),c=await catalog(env.DB);check(c.revision===b.revision,'The catalogue changed. Reload before reviewing matches.',409);
   return handle(new Request(url.origin+'/api/catalog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:c.revision,catalog:applyZohoMappings(c,b)})}),env,user);
  }
  if(path==='/api/zoho/connect'&&method==='POST'){const result=await beginZoho(request,env,user);return json({authorization_url:result.authorization_url},200,{'Set-Cookie':result.cookie});}
@@ -108,10 +108,10 @@ export default {async fetch(request,env){try{const r=await handle(request,env);r
 // Internal read helpers shared with the separately authenticated PA connector.
 // Exporting these functions does not add an HTTP route or accept OAuth on app APIs.
 export {catalog,runResult,forecastResult};
-// Internal entry point after the connector has checked owner identity and OAuth
+// Internal entry point after the connector has checked admin identity and OAuth
 // scopes. This does not enable bearer access on any ordinary app HTTP endpoint.
 export async function paBusinessRequest(request,env,user,db=env.DB) {
- check(user?.username==='alex','Owner access is required.',403);
+ check(isAdmin(user?.username),'Admin access is required.',403);
  check(['/api/recipes','/api/catalog','/api/products/availability','/api/stocktake','/api/production','/api/run'].includes(new URL(request.url).pathname),'Unsupported app operation.',403);
  check(['GET','POST'].includes(request.method),'Method not allowed.',405);
  await init(env.DB);
