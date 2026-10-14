@@ -13,9 +13,10 @@ function report(reg,p,extra={}){return orderGuyReport({register:reg,registry_rev
 test('Brito resale counts use boxes and eight-pack bales; unknown counts and other stock are preserved',()=>{
  const reg=register();assert.doesNotThrow(()=>validateRegister(reg));assert.equal(reg.materials.length,3);
  assert(reg.materials.every(m=>m.stock.qty===null&&m.price.amount===null));
+ assert(reg.materials.every(m=>!m.source.includes('https://')&&!m.source.includes('PO-')));
  assert.deepEqual(withResaleMaterials(reg,catalog),reg);
- const counted=applySupplierCount(reg,{supplier:"brito's",date,rows:[{material:'BUY_B01',packs:10,loose:0,reserve:0},{material:'BUY_B03',packs:2,loose:3,reserve:0},{material:'BUY_B06',packs:0,loose:null,reserve:0}]},'alex',date).register;
- assert.equal(counted.materials.find(m=>m.id==='BUY_B03').stock.qty,19);
+ const counted=applySupplierCount(reg,{supplier:"brito's",date,rows:[{material:'BUY_B01',packs:10,loose:0,reserve:0},{material:'BUY_B03',packs:2,reserve:0},{material:'BUY_B06',packs:0,loose:null,reserve:0}]},'alex',date).register;
+ assert.equal(counted.materials.find(m=>m.id==='BUY_B03').stock.qty,16);
  assert.equal(counted.materials.find(m=>m.id==='BUY_B01').stock.qty,10);
  assert.equal(counted.materials.find(m=>m.id==='BUY_B06').stock.qty,0);
  assert.deepEqual(withResaleMaterials(counted,catalog),counted);

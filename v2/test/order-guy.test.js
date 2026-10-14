@@ -75,7 +75,7 @@ test('mixed recipe and resale material converts sachets, reserves only manufactu
 test('changed purchase pack cannot silently reinterpret an old physical count',()=>{
  const {plan,reg,report}=fixture(['W01']);plan.groups[0].planned=1;const m=reg.materials[0];m.stock.count={packs:2,loose:0,pack_qty:10,unit:'kg'};m.stock.qty=20;
  let row=report().rows.find(x=>x.material==='M1');assert.equal(row.net,null);assert.match(row.inventory_reason,/pakgrootte/);assert.equal(m.stock.qty,20);
- m.stock.count={packs:0,loose:20,pack_qty:10,unit:'kg'};row=report().rows.find(x=>x.material==='M1');assert.equal(row.net,0,'loose-unit count is independent of changed purchase pack');
+ m.stock.count={packs:0,loose:20,pack_qty:10,unit:'kg'};row=report().rows.find(x=>x.material==='M1');assert.equal(row.net,null,'legacy loose-unit count now requires full-pack confirmation');assert.match(row.inventory_reason,/los voorraad/);assert.equal(m.stock.qty,20);
 });
 
 test('non-purchased uncounted ingredients retain usage and cost without blocking purchasable quantities',()=>{

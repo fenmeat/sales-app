@@ -1,4 +1,4 @@
-import {applySupplierCount,supplierGroups,stockQuantity} from './stocktake.js';
+import {applySupplierCount,supplierGroups,fullPackQuantity,needsFullPackConfirmation} from './stocktake.js';
 import {today} from './domain.js';
 
 export function countNumber(value){
@@ -8,14 +8,16 @@ export function countNumber(value){
 }
 export const hasCountChanges=draft=>!!draft.metaDirty||Object.keys(draft.rows??{}).length>0;
 export function savedCountRow(m){
- const base={packs:'',loose:'',reserve:m.stock.reserve??0,included_incoming:[],pack_qty:m.pack_qty,unit:m.unit};
+ const base={packs:'',reserve:m.stock.reserve??0,included_incoming:[],pack_qty:m.pack_qty,unit:m.unit};
  if(m.stock.qty===null)return base;
  const c=m.stock.count;
+ if(needsFullPackConfirmation(m))return {...base,review:'Die vorige telling bevat los voorraad of deelpakke. Bevestig die huidige aantal volle pakke; die ou totaal bly in die geskiedenis.'};
  if(c&&c.unit===m.unit&&c.pack_qty===m.pack_qty){
-  try{if(Math.abs(stockQuantity(m,c.packs,c.loose)-m.stock.qty)<1e-6)return {...base,packs:c.packs??'',loose:c.loose??''};}catch{}
+  try{if(Math.abs(fullPackQuantity(m,c.packs)-m.stock.qty)<1e-6)return {...base,packs:c.packs};}catch{}
  }
- // Preserve the actual saved total if the purchase pack has changed since counting.
- return {...base,loose:String(m.stock.qty)};
+ // Never round, discard a remainder or reinterpret a changed pack basis.
+ if(!c&&m.pack_qty>0){const packs=m.stock.qty/m.pack_qty;if(Number.isSafeInteger(packs))return {...base,packs};}
+ return {...base,review:'Bevestig die volle pakke met die huidige pakgrootte. Die vorige totaal word nie afgerond of by jou nuwe telling getel nie.'};
 }
 export function initialiseCountDraft(register,draft){
  const groups=supplierGroups(register.materials);
@@ -36,10 +38,12 @@ export function prepareCountRequest(result,draft){
  const rows=[];
  for(const m of group.materials){
   if(!Object.hasOwn(draft.rows??{},m.id)&&!draft.metaDirty)continue;
-  const row=draft.rows[m.id]??savedCountRow(m),packs=countNumber(row.packs),loose=countNumber(row.loose);
-  if(packs===null&&loose===null){if(row.included_incoming?.length)throw Error('Voer die fisiese telling vir '+m.name+' in voordat jy ’n aflewering daarby insluit.');continue;}
+  const row=draft.rows[m.id]??savedCountRow(m),packs=countNumber(row.packs);
+  if(row.review&&Object.hasOwn(draft.rows,m.id))throw Error(m.name+': '+row.review);
+  if(row.loose!==undefined&&row.loose!==null&&row.loose!==''&&Number(row.loose)!==0)throw Error(m.name+': Herbevestig slegs die volle pakke; die ou los invoer mag nie saam gestoor word nie.');
+  if(packs===null){if(row.included_incoming?.length)throw Error('Voer die fisiese telling vir '+m.name+' in voordat jy ’n aflewering daarby insluit.');continue;}
   if(row.unit!==undefined&&(row.unit!==m.unit||row.pack_qty!==m.pack_qty))throw Error(m.name+': Die pakgrootte het verander. Jou invoer is behou; laai die jongste gegewens voordat jy stoor.');
-  rows.push({material:m.id,packs,loose,reserve:countNumber(row.reserve)??0,included_incoming:row.included_incoming??[]});
+  rows.push({material:m.id,packs,reserve:countNumber(row.reserve)??0,included_incoming:row.included_incoming??[]});
  }
  if(!rows.length)throw Error('Geen nuwe telling is ingevoer nie. Die gestoorde hoeveelhede wat op die skerm staan, bly behoue.');
  const body={revision:result.revision,supplier:draft.supplier,date:draft.date,available_from:draft.available_from,availability_confirmed:!!draft.confirmed,rows};
@@ -47,20 +51,30 @@ export function prepareCountRequest(result,draft){
  return body;
 }
 export function reconcileCountDraft(result,draft){
- if(draft.request&&result.request_id===draft.request.request_id){draft.rows={};draft.metaDirty=false;draft.request=null;delete draft.date;delete draft.available_from;delete draft.confirmed;return 'Jou vorige stoor is op die bediener gevind. Die gestoorde hoeveelhede is hieronder ingevul.';}
+ if(result.request_id&&(result.request_id===draft.request?.request_id||result.request_id===draft.legacy_request_id)){draft.rows={};draft.metaDirty=false;draft.request=null;delete draft.legacy_request_id;delete draft.date;delete draft.available_from;delete draft.confirmed;return 'Jou vorige stoor is op die bediener gevind. Die gestoorde hoeveelhede is hieronder ingevul.';}
  if(!hasCountChanges(draft)){delete draft.date;delete draft.available_from;delete draft.confirmed;}
- let converted=0;
+ let changedBasis=0;
  for(const [id,row] of Object.entries(draft.rows??{})){
-  const m=result.register.materials.find(m=>m.id===id);if(!m||row.unit!==m.unit||row.pack_qty===m.pack_qty)continue;
-  try{const total=stockQuantity({pack_qty:row.pack_qty},countNumber(row.packs),countNumber(row.loose));row.packs='';row.loose=String(total);row.pack_qty=m.pack_qty;converted++;}catch{}
+  const m=result.register.materials.find(m=>m.id===id);if(!m||(row.unit===m.unit&&row.pack_qty===m.pack_qty))continue;
+  row.review='Die pakgrootte of eenheid het verander. Jou invoer is behou; tik die volle pakke weer in om die nuwe pakgrootte te bevestig.';changedBasis++;
  }
  draft.request=null;
- return converted?'Die pakgrootte het verander. Jou ongestoorde hoeveelhede is as totale eenhede behou; gaan dit na voordat jy stoor.':hasCountChanges(draft)?'Die jongste gestoorde telling is gelaai. Jou ongestoorde veranderings is steeds in die blokkies.':'Die jongste gestoorde hoeveelhede is weer in die blokkies ingevul.';
+ return changedBasis?'Die pakgrootte het verander. Herbevestig die volle pakke voordat jy stoor.':hasCountChanges(draft)?'Die jongste gestoorde telling is gelaai. Jou ongestoorde veranderings is steeds in die blokkies.':'Die jongste gestoorde hoeveelhede is weer in die blokkies ingevul.';
 }
 const storageKey=user=>'fenmeat-stocktake-draft-v1:'+user;
 export function readCountDraft(storage,user){
- try{const saved=JSON.parse(storage.getItem(storageKey(user))??'null');return saved?.schema===1&&saved.draft&&typeof saved.draft==='object'&&hasCountChanges(saved.draft)?saved.draft:null;}catch{return null;}
+ try{
+  const saved=JSON.parse(storage.getItem(storageKey(user))??'null');
+  if(![1,2].includes(saved?.schema)||!saved.draft||typeof saved.draft!=='object'||!hasCountChanges(saved.draft))return null;
+  if(saved.schema===1){
+   for(const row of Object.values(saved.draft.rows??{})){row.review='Ongestoorde invoer uit die vorige skerm is behou. Tik die volle pakke weer in; los voorraad word nie oorgedra nie.';}
+   // A legacy request may have reached the server. Retain its ID for reload
+   // acknowledgement only, never resend its obsolete body.
+   saved.draft.legacy_request_id=saved.draft.request?.request_id;saved.draft.request=null;
+  }
+  return saved.draft;
+ }catch{return null;}
 }
 export function writeCountDraft(storage,user,draft){
- try{if(!hasCountChanges(draft))storage.removeItem(storageKey(user));else storage.setItem(storageKey(user),JSON.stringify({schema:1,draft}));return true;}catch{return false;}
+ try{if(!hasCountChanges(draft))storage.removeItem(storageKey(user));else storage.setItem(storageKey(user),JSON.stringify({schema:2,draft}));return true;}catch{return false;}
 }

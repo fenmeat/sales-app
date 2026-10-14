@@ -1,4 +1,5 @@
 import {check,dateKey,addDays,today,cleanText} from './domain.js';
+import {needsFullPackConfirmation} from './stocktake.js';
 import {productionPlanningView,productionSummary,productionProfile} from './production.js';
 const qty=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1e8;
 const optional=n=>n===null||qty(n);
@@ -7,8 +8,8 @@ const id=s=>{check(typeof s==='string'&&/^[A-Z0-9_-]{1,40}$/.test(s),'Invalid ma
 const unique=(rows,key)=>{const keys=rows.map(key);check(new Set(keys).size===keys.length,'Duplicate register entry.');};
 const round=n=>Math.round(n*1e6)/1e6;
 export const emptyRegister=()=>({schema_version:1,materials:[],recipes:[],packaging:[],notes:''});
-// Owner-requested Brito's resale mappings, 9 October 2026. No price or stock is inferred.
-// Sources: current V2 catalogue B01/B03/B06 and approved PO-00393 pack specifications.
+// Existing resale pack mappings. No price or physical stock is inferred.
+// Supporting business documents belong in the private register, not source code.
 const BRITOS_RESALE = [
  {product:'B01',sku:'PD015',name:'Superbraai Box',unit:'box',pack:1,label:'1 boks: 10 × 400 g (4 kg)',unitLabel:'bokse',countLabel:'Aantal bokse',looseLabel:'Bykomende bokse'},
  {product:'B06',sku:'PD508',name:'Nyama Choma',unit:'box',pack:1,label:'1 boks: 10 × 400 g (4 kg)',unitLabel:'bokse',countLabel:'Aantal bokse',looseLabel:'Bykomende bokse'},
@@ -25,7 +26,7 @@ export function withResaleMaterials(register,catalog){
    if(!product.active||!product.available)continue;
    const materialId='BUY_'+spec.product;
    check(!next.materials.some(m=>m.id===materialId),'Resale material identity needs review: '+materialId);
-   const source='Approved Britos PO-00393 pack specification: https://docs.google.com/document/d/1QCXeOa80hrU-0ODJKTuSC7kD9GeohChbvRCsxHmYThY/edit ; current V2 catalogue '+spec.product+'; owner requested supplier counting 2026-10-09.';
+   const source='Existing application purchase-pack mapping for catalogue product '+spec.product+'. Supporting evidence is maintained in the private business records.';
    m={id:materialId,name:spec.name,unit:spec.unit,supplier:"Brito's",pack_qty:spec.pack,procure:true,resale_product:spec.product,supplier_sku:spec.sku,
     source,notes:'Bought in and resold unchanged. One material unit is one catalogue sales unit. Price and physical count require current evidence.',
     pack_spec:{label:spec.label,unit_label:spec.unitLabel,count_label:spec.countLabel,loose_label:spec.looseLabel,note:'',source},
@@ -167,8 +168,9 @@ export function orderGuyReport({register,registry_revision,plans,forecast_days=[
  const rows=[...totals.values()].map(row=>{
   const m=materials.get(row.material),p=priceFor(m,asOf),s=m.stock;
   const countBasisChanged=s.count&&((s.count.packs>0&&s.count.pack_qty!==m.pack_qty)||s.count.unit!==m.unit);
-  const inventory_ready=!countBasisChanged&&s.qty!==null&&(s.available_from??s.date)===from&&(s.date===from||s.availability_confirmed===true)&&s.reserve!==null&&s.source.trim().length>0;
-  const inventory_reason=inventory_ready?null:countBasisChanged?'Die pakgrootte of eenheid het sedert hierdie telling verander. Bevestig die telling met die korrekte pakgrootte; die ou telling is bewaar.':s.qty===null?'Hierdie produk het nog geen gestoorde voorraadtelling nie':(s.available_from??s.date)!==from?'Die telling is gestoor en beskikbaar vanaf '+(s.available_from??s.date)+', maar hierdie bestelling begin '+from+'. Pas die begindatum aan of bevestig die voorraad vir daardie datum in Voorraadtelling':s.date!==from&&s.availability_confirmed!==true?'Die telling is gestoor; bevestig dat die voorraad nog op die produksiedatum beskikbaar is':'Die telling is gestoor; voltooi die datum, voorraad wat uitgesit is en die telbron';
+  const legacyCount=needsFullPackConfirmation(m);
+  const inventory_ready=!legacyCount&&!countBasisChanged&&s.qty!==null&&(s.available_from??s.date)===from&&(s.date===from||s.availability_confirmed===true)&&s.reserve!==null&&s.source.trim().length>0;
+  const inventory_reason=inventory_ready?null:legacyCount?'Die vorige telling bevat los voorraad of deelpakke. Bevestig slegs die volle pakke in Voorraadtelling voordat hierdie bestelling bereken word.':countBasisChanged?'Die pakgrootte of eenheid het sedert hierdie telling verander. Bevestig die telling met die korrekte pakgrootte; die ou telling is bewaar.':s.qty===null?'Hierdie produk het nog geen gestoorde voorraadtelling nie':(s.available_from??s.date)!==from?'Die telling is gestoor en beskikbaar vanaf '+(s.available_from??s.date)+', maar hierdie bestelling begin '+from+'. Pas die begindatum aan of bevestig die voorraad vir daardie datum in Voorraadtelling':s.date!==from&&s.availability_confirmed!==true?'Die telling is gestoor; bevestig dat die voorraad nog op die produksiedatum beskikbaar is':'Die telling is gestoor; voltooi die datum, voorraad wat uitgesit is en die telbron';
   const minimum=m.minimum_stock??0,retained=Math.max(s.reserve??0,minimum),minimumOnly=minimum>0&&!referenced.has(m.id);
   let stock=inventory_ready?s.qty-retained:null,shortage=0,high=0,extra=0;
   const daily=[];for(let date=from;date<=to;date=addDays(date,1)){

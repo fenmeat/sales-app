@@ -8,16 +8,16 @@ import {buildProductionPlan,productionProfile} from '../src/production.js';
 const date='2026-10-09';
 const material=(id,unit='unit',supplier='Margot Swiss',pack_qty=25)=>({id,name:id,unit,supplier,pack_qty,procure:true,source:'Test',notes:'',price:{amount:null,status:'unknown',date:null,valid_until:null,source:''},stock:{qty:null,date:null,reserve:null,incoming:[],source:''}});
 function register(){return {...emptyRegister(),materials:[material('M1'),material('M2','unit','MARGOT SWISS',null),material('OTHER','kg','Crown',2)]};}
-const count=()=>({supplier:'margot swiss',date,available_from:date,rows:[{material:'M1',packs:2,loose:3,reserve:5}]});
+const count=()=>({supplier:'margot swiss',date,available_from:date,rows:[{material:'M1',packs:2,reserve:5}]});
 test('supplier count groups case variants, converts purchase packs once, preserves zero, uncounted materials, prices and incoming',()=>{
  const r=register();r.materials[0].stock.incoming=[{date:'2026-10-12',qty:25,reference:'TEST-PO'}];const before=structuredClone(r);
  assert.equal(supplierGroups(r.materials).length,2);assert.equal(supplierGroups(r.materials).find(g=>g.key==='margot swiss').materials.length,2);
- const c=count();c.rows.push({material:'M2',packs:null,loose:0,reserve:0});const result=applySupplierCount(r,c,'alex',date);
- assert.equal(result.register.materials[0].stock.qty,53);assert.equal(result.register.materials[0].stock.reserve,5);assert.equal(result.register.materials[1].stock.qty,0);assert.equal(result.register.materials[2].stock.qty,null);
- assert.deepEqual(result.register.materials[0].stock.incoming,before.materials[0].stock.incoming);assert.deepEqual(result.register.materials[0].price,before.materials[0].price);assert.deepEqual(r,before);assert.doesNotThrow(()=>validateRegister(result.register));
+ r.materials[1].pack_qty=10;const c=count();c.rows.push({material:'M2',packs:0,reserve:0});const result=applySupplierCount(r,c,'alex',date);
+ assert.equal(result.register.materials[0].stock.qty,50);assert.equal(result.register.materials[0].stock.reserve,5);assert.equal(result.register.materials[1].stock.qty,0);assert.equal(result.register.materials[2].stock.qty,null);
+ assert.deepEqual(result.register.materials[0].stock.incoming,before.materials[0].stock.incoming);assert.deepEqual(result.register.materials[0].price,before.materials[0].price);assert.deepEqual(r,{...before,materials:before.materials.map(m=>m.id==='M2'?{...m,pack_qty:10}:m)});assert.doesNotThrow(()=>validateRegister(result.register));
  assert.equal(stockQuantity(r.materials[2],1.5,.5),3.5);
  c.rows[0].included_incoming=['TEST-PO'];const received=applySupplierCount(r,c,'alex',date).register.materials[0].stock;
- assert.equal(received.qty,53);assert.deepEqual(received.incoming,[]);assert.deepEqual(received.count.included_incoming,['TEST-PO']);
+ assert.equal(received.qty,50);assert.deepEqual(received.incoming,[]);assert.deepEqual(received.count.included_incoming,['TEST-PO']);
  c.rows[0].included_incoming=['NOT-A-PO'];assert.throws(()=>applySupplierCount(r,c,'alex',date));
 });
 test('stocktake rejects ambiguous/mismatched counts and cannot relabel a Friday physical count as a Monday count',()=>{
@@ -33,8 +33,11 @@ test('Order Guy uses an expressly carried-forward count, allocation and extra re
  reg.packaging=[{product:'P01',complete:true,source:'Test',notes:'',lines:[{material:'M1',qty:10,unit:'unit',status:'approved',note:''}]}];
  const plan=buildProductionPlan({date:'2026-10-12',target_date:'2026-10-13',routes:[],items:[{...catalog.products[0],...productionProfile(catalog.products[0]),demand:5,breakdown:[]}],snapshot:'test'});
  const report=()=>orderGuyReport({register:reg,registry_revision:1,plans:[],forecast_days:[{date:plan.date,status:'forecast',plan}],from:plan.date,to:plan.date,catalog});
- const row=report().rows[0];assert.equal(row.gross,50);assert.equal(row.early_month_reserve,7.5);assert.equal(row.net,9.5);assert.equal(row.order_packs,1);
- delete reg.materials[0].stock.availability_confirmed;assert.equal(report().rows[0].net,null);
+ const row=report().rows[0];assert.equal(row.gross,50);assert.equal(row.early_month_reserve,7.5);assert.equal(row.net,12.5);assert.equal(row.order_packs,1);
+ const confirmed=structuredClone(reg.materials[0].stock);
+ reg.materials[0].stock.count.loose=3;reg.materials[0].stock.qty+=3;
+ assert.equal(report().rows[0].net,null);assert.equal(report().rows[0].order_packs,null);assert.match(report().rows[0].inventory_reason,/los voorraad/);
+ reg.materials[0].stock=confirmed;delete reg.materials[0].stock.availability_confirmed;assert.equal(report().rows[0].net,null);
 });
 function correctionFixture(){
  const r={...emptyRegister(),materials:['RM65','RM32','RM69','RM68','RM33','RM35','RM41','RM42','RM40','RM39','RM36','RM66','RM67','RM38','RM71','RM73','MINCE_TRAY','LABELS_UNALLOCATED'].map(id=>material(id,id==='RM73'?'roll':'unit'))};r.materials.push(material('RAW','kg','Crown',20));

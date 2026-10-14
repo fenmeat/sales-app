@@ -11,6 +11,7 @@ export function supplierGroups(materials){
  return [...groups.values()].sort((a,b)=>a.name.localeCompare(b.name));
 }
 const valid=n=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=1e8;
+// Legacy arithmetic is retained only to interpret historical records.
 export function stockQuantity(material,packs,loose){
  check(packs===null||valid(packs),'Enter a non-negative pack count.');
  check(loose===null||valid(loose),'Enter a non-negative loose quantity.');
@@ -18,6 +19,16 @@ export function stockQuantity(material,packs,loose){
  check(!packs||(material.pack_qty>0),'This purchase pack size is unknown. Count in the displayed material unit.');
  const total=(packs??0)*(material.pack_qty??0)+(loose??0);
  check(valid(total),'Stock quantity is too large.');return Math.round(total*1e6)/1e6;
+}
+export function fullPackQuantity(material,packs){
+ check(Number.isSafeInteger(packs)&&packs>=0,'Voer die aantal volle pakke as ’n heelgetal in, insluitend 0 indien daar geen is nie.');
+ check(valid(material.pack_qty)&&material.pack_qty>0,'Die pakgrootte ontbreek. Alex of Alinda moet dit eers bevestig.');
+ const total=packs*material.pack_qty;check(valid(total),'Stock quantity is too large.');
+ return Math.round(total*1e6)/1e6;
+}
+export function needsFullPackConfirmation(material){
+ const c=material.stock.count;
+ return !!c&&(c.loose>0||!Number.isSafeInteger(c.packs)||c.packs<0);
 }
 export function applySupplierCount(register,input,actor,asOf=today()){
  const date=dateKey(input.date),availableFrom=dateKey(input.available_from??date);
@@ -32,11 +43,12 @@ export function applySupplierCount(register,input,actor,asOf=today()){
  for(const row of input.rows){
   const m=next.materials.find(m=>m.id===row.material);check(m&&m.procure&&supplierKey(m.supplier)===group.key,'A count belongs to a different supplier.');
   check(!m.stock.date||date>=m.stock.date,'A newer count already exists for '+m.name+'. Reload the latest stock.');
-  const qty=stockQuantity(m,row.packs,row.loose);
+  check(row.loose===undefined||row.loose===null||row.loose===0,'Los voorraad word nie meer aanvaar nie. Herlaai die app en voer slegs volle pakke in.');
+  const qty=fullPackQuantity(m,row.packs);
   check(valid(row.reserve)&&row.reserve<=qty,'Stock kept aside must be between zero and the counted total for '+m.name+'.');
   const received=row.included_incoming??[];
   check(Array.isArray(received)&&received.length<=100&&new Set(received).size===received.length&&received.every(ref=>m.stock.incoming.some(x=>x.reference===ref)),'Choose existing deliveries that are already included in this physical count.');
-  m.stock={...m.stock,qty,date,reserve:row.reserve,incoming:m.stock.incoming.filter(x=>!received.includes(x.reference)),available_from:availableFrom,availability_confirmed:availableFrom===date||input.availability_confirmed===true,source:'Physical count by '+actor+' for '+group.name+' on '+date, count:{packs:row.packs,loose:row.loose,pack_qty:m.pack_qty,unit:m.unit,included_incoming:received}};
+  m.stock={...m.stock,qty,date,reserve:row.reserve,incoming:m.stock.incoming.filter(x=>!received.includes(x.reference)),available_from:availableFrom,availability_confirmed:availableFrom===date||input.availability_confirmed===true,source:'Full-pack physical count by '+actor+' for '+group.name+' on '+date, count:{packs:row.packs,loose:0,pack_qty:m.pack_qty,unit:m.unit,included_incoming:received}};
  }
  return {register:next,counted:input.rows.length,supplier:group.name};
 }
