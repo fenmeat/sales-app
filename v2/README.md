@@ -1,3 +1,23 @@
+## 15 October 2026 — explicit recipe costing status (0.17.9)
+
+Recipe cards now separate recipe approval from costing readiness. Missing or
+unusable prices identify the affected ingredients or manufacturing consumables;
+a water-only gap says **Resep goedgekeur — waterkoste uitstaande** for an approved
+recipe. Unapproved specifications and incomplete manufacturing details have
+separate explanations. Known subtotals remain labelled and missing prices never
+become zero. Fully costed recipes retain their existing total, including R0.00.
+All status text derived from register data is escaped before rendering.
+
+Display only: no recipe, price, stock, cost calculation or database changes.
+Packing, labour and overhead remain excluded from recipe totals. Rollback needs
+only the previous app version; there is no data migration.
+
+Verification: all 190 existing tests and the Worker dry-run pass. One-off checks
+using the existing cost calculator and actual card renderer cover water-only and
+multiple/expired price gaps, approval/specification issues, zero totals, escaped
+names and unchanged source data. No authenticated live browser or physical
+iPhone/iPad check is claimed.
+
 ## 14 October 2026 — Evening returns sales value (0.17.8)
 
 Evening returns now shows **Total sales value** above the product search. It uses
