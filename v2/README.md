@@ -1,3 +1,26 @@
+## 15 October 2026 — compact mobile route capture (0.17.10)
+
+Morning product rows keep Suggested, Plan, the copy arrow and Loaded together.
+Product names and sales units remain visible; native Details expands the full
+pack description, price and forecast explanation. Stockout/missing-history
+warnings and previously saved non-sale adjustments remain visible when folded.
+Evening product rows use the same compact heading and retain return/sales fields.
+The mobile save/navigation dock is shorter while retaining its save timestamp,
+revision and all four workflow tabs. Touch targets remain at least 44 px and
+editable numbers at least 18 px in the compact layout; long names wrap.
+
+Only presentation and version metadata change. The existing input handlers,
+copy validation, unknown-versus-zero meaning, saves, revisions, quantities,
+forecast arithmetic and print-stock sheet are unchanged. No migration is needed;
+rollback is the prior app deployment.
+
+Verification: all 190 existing tests and the Worker dry-run pass. Local Chromium
+with the actual Worker/assets and isolated synthetic D1 verifies 320/390/834/1280
+px layouts without horizontal overflow, copy zero/decimal comma, blank-copy
+protection, opening details without losing edits, save/reload, retained unrelated
+quantities/notes, search and evening totals. The phone screenshot was visually
+reviewed. No live business data writes or physical iPhone/Safari test is claimed.
+
 ## 15 October 2026 — explicit recipe costing status (0.17.9)
 
 Recipe cards now separate recipe approval from costing readiness. Missing or

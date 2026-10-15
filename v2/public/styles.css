@@ -255,3 +255,55 @@ footer p{margin:7px 0}
 .sales-total h2{font-size:16px;letter-spacing:0;margin:0 0 8px}
 .sales-total>strong{display:block;font-size:clamp(28px,5vw,36px);line-height:1.2;font-weight:750;letter-spacing:-.5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .sales-total p{font-size:14px;line-height:1.5;margin:8px 0 0;color:#43627e}
+
+/* Compact route capture: one set of inputs at every size; warnings stay visible. */
+@media screen{
+ .capture-table .capture-product-details{margin:0;font-size:14px;line-height:1.4}
+ .capture-product-details>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:44px;list-style:none}
+ .capture-product-details>summary::-webkit-details-marker{display:none}
+ .capture-product-title{min-width:0}
+ .capture-table .product-name{font-size:17px;line-height:1.25;margin:0;font-weight:700}
+ .capture-unit{display:block;font-size:12px;line-height:1.3;color:var(--muted);font-weight:400;margin-top:2px}
+ .product-details-label{flex:none;font-size:13px;color:var(--blue);font-weight:600}
+ .product-detail-body{border-top:1px solid var(--line);padding-top:6px;margin-top:5px;font-weight:400}
+ .product-detail-body p{margin:6px 0;line-height:1.5;font-size:13px}
+ .capture-table td.product .product-detail-body small{font-size:13px}
+ .capture-table td.product>small.bad{font-size:13px;line-height:1.4;margin-top:5px}
+ .capture-table .load-cell{white-space:nowrap}
+ .capture-table .copy-product-plan{display:inline-flex;align-items:center;justify-content:center;width:44px;min-width:44px;min-height:44px;margin:0 6px 0 0;padding:0;font-size:22px;vertical-align:middle}
+ .capture-table .load-cell input{vertical-align:middle}
+}
+@media screen and (max-width:1100px){
+ .capture-table tbody{gap:8px}
+ .capture-table tr{padding:8px 10px 10px;gap:6px 8px;border-radius:10px}
+ .capture-table.morning-table tr{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 44px minmax(0,1fr)}
+ .capture-table.morning-table .forecast-cell{grid-column:auto;display:block}
+ .capture-table td[data-label]::before{font-size:13px;line-height:18px;min-height:0;margin:0 0 4px}
+ .capture-table td input:is([type=number],[inputmode=decimal]){font-size:18px;min-height:44px;height:44px;padding:6px 3px}
+ .capture-table .forecast-cell .forecast{display:flex;align-items:center;justify-content:center;min-height:44px;font-size:20px;line-height:1.2}
+ .capture-table .load-cell{grid-column:3/5;display:grid;grid-template-columns:44px minmax(0,1fr);column-gap:8px;align-items:end;white-space:normal}
+ .capture-table .load-cell::before{grid-column:2;grid-row:1}
+ .capture-table .load-cell .copy-product-plan{grid-column:1;grid-row:2;margin:0}
+ .capture-table .load-cell input{grid-column:2;grid-row:2}
+ .evening-table td.num{font-size:20px}
+ .capture-table .soldout-cell::before{margin:0}
+}
+@media screen and (min-width:760px) and (max-width:1100px){
+ .capture-table tbody{gap:12px}
+}
+@media screen and (max-width:759px){
+ .workflow-dock .savebar{padding:6px 12px 7px}
+ .save-message{gap:2px 8px;margin-bottom:5px}
+ .save-message strong{font-size:14px}
+ .savebar small{font-size:12px}
+ .workflow-dock .savebar button{min-height:44px;font-size:15px;padding:7px 8px}
+ .workflow-nav{padding:3px 6px 4px}
+ .workflow-nav button{min-height:56px;font-size:12px;gap:2px;padding:4px 2px}
+ .workflow-nav .nav-icon{width:18px;height:18px}
+}
+@media print{
+ .capture-product-details{margin:0}
+ .capture-product-details summary{list-style:none}
+ .product-details-label,.capture-table .copy-product-plan{display:none}
+ .capture-unit{display:block;font-size:10px;font-weight:400}
+}
