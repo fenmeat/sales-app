@@ -11,6 +11,12 @@ const whole=n=>Math.ceil(Math.max(0,n-1e-9));
 const sumKnown=values=>values.some(v=>v==null)?null:values.reduce((a,v)=>a+v,0);
 const equivalent=(qty,yieldQty)=>qty==null?null:qty===0?0:yieldQty>0?qty/yieldQty:null;
 const has=(object,key)=>Object.prototype.hasOwnProperty.call(object,key);
+// Physical packed stock after production, before any later stock movements.
+// Route demand and planned packing never substitute for measured output.
+export function productionStockBalance(item){
+ const opening=isQty(item.stock)?item.stock:null,produced=isQty(item.actual)?item.actual:null;
+ return {opening,produced,closing:opening===null||produced===null?null:roundQty(opening+produced)};
+}
 export function productionProfile(p){
  if(p.code==='R07'){const version=p.recipe_version??2;return {group:p.code,group_name:p.name,mode:'cooked',recipe_version:version,yield_qty:version===2?null:23,yield_note:version===2?'Current 106 kg recipe: saleable output needs confirmation. The old doubled output is withdrawn.':'Previous recipe basis. Update to the approved 2-pack recipe before new production.'};}
  if(russianPieces[p.code])return {group:'RUSSIAN',group_name:'Russian · shared recipe',mode:'shared',yield_qty:1310/russianPieces[p.code],yield_note:'Existing planner: 1,310 loose Russians per batch; '+russianPieces[p.code]+' per sales bag. Review after recipe changes.'};

@@ -1,3 +1,9 @@
+## 16 October 2026 — opening, produced and closing stock (0.17.11)
+
+Production now shows Opening stock, Stock produced and Closing stock together in an always-visible section for each product. The opening value repeats the existing editable physical count taken after morning truck loading. Stock produced remains the existing actual packed-output field; only newly finished sales units belong here. Closing is calculated from valid opening + actual output, never the packing plan or route forecast. It is the balance after production, before later loads/returns, and does not carry stock forward or alter a route load. Blank or invalid counts keep closing unknown; an explicit zero is valid. Existing saved payloads, revisions and calculations for planning remain unchanged.
+
+Validation: 193 Node/workerd tests and Worker deploy dry-run pass. Local Chromium against the real Worker/assets with isolated synthetic D1 checks 320/390/834/1280px, tap-to-select, zero/blank/invalid/decimal counts, planned-versus-actual separation, shared product sizes, save/reload and unchanged route data. No live business records are written for QA; physical iPhone/iPad Safari remains untested.
+
 ## 15 October 2026 — compact mobile route capture (0.17.10)
 
 Morning product rows keep Suggested, Plan, the copy arrow and Loaded together.
