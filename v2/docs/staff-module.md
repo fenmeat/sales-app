@@ -1,4 +1,51 @@
-# Native Staff core — 0.19.0
+# Native Staff core — 0.20.0
+
+## Private source transfer
+
+On 19 October Alex authorised transferring the existing personnel records and
+clarified UIF responsibility: Fen calculates, Alex pays the auditors, and the
+auditors submit. Staff exposes an initial import through the existing admin
+session only. An empty register is required; deployment itself imports no data.
+No connector scope, API bearer permission, clock credential or public asset can
+read or write these source archives.
+
+Two additive tables retain immutable import manifests/chunks and completion
+evidence. Each chunk and the complete source are SHA-256 verified. The final
+employee-register revision and completed-import status commit atomically.
+Choosing the identical source file safely resumes an interrupted upload or a
+lost completion response. A second initial import cannot replace existing data.
+Original source rows are available in Staff → Imported records; their formulas
+are shown as text and never executed. Employee details include source rate,
+banking, UIF, start dates, current weekly pay and source leave balances.
+
+Identity matching uses exact names after whitespace/case normalization only.
+Distinct historical names remain separate and inactive; a shared casual label
+also remains inactive. Historical absence totals, negative adjustments, current
+source balances and clock logs are preserved without creating native leave
+deductions, approved balances or live punches. The Hours screen explicitly
+directs users to Imported records for source clock history. Native schedules,
+pay rules and approved opening balances still need reconciliation. Imported
+employment dates preserve the actual source value and display its original text;
+an explicit, audited confirmation is required before clock activation. Missing
+or ambiguous dates remain unknown. Source rates have a capture date and no
+invented historical effective date. Original private source details are retained
+even after a manager confirms an operational date.
+
+Limits: 20 source imports, 120 chunks of at most 120,000 characters, 40 sheets,
+40,000 populated source rows and 200 derived employee identities. Source history
+is paged 50 rows at a time. In this first migration implementation a history read
+loads and verifies the bounded archive; normalize/index the historical sources
+before expanding these limits. No deletion or archive replacement is exposed.
+The source capture timestamp is shown prominently; the old clock continues
+independently and later records are not automatically synchronized.
+
+Runtime tests verify access denial, CSRF, incomplete uploads, corrupt chunks,
+duplicate retries, simultaneous completion, complete source equality, preserved
+zero-prefixed account fields, negative leave, immutable source formulas, and
+Worker-restart persistence. `scripts/qa-staff-import.mjs` uses synthetic data to
+verify the real file-upload UI and safe retry after a lost commit response.
+
+## Original core implementation
 
 This replaces the memory-only Staff design preview with an integrated Worker/D1
 module. It adds `/staff` administration and a separately authenticated

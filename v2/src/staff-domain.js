@@ -13,7 +13,7 @@ export function validatePerson(raw,old){
  const p={id:uuid(raw.id),code:text(raw.code,'employee code',24).toUpperCase(),name:text(raw.name,'employee name',80),team:text(raw.team,'team',60),start_date:dateKey(raw.start_date),active:raw.active};
  check(/^[A-Z0-9_-]+$/.test(p.code),'Use letters, numbers, - or _ in the employee code.');
  check(typeof p.active==='boolean','Choose active or inactive.');
- if(old){check(old.code===p.code,'The permanent employee code cannot change.');check(old.start_date===p.start_date,'The employment start date cannot change after the record is created.');}
+ if(old){check(old.code===p.code,'The permanent employee code cannot change.');check(old.start_date===null||old.start_date===p.start_date,'The employment start date cannot change after the record is created.');}
  p.schedules=old?.schedules??[];return p;
 }
 export function addSchedule(p,b){
@@ -36,7 +36,12 @@ export function applyStaffAction(state,b,actor,stamp){
   if(old)Object.assign(old,p);else next.people.push(p);detail={employee_id:p.id};
  }else{
   const p=staffPerson(next,b.employee_id);detail={employee_id:p.id};
-  if(b.action==='schedule'){addSchedule(p,b);detail.reason=text(b.reason,'schedule source or reason',300);p.schedules.find(s=>s.from===b.from).source=detail.reason;}
+  if(b.action==='employment_date'){
+   check(p.source_profile&&p.employment_verified===false,'The imported employment date has already been confirmed.',409);
+   const date=dateKey(b.date);check(p.schedules.every(s=>s.from>=date),'The employment date cannot follow an existing schedule.');
+   detail.reason=text(b.reason,'employment date source',300);detail.previous_date=p.start_date;p.start_date=date;p.employment_verified=true;
+  }
+  else if(b.action==='schedule'){check(p.employment_verified!==false,'Confirm the imported employment date first.');addSchedule(p,b);detail.reason=text(b.reason,'schedule source or reason',300);p.schedules.find(s=>s.from===b.from).source=detail.reason;}
   else if(b.action==='balance'){
    check(LEAVE_TYPES.includes(b.type)&&b.type!=='Unpaid','Choose a paid leave type.');
    check(['opening','adjustment'].includes(b.kind),'Choose opening balance or adjustment.');

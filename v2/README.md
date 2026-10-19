@@ -1,3 +1,26 @@
+## 19 October 2026 — private Staff data transfer (0.20.0)
+
+Alex authorised transfer of the existing personnel data into Fen. Staff now
+accepts a private source file through the existing Alex/Alinda session. Resumable
+checksum-verified chunks preserve every captured non-empty source row, including
+original formulas, typed values, displayed values, notes and row references.
+The initial transfer creates employee profiles and retains distinct historical
+names for review. It never overwrites a populated register or replays old leave,
+clock events or payments as new transactions. Source history is browsable inside
+Staff, and individual imported details are available under People.
+
+UIF responsibility confirmed by Alex: Fen calculates the amount, Alex pays the
+auditors, and the auditors perform submission. The native payroll calculation
+engine and operational clock cutover remain separate work. No HR access is added
+to the existing Sales/Production connector. Real transfer files remain private
+and are never part of this public source tree.
+
+Validation: 206 Node/workerd tests passed, including interrupted imports,
+concurrent completion, exact source readback and restart persistence. Local
+desktop/mobile Chromium tested the actual file input, multiple chunks, a lost
+commit response, safe retry, history search, private profile details and date
+confirmation. Deployment and live data import are verified separately.
+
 ## 19 October 2026 — native Staff core (0.19.0)
 
 Staff now has persistent employee records, effective-dated schedules, verified

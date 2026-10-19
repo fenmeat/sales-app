@@ -8,7 +8,7 @@ test('real Cloudflare assets follow HTML redirects through the Worker to the pro
  const config=JSON.parse(await readFile(new URL('../wrangler.jsonc',import.meta.url),'utf8'));
  const mf=new Miniflare(convertV4MiniflareOptions({
   name:'asset-routing-test',
-  modules:['worker','staff-api','staff-domain','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching','zoho-reconcile'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),
+  modules:['worker','staff-api','staff-domain','staff-import','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching','zoho-reconcile'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),
   compatibilityDate:config.compatibility_date,
   assets:{directory:fileURLToPath(new URL('../'+config.assets.directory+'/',import.meta.url)),binding:config.assets.binding,run_worker_first:config.assets.run_worker_first,routerConfig:{has_user_worker:true}},
   d1Databases:{DB:'asset-routing-test'},

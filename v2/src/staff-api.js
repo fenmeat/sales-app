@@ -1,8 +1,10 @@
 import {check,UserError,dateKey,today,addDays} from './domain.js';
 import {hash,randomToken,isAdmin,sameOrigin} from './auth.js';
 import {blankStaff,applyStaffAction,staffPerson,uuid,text,shiftSummary,appendPunch,periodHours,dayStart,dayAt,LEAVE_TYPES,balance} from './staff-domain.js';
+import {IMPORT_SCHEMA,staffImportApi} from './staff-import.js';
 
 export const STAFF_SCHEMA=[
+ ...IMPORT_SCHEMA,
  `CREATE TABLE IF NOT EXISTS v2_staff_register (revision INTEGER PRIMARY KEY, payload TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, detail TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_staff_requests (id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, result TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_staff_pins (employee_id TEXT PRIMARY KEY, salt TEXT NOT NULL, digest TEXT NOT NULL, pepper_id TEXT NOT NULL)`,
@@ -76,7 +78,7 @@ export async function staffClockApi({request,url,env,bodyOf}){
   const p=staffPerson(current.state,b.employee_id);check(p.active,'Employee is inactive.',403);
   await verifyPin(db,p.id,b.pin,device,env);const op=await operation(db,device.id,path,b,env);if(op.old)return {data:op.old};
   const last=await latestShift(db,p.id),rev=await timeRevision(db,p.id),stamp=new Date().toISOString();
-  check(p.start_date<=dayAt(stamp),'Employment has not started.');
+  check(p.start_date&&p.employment_verified!==false,'Confirm the employment start date before clocking.');check(p.start_date<=dayAt(stamp),'Employment has not started.');
   check(Number.isInteger(b.revision)&&b.revision===rev,'Clock status changed. Check your last action before retrying.',409);
   const old=last?JSON.parse(last.payload):null,active=last&&last.state!=='out';
   let shift=active?old:{id:crypto.randomUUID(),employee_id:p.id,punches:[]};
@@ -98,6 +100,7 @@ export async function staffClockApi({request,url,env,bodyOf}){
 export async function staffApi({request,url,env,user,bodyOf}){
  check(isAdmin(user.username),'Only Alex or Alinda can access Staff administration.',403);
  const db=env.DB,path=url.pathname,current=await staffState(db),stamp=new Date().toISOString();
+ if(path==='/api/staff/imports'||path.startsWith('/api/staff/imports/'))return staffImportApi({request,url,db,user,bodyOf,current});
  if(path==='/api/staff'&&request.method==='GET'){
   const pinRows=(await db.prepare('SELECT employee_id,pepper_id FROM v2_staff_pins').all()).results,pepperId=hasPepper(env)?await hash(env.STAFF_PIN_PEPPER):null;
   const devices=(await db.prepare('SELECT id,name,code_expires,expires,revoked,created_by,created_at,token_hash IS NOT NULL AS enrolled FROM v2_staff_devices ORDER BY created_at DESC').all()).results;
