@@ -1,4 +1,8 @@
-# Native Staff core — 0.20.0
+# Native Staff core — 0.20.1
+
+Version 0.20.1 adds a separately consented, admin-only, read-only connector.
+See [Staff connector access](../PA_STAFF_READ_ACCESS.md). Existing general
+connector scopes still confer no Staff access.
 
 ## Private source transfer
 
@@ -6,8 +10,9 @@ On 19 October Alex authorised transferring the existing personnel records and
 clarified UIF responsibility: Fen calculates, Alex pays the auditors, and the
 auditors submit. Staff exposes an initial import through the existing admin
 session only. An empty register is required; deployment itself imports no data.
-No connector scope, API bearer permission, clock credential or public asset can
-read or write these source archives.
+Only the separately approved `fenmeat:staff:read` connector scope can read
+these source archives. General connector scopes, API bearer permissions, clock
+credentials and public assets confer no Staff access. No connector can write HR.
 
 Two additive tables retain immutable import manifests/chunks and completion
 evidence. Each chunk and the complete source are SHA-256 verified. The final

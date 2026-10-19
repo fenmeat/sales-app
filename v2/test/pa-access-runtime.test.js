@@ -6,6 +6,9 @@ import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {readOnlyDatabase} from '../src/pa-reads.js';
 import {SCHEMA} from '../src/schema.js';
 import {emptyRun} from '../src/domain.js';
+import {hash} from '../src/auth.js';
+import {sourceFixture} from './fixtures/staff-source.js';
+import {readStaffData,STAFF_READ_SCOPE} from '../src/pa-staff-reads.js';
 
 const origin='https://fenmeat-sales-test.alexander-fenwick.workers.dev';
 const key='synthetic-test-alex-key-01234567890123456789', staff='synthetic-test-staff-key-01234567890123456789';
@@ -29,14 +32,23 @@ async function fixture(t) {
     const r=await req('/oauth/authorize?'+query);const html=await r.text();
     return {response:r,html,verifier,handle:html.match(/name="handle" value="([^"]+)"/)?.[1],cookie:cookies(r.headers).join('; '),query};
   }
-  async function approve(start,session,write=false) {return req('/oauth/authorize',{form:{handle:start.handle,decision:'approve',...(write?{write_access:'yes'}:{})},headers:{Cookie:[start.cookie,session].filter(Boolean).join('; ')}});}
+  async function approve(start,session,write=false,staffRead=false) {return req('/oauth/authorize',{form:{handle:start.handle,decision:'approve',...(write?{write_access:'yes'}:{}),...(staffRead?{staff_read_access:'yes'}:{})},headers:{Cookie:[start.cookie,session].filter(Boolean).join('; ')}});}
   async function exchange(client,code,verifier='p'.repeat(64),extra={}) {return req('/oauth/token',{form:{grant_type:'authorization_code',client_id:client.client_id,code,code_verifier:verifier,redirect_uri:callback,resource:origin+'/mcp',...extra}});}
-  async function connect(write=false,username='alex') {const session=await login(username),c=await client(),start=await begin(c);assert.equal(start.response.status,200,start.html);assert.equal(start.response.headers.get('referrer-policy'),'same-origin');const response=await approve(start,session,write);assert.equal(response.status,302,await response.clone().text());const location=new URL(response.headers.get('location'));assert.equal(location.origin,'https://chatgpt.com');assert.equal(location.searchParams.get('iss'),origin);assert.equal(location.searchParams.get('state'),'synthetic-state');const code=location.searchParams.get('code'),r=await exchange(c,code);assert.equal(r.status,200,await r.clone().text());const tokens=await r.json();assert.ok(tokens.refresh_token);return {session,client:c,tokens,code,start};}
+  async function connect(write=false,username='alex',staffRead=false) {const session=await login(username),c=await client(),start=await begin(c);assert.equal(start.response.status,200,start.html);assert.equal(start.response.headers.get('referrer-policy'),'same-origin');const response=await approve(start,session,write,staffRead);assert.equal(response.status,302,await response.clone().text());const location=new URL(response.headers.get('location'));assert.equal(location.origin,'https://chatgpt.com');assert.equal(location.searchParams.get('iss'),origin);assert.equal(location.searchParams.get('state'),'synthetic-state');const code=location.searchParams.get('code'),r=await exchange(c,code);assert.equal(r.status,200,await r.clone().text());const tokens=await r.json();assert.ok(tokens.refresh_token);return {session,client:c,tokens,code,start};}
   async function rpc(tokens,method,params={}) {const r=await req('/mcp',{body:{jsonrpc:'2.0',id:1,method,params},headers:{Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-06-18',...(tokens?{Authorization:'Bearer '+tokens.access_token}:{})}});const text=await r.text();if(r.ok)assert.ok(text,'Empty RPC response: '+method+' '+(params.name??''));return {response:r,data:text?JSON.parse(text):{}};}
   return {mf,db,req,login,client,begin,approve,exchange,connect,rpc};
 }
 async function businessSnapshot(db) {const result={};for(const table of ['v2_catalog','v2_events','v2_production_events','v2_recipe_events','v2_history','v2_sync','v2_zoho_connection'])result[table]=(await db.prepare('SELECT * FROM '+table).all()).results;return result;}
 const change=(target,revision,data,extra={})=>({target,revision,data,request_id:crypto.randomUUID(),reason:'Synthetic owner instruction for isolated test',...extra});
+async function seedStaff(f,session){
+ const bundle=sourceFixture();for(let n=3;n<=65;n++)bundle.sheets.at(-1).rows.push({number:n,cells:[{formattedValue:'Synthetic source line '+n}]});
+ const raw=JSON.stringify(bundle),id=await hash(raw),headers={Cookie:session};
+ for(const [path,body]of [['start',{import_id:id,manifest:{id,parts:[id]}}],['chunk',{import_id:id,part:0,payload:raw}],['finish',{import_id:id,revision:0}]]){
+  const r=await f.req('/api/staff/imports/'+path,{headers,body});assert.equal(r.status,200,await r.clone().text());
+ }
+ return {id,bundle,raw};
+}
+async function staffSnapshot(db){const out={};for(const table of ['v2_staff_register','v2_staff_imports','v2_staff_import_chunks','v2_staff_requests','v2_staff_time','v2_staff_pins','v2_staff_devices'])out[table]=(await db.prepare('SELECT * FROM '+table).all()).results;return out;}
 async function call(f,tokens,name,args={}){const r=await f.rpc(tokens,'tools/call',{name,arguments:args});assert.equal(r.response.status,200,JSON.stringify(r.data));return r.data.result;}
 async function ok(f,tokens,name,args={}){const r=await call(f,tokens,name,args);assert.ok(!r.isError,JSON.stringify(r));return r.structuredContent;}
 async function seedRegister(f,session){
@@ -109,7 +121,7 @@ test('OAuth discovery, owner consent, SDK handshake, all seven read tools and da
   const unauth=await f.rpc(null,'tools/list');assert.equal(unauth.response.status,401);assert.match(unauth.response.headers.get('www-authenticate'),/oauth-protected-resource/);
   const {tokens,session}=await f.connect();
   const init=await f.rpc(tokens,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'synthetic',version:'1'}});assert.equal(init.response.status,200);assert.equal(init.data.result.serverInfo.name,'fenmeat-read-access');
-  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,14);for(const tool of list.data.result.tools){const write=['save_app_data','restore_app_change','test_app_write_access'].includes(tool.name);assert.equal(tool.annotations.readOnlyHint,!write);assert.deepEqual(tool._meta.securitySchemes[0].scopes,write?['fenmeat:read','fenmeat:write']:['fenmeat:read']);}
+  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,15);for(const tool of list.data.result.tools){const write=['save_app_data','restore_app_change','test_app_write_access'].includes(tool.name);assert.equal(tool.annotations.readOnlyHint,!write);assert.deepEqual(tool._meta.securitySchemes[0].scopes,write?['fenmeat:read','fenmeat:write']:tool.name==='get_staff_data'?['fenmeat:read',STAFF_READ_SCOPE]:['fenmeat:read']);}
   for(const [name,args] of [['get_catalog',{}],['get_sales',{from:'2026-10-12',to:'2026-10-12'}],['get_forecast',{date:'2026-10-13',route:'MB'}],['get_production',{date:'2026-10-12'}],['get_recipes',{}],['get_material_stock',{}],['get_order_requirements',{from:'2026-10-12',to:'2026-10-12'}]]) {
     const r=await f.rpc(tokens,'tools/call',{name,arguments:args});assert.equal(r.response.status,200);assert.equal(r.data.result?.isError,undefined,JSON.stringify(r.data));assert.equal(r.data.result.structuredContent.connection.access,'read_only');
     if(name==='get_production')assert.equal(r.data.result.structuredContent.source_kind,'unsaved_suggestion');
@@ -217,4 +229,69 @@ test('Saved sales, explicit-zero production decisions and count timestamps read 
   const stock=(await f.rpc(tokens,'tools/call',{name:'get_material_stock',arguments:{supplier:'Test'}})).data.result.structuredContent;
   assert.equal(stock.revision,5);assert.equal(stock.materials[0].stock.qty,0);assert.equal(stock.materials[1].stock.qty,null);assert.equal(stock.materials[0].stock.date,'2026-10-12');
   assert.deepEqual(await businessSnapshot(f.db),before);
+});
+
+test('Staff requires independent consent: old read/write tokens and ordinary app accounts cannot acquire it',async t=>{
+ const f=await fixture(t),old=await f.connect(true);await seedStaff(f,old.session);
+ const status=await ok(f,old.tokens,'get_access_status');assert.equal(status.staff_read_access,false);assert.equal(status.staff_write_access,false);assert.equal(status.write_access,true);assert.equal(status.staff,undefined);
+ assert.match(old.start.html,/name="staff_read_access" value="yes" >/);
+ const before=await staffSnapshot(f.db);
+ for(const [name,args]of [['get_staff_data',{query:{resource:'summary'}}],['get_access_status',{staff:{resource:'summary'}}]]){
+  const r=await f.rpc(old.tokens,'tools/call',{name,arguments:args});assert.equal(r.response.status,403);assert.match(r.response.headers.get('www-authenticate'),/fenmeat:staff:read/);assert.match(r.response.headers.get('www-authenticate'),/fenmeat:write/);assert.ok(!JSON.stringify(r.data).includes('Synthetic worker'));
+ }
+ const renewal=await f.req('/oauth/token',{form:{grant_type:'refresh_token',client_id:old.client.client_id,refresh_token:old.tokens.refresh_token,resource:origin+'/mcp',scope:'fenmeat:read fenmeat:write fenmeat:staff:read offline_access'}});
+ if(renewal.ok){const renewed=await renewal.json();assert.equal((await ok(f,renewed,'get_access_status')).staff_read_access,false);}else assert.equal(renewal.status,400);
+ for(const username of ['xavier','xalinda']){const session=await f.login(username),c=await f.client(),start=await f.begin(c,{scope:'fenmeat:read fenmeat:staff:read offline_access'});assert.equal((await f.approve(start,session,false,true)).status,403);}
+ await assert.rejects(()=>readStaffData({resource:'summary'},{DB:f.db},'xavier',['fenmeat:read',STAFF_READ_SCOPE]),/Approve separate Staff/);
+ assert.deepEqual(await staffSnapshot(f.db),before);
+});
+
+test('Separate Staff consent verifies original import, private read boundaries and paged source history without mutation',async t=>{
+ const f=await fixture(t),connected=await f.connect(true,'alex',true),{tokens,session}=connected,source=await seedStaff(f,session);
+ const c=await f.client(),requested=await f.begin(c,{scope:'fenmeat:read fenmeat:staff:read offline_access'});assert.match(requested.html,/name="staff_read_access" value="yes" checked/);assert.match(requested.html,/ID- en bankbesonderhede/);
+ const before=await staffSnapshot(f.db),business=await businessSnapshot(f.db),status=await ok(f,tokens,'get_access_status');assert.equal(status.staff_read_access,true);assert.equal(status.staff_write_access,false);assert.equal(status.write_access,true);assert.equal(status.staff,undefined);
+ const summary=await ok(f,tokens,'get_staff_data',{query:{resource:'summary'}});assert.equal(summary.import_verified,true);assert.equal(summary.verified_import.checksum,source.id);assert.equal(summary.verified_import.original_register_verified,true);assert.equal(summary.current.people,5);assert.equal(summary.current.active,3);assert.equal(summary.current.leave_ledger_entries,0);assert.equal(summary.payroll_ready,false);assert.equal(summary.uif_workflow.submission,'Auditors');assert.equal(summary.connection.owner,'alex');assert.equal(summary.verified_import.summary.rows,source.bundle.sheets.reduce((n,s)=>n+s.rows.length,0));
+ const fallback=await ok(f,tokens,'get_access_status',{staff:{resource:'summary'}});assert.equal(fallback.staff.verified_import.checksum,source.id);
+ const people=await ok(f,tokens,'get_staff_data',{query:{resource:'people'}});assert.equal(people.people.length,5);assert.equal(people.private_profile_included,false);assert.ok(!JSON.stringify(people).includes('00001234'));assert.ok(!JSON.stringify(people).includes('identity_number'));
+ const person=people.people.find(p=>p.name==='Synthetic worker');assert.equal(person.balances.Annual,null);assert.equal(person.employment_verified,false);
+ const detail=await ok(f,tokens,'get_staff_data',{query:{resource:'people',employee_id:person.id}});assert.equal(detail.people[0].source_profile.bank.account_number,'00001234');assert.equal(detail.people[0].source_profile.identity_number,'synthetic-only');
+ const page=await ok(f,tokens,'get_staff_data',{query:{resource:'source_rows',sheet_id:9}});assert.deepEqual(page.rows,source.bundle.sheets.at(-1).rows.slice(0,50));assert.equal(page.total,65);
+ const next=await ok(f,tokens,'get_staff_data',{query:{resource:'source_rows',sheet_id:9,offset:50}});assert.deepEqual(next.rows,source.bundle.sheets.at(-1).rows.slice(50));
+ const search=await ok(f,tokens,'get_staff_data',{query:{resource:'source_rows',sheet_id:9,q:'source line 63'}});assert.equal(search.rows.length,1);assert.equal(search.rows[0].number,63);
+ const hours=await ok(f,tokens,'get_staff_data',{query:{resource:'hours',from:'2026-10-12',to:'2026-10-19'}});assert.equal(hours.shifts.length,0);assert.equal(hours.source_kind,'native_clock_and_approved_leave');
+ const leave=await ok(f,tokens,'get_staff_data',{query:{resource:'leave',employee_id:person.id}});assert.equal(leave.ledger_total,0);assert.equal(leave.leave_total,0);
+ for(const query of [{resource:'source_rows'},{resource:'source_rows',sheet_id:9,offset:-1},{resource:'source_rows',sheet_id:9,q:'a'.repeat(101)},{resource:'people',employee_id:'invalid'},{resource:'people',sql:'SELECT * FROM v2_staff_pins'},{resource:'leave'},{resource:'hours',from:'2026-01-01',to:'2026-10-19'}])assert.equal((await call(f,tokens,'get_staff_data',{query})).isError,true);
+ for(const path of ['/api/staff','/api/staff/imports','/api/staff/pin','/api/staff/device'])assert.equal((await f.req(path,{method:'POST',body:{},headers:{Authorization:'Bearer '+tokens.access_token}})).status,401);
+ assert.equal((await call(f,tokens,'save_app_data',change('staff',1,{}))).isError,true);
+ const serialized=JSON.stringify([summary,people,detail,hours,leave]);for(const s of ['keyFingerprint','code_hash','token_hash','pepper_id','pin_ready',tokens.access_token,key])assert.ok(!serialized.includes(s),s);
+ assert.deepEqual(await staffSnapshot(f.db),before);assert.deepEqual(await businessSnapshot(f.db),business);
+ const grants=(await(await f.req('/api/pa/connections',{headers:{Cookie:session}})).json()).grants;assert.equal(grants[0].staff_read_access,true);assert.equal(grants[0].write_access,true);
+});
+
+test('Staff import verification fails closed on corrupt source or original revision and permits audited later revisions',async t=>{
+ const f=await fixture(t),{tokens,session}=await f.connect(false,'alinda',true),source=await seedStaff(f,session);
+ const summary=()=>call(f,tokens,'get_staff_data',{query:{resource:'summary'}});
+ assert.equal((await summary()).structuredContent.import_verified,true);
+ await f.db.prepare('UPDATE v2_staff_import_chunks SET payload=? WHERE import_id=?').bind(source.raw+' ',source.id).run();assert.equal((await summary()).isError,true);
+ await f.db.prepare('UPDATE v2_staff_import_chunks SET payload=? WHERE import_id=?').bind(source.raw,source.id).run();
+ const row=await f.db.prepare('SELECT * FROM v2_staff_register WHERE revision=1').first(),state=JSON.parse(row.payload);state.people[0].name='Synthetic changed identity';
+ await f.db.prepare('UPDATE v2_staff_register SET payload=? WHERE revision=1').bind(JSON.stringify(state)).run();assert.equal((await summary()).isError,true);
+ await f.db.prepare('UPDATE v2_staff_register SET payload=? WHERE revision=1').bind(row.payload).run();
+ const original=JSON.parse(row.payload),person=original.people[0];
+ const saved=await f.req('/api/staff',{headers:{Cookie:session},body:{request_id:crypto.randomUUID(),revision:1,action:'employment_date',employee_id:person.id,date:'2023-03-16',reason:'Synthetic confirmed employment date'}});assert.equal(saved.status,200,await saved.clone().text());
+ const verified=(await summary()).structuredContent;assert.equal(verified.revision,2);assert.equal(verified.verified_import.import_revision,1);assert.equal(verified.import_verified,true);assert.equal(verified.connection.owner,'alinda');
+ const resultRow=await f.db.prepare('SELECT result FROM v2_staff_imports WHERE id=?').bind(source.id).first(),bad=JSON.parse(resultRow.result);bad.rows++;
+ await f.db.prepare('UPDATE v2_staff_imports SET result=? WHERE id=?').bind(JSON.stringify(bad),source.id).run();assert.equal((await summary()).isError,true);
+});
+
+test('Staff-only consent preserves read-only business rights, refresh, owner isolation and revocation',async t=>{
+ const f=await fixture(t),alex=await f.connect(false,'alex',true),alinda=await f.connect(false,'alinda',true);await seedStaff(f,alex.session);
+ const status=await ok(f,alex.tokens,'get_access_status');assert.equal(status.staff_read_access,true);assert.equal(status.write_access,false);
+ assert.equal((await f.rpc(alex.tokens,'tools/call',{name:'test_app_write_access',arguments:{}})).response.status,403);
+ assert.equal((await ok(f,alinda.tokens,'get_staff_data',{query:{resource:'summary'}})).connection.owner,'alinda');
+ const r=await f.req('/oauth/token',{form:{grant_type:'refresh_token',client_id:alex.client.client_id,refresh_token:alex.tokens.refresh_token,resource:origin+'/mcp'}});assert.equal(r.status,200);const tokens=await r.json();assert.equal((await ok(f,tokens,'get_access_status')).staff_read_access,true);
+ const grants=(await(await f.req('/api/pa/connections',{headers:{Cookie:alex.session}})).json()).grants;
+ await f.req('/api/pa/connections',{body:{grant_id:grants[0].id},headers:{Cookie:alinda.session}});assert.equal((await ok(f,tokens,'get_staff_data',{query:{resource:'summary'}})).import_verified,true);
+ await f.req('/api/pa/connections',{body:{grant_id:grants[0].id},headers:{Cookie:alex.session}});assert.equal((await f.rpc(tokens,'tools/call',{name:'get_staff_data',arguments:{query:{resource:'summary'}}})).response.status,401);
+ assert.equal((await ok(f,alinda.tokens,'get_staff_data',{query:{resource:'summary'}})).import_verified,true);
 });

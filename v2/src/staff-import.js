@@ -70,7 +70,7 @@ export async function deriveImport(bundle,importId){
  const summary={source:b.source,sheets:b.sheets.map(s=>({id:s.id,name:s.name,rows:s.rows.length,last_row:s.rows.at(-1)?.number??0})),rows:b.sheets.reduce((n,s)=>n+s.rows.length,0),people:people.length,active:people.filter(p=>p.active).length,historical:people.filter(p=>!p.active).length,missing_start_dates:people.filter(p=>!p.start_date).length,clock_rows:rows(b,'Clock Log').filter(r=>r.number>1).length,leave_rows:rows(b,'Leave Log').filter(r=>r.number>3).length,uif_rows:rows(b,'UIF Log').filter(r=>r.number>1).length,payroll_ready:false,uif_workflow:{calculation:'Fen Meat',payment_to_auditors:'Alex',submission:'Auditors'}};
  return {people,summary};
 }
-async function loadBundle(db,id){
+export async function loadBundle(db,id){
  const batch=await db.prepare('SELECT * FROM v2_staff_imports WHERE id=?').bind(id).first();check(batch,'Import not found.',404);
  const manifest=JSON.parse(batch.manifest),parts=(await db.prepare('SELECT part,digest,payload FROM v2_staff_import_chunks WHERE import_id=? ORDER BY part').bind(id).all()).results;
  check(parts.length===manifest.parts.length&&parts.every((p,i)=>p.part===i&&p.digest===manifest.parts[i]),'Some import parts are missing. Choose the same file to resume.',409);

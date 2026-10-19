@@ -1,3 +1,16 @@
+## 19 October 2026 — separate Staff connector consent (0.20.1)
+
+Adds explicitly approved, admin-only Staff read access through the existing
+FenMeat connector. Existing read/write tokens retain their permissions and
+cannot read Staff until separate consent. Source verification rechecks the
+saved archive checksum, derived summary and original employee import revision.
+No Staff writes, credentials, payments or submissions are exposed. See
+[PA_STAFF_READ_ACCESS.md](PA_STAFF_READ_ACCESS.md) for consent and verification.
+
+Validation: all 210 regression tests pass; the 17 OAuth/Staff access checks also
+pass after the final scope-preservation adjustment. Worker deployment dry-run
+passes. Live Staff data remains unread until the owner approves the new scope.
+
 ## 19 October 2026 — private Staff data transfer (0.20.0)
 
 Alex authorised transfer of the existing personnel data into Fen. Staff now
