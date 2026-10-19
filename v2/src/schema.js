@@ -1,5 +1,7 @@
+import {STAFF_SCHEMA} from './staff-api.js';
 // Additive pilot schema. These tables do not alter the five initial tables.
 export const SCHEMA = [
+...STAFF_SCHEMA,
 `CREATE TABLE IF NOT EXISTS v2_zoho_recon_jobs (id TEXT PRIMARY KEY NOT NULL, actor TEXT NOT NULL, version INTEGER NOT NULL, expires INTEGER NOT NULL, payload TEXT NOT NULL)`,
 `CREATE TABLE IF NOT EXISTS v2_recipe_events (request_id TEXT PRIMARY KEY NOT NULL, request_hash TEXT NOT NULL, revision INTEGER UNIQUE NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, reason TEXT NOT NULL)`,
 `CREATE TABLE IF NOT EXISTS v2_production_events (request_id TEXT PRIMARY KEY NOT NULL, request_hash TEXT NOT NULL, production_date TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(production_date,revision))`,

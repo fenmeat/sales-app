@@ -7,6 +7,11 @@ function selectInputContents(event) {
       ['text', 'search', 'tel', 'url', 'email', 'password', 'number'].includes(input.type));
   if (!textEntry || input.disabled || input.readOnly) return;
   input.select();
+  // Label activation can focus the input again after click dispatch and collapse
+  // the selection. Restore it after the browser's default action has completed.
+  if (event.type === 'click') requestAnimationFrame(() => {
+    if (document.activeElement === input && !input.disabled && !input.readOnly) input.select();
+  });
 }
 
 // Focus covers keyboard navigation; click runs after pointer caret placement,

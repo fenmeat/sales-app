@@ -1,3 +1,38 @@
+## 19 October 2026 — native Staff core (0.19.0)
+
+Staff now has persistent employee records, effective-dated schedules, verified
+leave balances and requests, append-only clock/correction history, and an
+independently authenticated yard-phone clock. Alex and Alinda administer Staff;
+existing Sales/Production permissions and connector scopes are preserved.
+
+The source spreadsheet and Apps Script have been reviewed and privately
+archived. No real personnel, banking or payroll records are included in the
+repository or imported by deployment. Native full payroll remains a subsequent
+phase; no payslip, wage, bank batch or tax-submission readiness is claimed.
+
+Validation: 202 Node/workerd tests, local desktop/mobile Chromium acceptance
+tests and Worker deploy dry-run pass. Browser tests include lost-response,
+reload and identical clock retry without a duplicate record. Actual yard-phone
+and Safari acceptance remain outstanding.
+
+Alex explicitly approved publication to the existing public repository and
+existing test Worker on 19 October 2026. Publish only the existing
+`build/sales-v2-cloudflare` branch; retain draft PR #2 and leave main unchanged.
+See [Staff implementation, setup and remaining payroll work](docs/staff-module.md).
+
+## 17 October 2026 — Staff design preview (0.18.0, superseded)
+
+Added a native Staff entry from Sales/Production for Alex and Alinda, and an
+English mobile interface at `/staff`: Today, Clock, Hours, Leave and People.
+This is an explicitly labelled, memory-only demonstration using fictional
+employees. It does not record real attendance or calculate payroll. Kiosk
+mode is an interface preview, not production device isolation. Server access
+check rejects non-admin users; no schema, credentials or business records change.
+
+See [Staff design and acceptance gates](docs/staff-module.md). Current source
+spreadsheet, Apps Script rules and opening balances are required before the
+production backend, employee import and parallel payroll verification.
+
 ## 16 October 2026 — opening, produced and closing stock (0.17.11)
 
 Production now shows Opening stock, Stock produced and Closing stock together in an always-visible section for each product. The opening value repeats the existing editable physical count taken after morning truck loading. Stock produced remains the existing actual packed-output field; only newly finished sales units belong here. Closing is calculated from valid opening + actual output, never the packing plan or route forecast. It is the balance after production, before later loads/returns, and does not carry stock forward or alter a route load. Blank or invalid counts keep closing unknown; an explicit zero is valid. Existing saved payloads, revisions and calculations for planning remain unchanged.

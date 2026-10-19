@@ -1,6 +1,7 @@
 import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,summarise,isQty,effectiveAvailability,routeScheduled,routeName,comparableRouteVisit,previousRouteVisit} from './domain.js';
 import {orderGuyApi} from './order-guy-api.js';
 import {productionApi} from './production-api.js';
+import {staffApi,staffClockApi} from './staff-api.js';
 import {forecastRoute} from './month-cycle.js';
 import {effectiveHistory,applyForecastRefresh} from './forecast-history.js';
 import {zohoStatus,beginZoho,completeZoho,checkZoho,previewZohoInvoices,previewZohoInvoice,readZoho} from './zoho.js';
@@ -32,23 +33,25 @@ async function forecastResult(db,date,route,c){
  const snapshot=await hash(JSON.stringify({version:'1.3-route-cycle',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
  return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline from comparable route-cycle visits with measured month phase',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.17.11',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.19.0',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
  // Cloudflare redirects standalone .html pages to extensionless canonical URLs.
- const assetPaths=new Set(['/pa-access.js','/pa-access.css','/','/index.html','/app.js','/styles.css','/domain.js','/forecast.js','/forecast-history.js','/access-setup','/access-setup/','/access-setup.html','/access-setup.js','/staff-access','/staff-access/','/staff-access.html','/staff-access.js','/staff-access.css','/production','/production/','/production.html','/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.css','/production.js','/input-selection.js','/decimal-input.js','/availability-controls.js','/zoho-page-check.js','/zoho-recon-status.js','/recipes','/recipes/','/recipes.html','/recipes-app.js','/recipes.css','/stocktake.js','/stocktake-view.js','/stocktake-state.js']);
+ const assetPaths=new Set(['/staff-clock','/staff-clock/','/staff-clock.html','/staff-clock.js','/staff','/staff/','/staff.html','/staff-app.js','/staff-model.js','/staff.css','/pa-access.js','/pa-access.css','/','/index.html','/app.js','/styles.css','/domain.js','/forecast.js','/forecast-history.js','/access-setup','/access-setup/','/access-setup.html','/access-setup.js','/staff-access','/staff-access/','/staff-access.html','/staff-access.js','/staff-access.css','/production','/production/','/production.html','/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.css','/production.js','/input-selection.js','/decimal-input.js','/availability-controls.js','/zoho-page-check.js','/zoho-recon-status.js','/recipes','/recipes/','/recipes.html','/recipes-app.js','/recipes.css','/stocktake.js','/stocktake-view.js','/stocktake-state.js']);
  if(assetPaths.has(path)&&['GET','HEAD'].includes(method)){const r=await env.ASSETS.fetch(request);return new Response(r.body,{status:r.status,headers:{...Object.fromEntries(r.headers),...headers}});}
  check(path.startsWith('/api/'),'Not found.',404);check(['GET','POST'].includes(method),'Method not allowed.',405);
  check(Object.keys(keys(env)).length>0,'Access is not configured. Use the setup instructions on the sign-in screen.',503);
  if(!paUser)await init(env.DB);
  if(path==='/api/zoho/callback'&&method==='GET')return completeZoho(request,env);
+ if(path.startsWith('/api/staff-clock/')){const result=await staffClockApi({request,url,env,bodyOf});const response=json(result.data);for(const cookie of result.cookies??[])response.headers.append('Set-Cookie',cookie);return response;}
  if(path==='/api/login'&&method==='POST'){const result=await login(request,env,await bodyOf(request));return json({username:result.username},200,{'Set-Cookie':result.cookie});}
  const allowKey=path.startsWith('/api/sync/')||path.startsWith('/api/import/');const user=paUser??await authenticate(request,env,{allowKey});
  if(!paUser&&method==='POST'&&!(allowKey&&request.headers.get('Authorization')?.startsWith('Bearer ')))sameOrigin(request);
  if(['/api/recipes','/api/recipes/audit','/api/import/recipes','/api/order-guy','/api/sync/order-guy','/api/stocktake','/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path))return json(await orderGuyApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),bodyOf,forecastResult,readPlan:async date=>productionApi({request:new Request(url.origin+'/api/production?date='+date),url:new URL(url.origin+'/api/production?date='+date),db:env.DB,user,catalog:await catalog(env.DB),forecastResult,runResult,bodyOf})}));
  if((path==='/api/production'||path==='/api/production/audit')&&['GET','POST'].includes(method))return json(await productionApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),forecastResult,runResult,bodyOf}));
  if(path==='/api/logout'&&method==='POST'){const token=request.headers.get('Cookie')?.match(/fm_session=([a-f0-9]{64})/)?.[1];if(token)await env.DB.prepare('DELETE FROM v2_sessions WHERE token_hash=?').bind(await hash(token)).run();return json({ok:true},200,{'Set-Cookie':'fm_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0'});}
+ if(path==='/api/staff'||path.startsWith('/api/staff/'))return json(await staffApi({request,url,env,user,bodyOf}));
  if(path==='/api/zoho/status'&&method==='GET')return json(await zohoStatus(env,user));
  if(path==='/api/zoho/read'&&method==='POST')return json(await readZoho(env,user,await bodyOf(request)));
  if(path==='/api/zoho/reconcile'&&method==='POST')return json(await zohoReconciliation(env,user,await bodyOf(request),await catalog(env.DB)));

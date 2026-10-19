@@ -21,14 +21,16 @@ test('separate staff keys preserve primary identities and fail closed independen
 
 test('real Worker keeps existing sessions/data while staff is added, rotated or removed',async t=>{
  const origin='https://staff.example';
- const base={name:'staff-access-test',modules:['worker','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching','zoho-reconcile'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'staff-access-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify(primary)},outboundService:()=>{throw Error('No outbound calls in staff access tests');}};
+ const base={name:'staff-access-test',modules:['worker','staff-api','staff-domain','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching','zoho-reconcile'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'staff-access-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify(primary)},outboundService:()=>{throw Error('No outbound calls in staff access tests');}};
  const mf=new Miniflare(convertV4MiniflareOptions(base));t.after(()=>mf.dispose());
  const call=async(path,{body,cookie='',headers={}}={})=>{
   const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...headers},body:body?JSON.stringify(body):undefined});
   return {status:r.status,data:await r.json(),headers:r.headers};
  };
  const login=async(username,key)=>{const r=await call('/api/login',{body:{username,key}});assert.equal(r.status,200);return r.headers.get('set-cookie').split(';')[0];};
+ assert.equal((await call('/api/staff')).status,401);
  const cookies={alex:await login('alex',primary.alex),alinda:await login('alinda',primary.alinda)};
+ for(const name of ['alex','alinda']){const p=await call('/api/staff',{cookie:cookies[name]});assert.equal(p.status,200);assert.equal(p.data.payroll_ready,false);assert.equal(p.data.revision,0);}
  assert.equal((await call('/api/login',{body:{username:'xavier',key:staff.xavier}})).status,401);
  assert.equal((await call('/api/login',{body:{username:'constructor',key:'function Object() { [native code] }'}})).status,401);
  const catalog={products:[{code:'W01',name:'BRAAI WORS',unit:'sales bag',price_cents:16000,active:true,available:true}],routes:[{code:'MB',name:'MOSSEL BAY',weekday:4}]};
@@ -43,6 +45,7 @@ test('real Worker keeps existing sessions/data while staff is added, rotated or 
  for(const name of ['alex','alinda'])assert.equal((await call('/api/bootstrap',{cookie:cookies[name]})).data.username,name);
  for(const name of ['xavier','xalinda']){
   cookies[name]=await login(name,staff[name]);
+  assert.equal((await call('/api/staff',{cookie:cookies[name]})).status,403);
   assert.equal((await call('/api/bootstrap',{cookie:cookies[name]})).data.username,name);
   assert.equal((await call('/api/run?date=2026-10-08&route=MB',{cookie:cookies[name]})).data.run.items[0].planned,35);
   assert.equal((await call('/api/production?date=2026-10-07',{cookie:cookies[name]})).status,200);
