@@ -1,4 +1,5 @@
 import './input-selection.js';
+import './workflow-keyboard.js';
 import {openAvailability} from './availability-controls.js';
 import {readNumericInput} from './decimal-input.js';
 import {checkInvoicePage} from './zoho-page-check.js';
@@ -76,14 +77,6 @@ function render(){
 function changeView(tab){if(state.busy)return;state.tab=tab;render();window.scrollTo({top:0,behavior:'instant'});}
 document.addEventListener('click',e=>{if(!e.target.closest('.more-menu'))$('.more-menu')?.removeAttribute('open');if(!e.target.closest('.capture-actions'))$('.capture-actions')?.removeAttribute('open');});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('.more-menu')?.removeAttribute('open');$('.capture-actions')?.removeAttribute('open');}});
-function positionDock(){
- const viewport=window.visualViewport;
- const keyboardOpen=viewport&&viewport.scale===1&&/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)&&window.innerHeight-viewport.height>120;
- document.documentElement.style.setProperty('--keyboard-inset',keyboardOpen?Math.max(0,window.innerHeight-viewport.height-viewport.offsetTop)+'px':'0px');
- if(keyboardOpen)requestAnimationFrame(()=>document.activeElement?.scrollIntoView({block:'nearest'}));
-}
-window.visualViewport?.addEventListener('resize',positionDock);
-document.addEventListener('focusout',()=>requestAnimationFrame(positionDock));
 
 function footerNotes(){const r=state.result.run;
  const warnings=[...new Set(r.items.map(i=>i.forecast?.warning).filter(Boolean))];

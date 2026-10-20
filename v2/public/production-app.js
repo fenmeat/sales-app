@@ -1,3 +1,4 @@
+import './workflow-keyboard.js';
 import './input-selection.js';
 import {openAvailability} from './availability-controls.js';
 import {readNumericInput} from './decimal-input.js';
@@ -98,5 +99,4 @@ async function printStaffSheet(){
 window.addEventListener('afterprint',()=>document.body.classList.remove('printing-production','printing-production-staff'));
 window.addEventListener('beforeunload',e=>{if(state.dirty){e.preventDefault();e.returnValue='';}});
 document.addEventListener('click',e=>{if(!e.target.closest('.more-menu'))$('.more-menu')?.removeAttribute('open');});
-function keyboard(){const v=window.visualViewport;const open=v&&v.scale===1&&/^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName)&&innerHeight-v.height>120;document.documentElement.style.setProperty('--keyboard-inset',open?Math.max(0,innerHeight-v.height-v.offsetTop)+'px':'0px');if(open)requestAnimationFrame(()=>document.activeElement?.scrollIntoView({block:'nearest'}));}window.visualViewport?.addEventListener('resize',keyboard);document.addEventListener('focusout',()=>requestAnimationFrame(keyboard));
 try{const b=await api('/api/bootstrap');state.catalog=b.catalog;await load(state.date);}catch(e){app.innerHTML='<main class="production-shell"><section class="panel"><h1>Production planning</h1><p>'+esc(e.message)+'</p><a href="/">Open Sales to sign in or retry</a></section></main>';}

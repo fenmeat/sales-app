@@ -97,7 +97,7 @@ footer p{margin:7px 0}
 
 /* 0.6.0: task-first capture. Screen-only sizing keeps the approved A4 sheet intact. */
 @media screen{
- :root{font-size:16px;--dock-height:172px;--keyboard-inset:0px;scroll-padding-bottom:calc(var(--dock-height) + 24px)}
+ :root{font-size:16px;--dock-height:172px;scroll-padding-bottom:calc(var(--dock-height) + 24px)}
  button,input,select,textarea{min-height:48px;font-size:16px}
  button{font-weight:650}
  input,select,textarea{font-size:16px}
@@ -154,7 +154,13 @@ footer p{margin:7px 0}
  footer{font-size:14px;line-height:1.5;margin-top:18px}
  footer details{font-size:14px}
  footer summary{min-height:48px;display:flex;align-items:center}
- .workflow-dock{position:fixed;bottom:var(--keyboard-inset);left:0;right:0;background:#fff;border-top:1px solid var(--line);z-index:5;padding:0 max(0px,env(safe-area-inset-left)) env(safe-area-inset-bottom) max(0px,env(safe-area-inset-right))}
+ .workflow-dock{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid var(--line);z-index:5;padding:0 max(0px,env(safe-area-inset-left)) env(safe-area-inset-bottom) max(0px,env(safe-area-inset-right))}
+ /* Preserve the dock's measured height so opening the keyboard cannot reflow
+    the page. Safari may lift fixed elements; keep these controls out of the
+    typing area until the keyboard closes, including during field transfers. */
+ .workflow-keyboard-open .workflow-dock{visibility:hidden;pointer-events:none}
+ :root.workflow-keyboard-open{scroll-padding-bottom:24px}
+ .workflow-keyboard-open input,.workflow-keyboard-open textarea{scroll-margin-bottom:24px}
  .workflow-dock .savebar{position:static;border:0;background:white;backdrop-filter:none;max-width:1232px;margin:auto;padding:10px 20px;display:flex;flex-direction:row;align-items:center;gap:14px}
  .save-message strong{font-size:15px;font-weight:650}
  .savebar small{font-size:13px;line-height:1.35}

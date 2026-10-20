@@ -1,3 +1,24 @@
+## 20 October 2026 — keep the workflow dock below the keyboard (0.20.3)
+
+The Sales save/navigation dock and Production save dock stay anchored at
+bottom: 0. The former JavaScript keyboard-height offset and repeated forced
+scrollIntoView calls are removed. A shared viewport listener keeps the dock
+out of the typing area while a touch-device software keyboard is open and
+restores it when the viewport expands, even if an input remains focused.
+Field transfers, viewport panning, pinch zoom and hardware keyboard focus do
+not lift the dock. Dock height remains reserved to avoid page layout jumps.
+
+Validation: 26 targeted Node/workerd checks and the Worker deployment dry-run
+pass. Isolated Chromium checks exercise 320/390/834/1280px layout, simulated
+keyboard open/close and panning, focus transfer, rotation, pinch zoom, hardware
+keyboard focus, desktop capture, and decimal-comma save/reload. Sales and
+Production use the same module. No browser errors were observed. Viewport
+geometry is simulated; this does not claim an actual iPhone keyboard test.
+
+This changes browser layout only; saving, confirmation, numeric entry and
+business data are unchanged. Actual iPhone/iPad Safari acceptance remains a
+physical-device check. Rollback uses the previous app version; no migration.
+
 ## 20 October 2026 — automatic birthday clock PINs (0.20.2)
 
 Alex requested four-digit employee PINs calculated from birth month and day:
