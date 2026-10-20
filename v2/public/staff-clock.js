@@ -26,7 +26,7 @@ async function punch(p,pin,entry){
  catch(e){if(e.status&&e.status!==401&&e.status!==429&&e.status<500){try{savePending(p.id,null);}catch{}}close();notice(e.message,true);}finally{busy=false;pin='';}
 }
 function choose(id){if(busy)return;const p=state.people.find(p=>p.id===id);let waiting;try{waiting=pending()[id];}catch(e){notice(e.message,true);return;}
- show(`<h2>${esc(p.name)}</h2><p>${waiting?'Your last action needs confirmation. Enter your PIN to retry it.':'Enter your PIN to see your current clock status.'}</p><form id="pin-form"><label>PIN<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{6,12}" autocomplete="off" maxlength="12" required></label><p id="pin-error" class="form-error" role="alert"></p><button class="primary">Continue</button></form>`);
+ show(`<h2>${esc(p.name)}</h2><p>${waiting?'Your last action needs confirmation. Enter your 4-digit PIN to retry it.':'Enter your 4-digit PIN: birth month, then day (MMDD).'}</p><form id="pin-form"><label>PIN<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" autocomplete="off" minlength="4" maxlength="4" required></label><p id="pin-error" class="form-error" role="alert"></p><button class="primary">Continue</button></form>`);
  $('#pin-form').onsubmit=async e=>{e.preventDefault();if(busy)return;let pin=new FormData(e.target).get('pin');if(waiting){await punch(p,pin,waiting);pin='';return;}busy=true;const f=e.target;f.querySelector('button').disabled=true;
   try{const status=await api('verify',{employee_id:id,pin});if(!dialog.open)return;const actions=status.state==='out'?['in']:status.state==='in'?['out','break_start']:['break_end','out'];
    // The PIN lives only in this short-lived dialog closure. It is never stored.

@@ -1,6 +1,6 @@
 import {check,UserError,dateKey,today,addDays} from './domain.js';
 import {hash,randomToken,isAdmin,sameOrigin} from './auth.js';
-import {blankStaff,applyStaffAction,staffPerson,uuid,text,shiftSummary,appendPunch,periodHours,dayStart,dayAt,LEAVE_TYPES,balance} from './staff-domain.js';
+import {blankStaff,applyStaffAction,staffPerson,uuid,text,shiftSummary,appendPunch,periodHours,dayStart,dayAt,LEAVE_TYPES,balance,birthdayPin} from './staff-domain.js';
 import {IMPORT_SCHEMA,staffImportApi} from './staff-import.js';
 
 export const STAFF_SCHEMA=[
@@ -31,12 +31,17 @@ async function pinDigest(pin,salt,env){
  const bits=await crypto.subtle.deriveBits({name:'PBKDF2',hash:'SHA-256',salt:encoder.encode(salt),iterations:100000},key,256);
  return Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');
 }
-async function verifyPin(db,id,pin,device,env){
- requiredPepper(env);check(typeof pin==='string'&&/^\d{6,12}$/.test(pin),'Enter your 6–12 digit PIN.',401);
- const bucket=await limited(db,'pin:'+id,5),deviceBucket=await limited(db,'device:'+device.id,80);
- const record=await db.prepare('SELECT * FROM v2_staff_pins WHERE employee_id=?').bind(id).first();
- const digest=await pinDigest(pin,record?.salt??'no-employee-pin-set',env);let diff=0;const expected=record?.digest??'0'.repeat(64);for(let i=0;i<64;i++)diff|=digest.charCodeAt(i)^expected.charCodeAt(i);
- check(record&&record.pepper_id===await hash(env.STAFF_PIN_PEPPER)&&diff===0,'PIN is incorrect or needs to be reset by Alex or Alinda.',401);
+async function verifyPin(db,person,pin,device,env){
+ requiredPepper(env);check(typeof pin==='string'&&/^\d{4}$/.test(pin),'Enter your 4-digit PIN: birth month, then day.',401);
+ const bucket=await limited(db,'pin:'+person.id,5),deviceBucket=await limited(db,'device:'+device.id,80);
+ check(person.birth_date,'Ask Alex or Alinda to save your date of birth before clocking.',401);
+ // The private birth date is the source of truth. Derive both verifiers with
+ // the existing pepper/PBKDF2 scheme and the employee UUID as a unique salt.
+ // No independent PIN can drift from a corrected birth date. Legacy verifiers
+ // remain in their table for rollback, but are never accepted or returned.
+ const digest=await pinDigest(pin,person.id,env),expected=await pinDigest(birthdayPin(person.birth_date),person.id,env);
+ let diff=0;for(let i=0;i<64;i++)diff|=digest.charCodeAt(i)^expected.charCodeAt(i);
+ check(diff===0,'PIN is incorrect. Use your birth month followed by the day, or ask Alex or Alinda to check your date of birth.',401);
  // Correct PINs do not use up the failure allowance for a shared device.
  await db.batch([db.prepare('DELETE FROM v2_auth_limits WHERE bucket=?').bind(bucket),db.prepare('UPDATE v2_auth_limits SET attempts=MAX(0,attempts-1) WHERE bucket=?').bind(deviceBucket)]);
 }
@@ -76,7 +81,7 @@ export async function staffClockApi({request,url,env,bodyOf}){
  }
  if(path==='/api/staff-clock/punch'&&b){
   const p=staffPerson(current.state,b.employee_id);check(p.active,'Employee is inactive.',403);
-  await verifyPin(db,p.id,b.pin,device,env);const op=await operation(db,device.id,path,b,env);if(op.old)return {data:op.old};
+  await verifyPin(db,p,b.pin,device,env);const op=await operation(db,device.id,path,b,env);if(op.old)return {data:op.old};
   const last=await latestShift(db,p.id),rev=await timeRevision(db,p.id),stamp=new Date().toISOString();
   check(p.start_date&&p.employment_verified!==false,'Confirm the employment start date before clocking.');check(p.start_date<=dayAt(stamp),'Employment has not started.');
   check(Number.isInteger(b.revision)&&b.revision===rev,'Clock status changed. Check your last action before retrying.',409);
@@ -91,7 +96,7 @@ export async function staffClockApi({request,url,env,bodyOf}){
   return {data:await op.commit([guard,timeInsert(db,op,shift,rev+1,'punch',device.id,stamp)],result)};
  }
  if(path==='/api/staff-clock/verify'&&b){
-  const p=staffPerson(current.state,b.employee_id);check(p.active,'Employee is inactive.',403);await verifyPin(db,p.id,b.pin,device,env);
+  const p=staffPerson(current.state,b.employee_id);check(p.active,'Employee is inactive.',403);await verifyPin(db,p,b.pin,device,env);
   const last=await latestShift(db,p.id);return {data:{employee_id:p.id,state:last?.state??'out',revision:await timeRevision(db,p.id),last_at:last?JSON.parse(last.payload).punches.at(-1).at:null,server_time:new Date().toISOString()}};
  }
  throw new UserError('Not found.',404);
@@ -102,10 +107,9 @@ export async function staffApi({request,url,env,user,bodyOf}){
  const db=env.DB,path=url.pathname,current=await staffState(db),stamp=new Date().toISOString();
  if(path==='/api/staff/imports'||path.startsWith('/api/staff/imports/'))return staffImportApi({request,url,db,user,bodyOf,current});
  if(path==='/api/staff'&&request.method==='GET'){
-  const pinRows=(await db.prepare('SELECT employee_id,pepper_id FROM v2_staff_pins').all()).results,pepperId=hasPepper(env)?await hash(env.STAFF_PIN_PEPPER):null;
   const devices=(await db.prepare('SELECT id,name,code_expires,expires,revoked,created_by,created_at,token_hash IS NOT NULL AS enrolled FROM v2_staff_devices ORDER BY created_at DESC').all()).results;
   const open=(await db.prepare(`SELECT t.employee_id,t.state,t.start_at FROM v2_staff_time t WHERE t.state!='out' AND ${latestCondition}`).all()).results;
-  return {...current,username:user.username,pin_secret_configured:hasPepper(env),people:current.state.people.map(p=>({...p,pin_ready:pinRows.some(r=>r.employee_id===p.id&&r.pepper_id===pepperId),state:open.find(r=>r.employee_id===p.id)?.state??'out',balances:Object.fromEntries(LEAVE_TYPES.filter(t=>t!=='Unpaid').map(t=>[t,balance(current.state,p.id,t,today())]))})),devices,payroll_ready:false};
+  return {...current,username:user.username,pin_secret_configured:hasPepper(env),people:current.state.people.map(p=>({...p,pin_ready:hasPepper(env)&&!!p.birth_date,state:open.find(r=>r.employee_id===p.id)?.state??'out',balances:Object.fromEntries(LEAVE_TYPES.filter(t=>t!=='Unpaid').map(t=>[t,balance(current.state,p.id,t,today())]))})),devices,payroll_ready:false};
  }
  if(path==='/api/staff/hours'&&request.method==='GET'){
   const from=dateKey(url.searchParams.get('from')??addDays(today(),-6)),to=dateKey(url.searchParams.get('to')??today());check(from<=to&&dayStart(to)-dayStart(from)<31*86400000,'Review up to 31 days at a time.');
@@ -122,9 +126,7 @@ export async function staffApi({request,url,env,user,bodyOf}){
   return op.commit([registerInsert(db,current,result.state,b.action,user.username,result.detail,stamp)],{ok:true,revision:current.revision+1});
  }
  if(path==='/api/staff/pin'){
-  const p=staffPerson(current.state,b.employee_id);check(typeof b.pin==='string'&&/^\d{6,12}$/.test(b.pin)&&!/^([0-9])\1+$/.test(b.pin)&&!['123456','654321'].includes(b.pin),'Choose a 6–12 digit PIN, without an obvious sequence or repeated digit.');
-  const salt=randomToken(),digest=await pinDigest(b.pin,salt,env);
-  return op.commit([registerInsert(db,current,current.state,'pin_reset',user.username,{employee_id:p.id},stamp),db.prepare('INSERT INTO v2_staff_pins VALUES(?,?,?,?) ON CONFLICT(employee_id) DO UPDATE SET salt=excluded.salt,digest=excluded.digest,pepper_id=excluded.pepper_id').bind(p.id,salt,digest,await hash(env.STAFF_PIN_PEPPER))],{ok:true,revision:current.revision+1});
+  throw new UserError('PINs now use the birth month and day. Refresh Staff and save the employee date of birth under People → Birthday / PIN.');
  }
  if(path==='/api/staff/device'){
   let stmt,detail;

@@ -8,12 +8,16 @@ export const blankStaff=()=>({people:[],leave:[],ledger:[]});
 export function text(value,name,max=100){check(typeof value==='string'&&value.trim().length>0&&value.trim().length<=max,`Enter ${name} (up to ${max} characters).`);return value.trim();}
 export function uuid(value){check(typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value),'Invalid action or record ID.');return value;}
 export function staffPerson(state,id){const p=state.people.find(p=>p.id===id);check(p,'Employee not found.',404);return p;}
-export function validatePerson(raw,old){
+export function validateBirthDate(value,asOf=dayAt(Date.now())){const date=dateKey(value);check(date<=asOf,'Date of birth cannot be in the future.');return date;}
+export function birthdayPin(value){const date=dateKey(value);return date.slice(5,7)+date.slice(8,10);}
+export function validatePerson(raw,old,asOf){
  check(raw&&typeof raw==='object','Enter an employee.');
  const p={id:uuid(raw.id),code:text(raw.code,'employee code',24).toUpperCase(),name:text(raw.name,'employee name',80),team:text(raw.team,'team',60),start_date:dateKey(raw.start_date),active:raw.active};
  check(/^[A-Z0-9_-]+$/.test(p.code),'Use letters, numbers, - or _ in the employee code.');
  check(typeof p.active==='boolean','Choose active or inactive.');
  if(old){check(old.code===p.code,'The permanent employee code cannot change.');check(old.start_date===null||old.start_date===p.start_date,'The employment start date cannot change after the record is created.');}
+ const birth=raw.birth_date===undefined?old?.birth_date:raw.birth_date;
+ p.birth_date=birth===undefined||birth===null||birth===''?null:validateBirthDate(birth,asOf);
  p.schedules=old?.schedules??[];return p;
 }
 export function addSchedule(p,b){
@@ -30,13 +34,16 @@ export function balance(state,id,type,date){
 export function applyStaffAction(state,b,actor,stamp){
  const next=structuredClone(state);let detail={};
  if(b.action==='person'){
-  const old=next.people.find(p=>p.id===b.person?.id),p=validatePerson(b.person,old);
+  const old=next.people.find(p=>p.id===b.person?.id),p=validatePerson(b.person,old,dayAt(stamp));
   check(!next.people.some(x=>x.id!==p.id&&x.code===p.code),'That employee code is already in use.');
   check(old||next.people.length<200,'The employee register is full.');
   if(old)Object.assign(old,p);else next.people.push(p);detail={employee_id:p.id};
  }else{
   const p=staffPerson(next,b.employee_id);detail={employee_id:p.id};
-  if(b.action==='employment_date'){
+  if(b.action==='birth_date'){
+   p.birth_date=validateBirthDate(b.birth_date,dayAt(stamp));
+  }
+  else if(b.action==='employment_date'){
    check(p.source_profile&&p.employment_verified===false,'The imported employment date has already been confirmed.',409);
    const date=dateKey(b.date);check(p.schedules.every(s=>s.from>=date),'The employment date cannot follow an existing schedule.');
    detail.reason=text(b.reason,'employment date source',300);detail.previous_date=p.start_date;p.start_date=date;p.employment_verified=true;

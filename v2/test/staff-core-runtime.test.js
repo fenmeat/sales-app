@@ -8,7 +8,7 @@ import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {today} from '../src/domain.js';
 
 test('native Staff: real D1 permissions, device isolation, PINs, idempotency, concurrent saves, corrections, leave and restart',async t=>{
- const directory=await mkdtemp(join(tmpdir(),'fen-staff-')),origin='https://staff.example',key='synthetic-primary-admin-key-'.repeat(3),pin='726481',employee=crypto.randomUUID();
+ const directory=await mkdtemp(join(tmpdir(),'fen-staff-')),origin='https://staff.example',key='synthetic-primary-admin-key-'.repeat(3),pin='0615',employee=crypto.randomUUID();
  const config={name:'staff-core-test',modules:['worker','staff-api','staff-domain','staff-import','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching','zoho-reconcile'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'staff-core-test'},resourcePersistencePath:directory,bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key,alinda:key+'a',xavier:key+'x'}),STAFF_PIN_PEPPER:'synthetic-test-only-pepper-'.repeat(3)},outboundService:()=>{throw Error('No outbound calls in Staff tests');}};
  let mf=new Miniflare(convertV4MiniflareOptions(config));t.after(async()=>{await mf.dispose();await rm(directory,{recursive:true,force:true});});
  const call=async(path,{body,cookie='',originHeader=origin,extra={}}={})=>{const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:originHeader,'Content-Type':'application/json',Cookie:cookie,...extra},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json(),headers:r.headers};};
@@ -25,16 +25,29 @@ test('native Staff: real D1 permissions, device isolation, PINs, idempotency, co
  assert.equal((await call('/api/staff',{cookie:admin,body:{...created,person:{...created.person,name:'Changed request'}}})).status,409);
  const concurrent=await Promise.all([1,2].map(n=>call('/api/staff',{cookie:admin,body:{request_id:crypto.randomUUID(),revision:1,action:'person',person:{...created.person,id:crypto.randomUUID(),code:'TEST-'+n+'X',name:'Synthetic '+n}}})));assert.deepEqual(concurrent.map(r=>r.status).sort(),[200,409]);rev=2;
  r=await save('/api/staff',{action:'schedule',employee_id:employee,from:'2026-01-01',minutes:[540,540,540,540,540,480,0],reason:'Verified synthetic schedule'});assert.equal(r.status,200);
- r=await save('/api/staff/pin',{employee_id:employee,pin});assert.equal(r.status,200,JSON.stringify(r.data));
+ r=await save('/api/staff',{action:'birth_date',employee_id:employee,birth_date:'1988-06-15'});assert.equal(r.status,200,JSON.stringify(r.data));
+ assert.equal((await save('/api/staff/pin',{employee_id:employee,pin:'1234'})).status,400,'manual PINs cannot override the birthday rule');
  const device=crypto.randomUUID(),code='c82e7139ab75d906';r=await save('/api/staff/device',{action:'create',device_id:device,name:'Synthetic yard phone',code});assert.equal(r.status,200,JSON.stringify(r.data));
- const before=(await call('/api/staff',{cookie:admin})).data;assert.equal(before.people.find(p=>p.id===employee).pin_ready,true);assert.doesNotMatch(JSON.stringify(before),new RegExp(pin+'|digest|salt|token_hash|code_hash|pepper_id'));
+ const before=(await call('/api/staff',{cookie:admin})).data;assert.equal(before.people.find(p=>p.id===employee).pin_ready,true);assert.doesNotMatch(JSON.stringify(before),/"pin"\s*:|digest|salt|token_hash|code_hash|pepper_id/);
  const enrolled=await call('/api/staff-clock/enrol',{cookie:admin,body:{code}});assert.equal(enrolled.status,200,JSON.stringify(enrolled.data));
  const clock=enrolled.headers.get('set-cookie').match(/__Secure-fm_clock=[a-f0-9]{64}/)[0];assert.match(enrolled.headers.get('set-cookie'),/HttpOnly; Secure; SameSite=Strict; Path=\/api\/staff-clock/);
  assert.equal((await call('/api/staff',{cookie:admin})).status,401,'enrolment invalidates management session on that phone');admin=await login('alex',key);
  assert.equal((await call('/api/staff-clock/enrol',{body:{code}})).status,401,'one-time code cannot be reused');
  assert.equal((await call('/api/staff',{cookie:clock})).status,401);assert.equal((await call('/api/bootstrap',{cookie:clock})).status,401);
- const roster=(await call('/api/staff-clock/state',{cookie:clock})).data;assert.deepEqual(Object.keys(roster.people[0]).sort(),['id','name','state']);assert.doesNotMatch(JSON.stringify(roster),/balance|rate|leave|pin|schedule|team/);
+ const roster=(await call('/api/staff-clock/state',{cookie:clock})).data;assert.deepEqual(Object.keys(roster.people[0]).sort(),['id','name','state']);assert.doesNotMatch(JSON.stringify(roster),/balance|rate|leave|pin|schedule|team|birth/);
  const verify=()=>call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:employee,pin}});assert.equal((await verify()).data.revision,0);
+ for(const invalid of ['615','06150','726481','abcd',615])assert.equal((await call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:employee,pin:invalid}})).status,401,'PIN must remain exactly four digit characters');
+ for(const invalid of ['1988-02-30','2099-06-15'])assert.equal((await save('/api/staff',{action:'birth_date',employee_id:employee,birth_date:invalid})).status,400);
+ assert.equal((await save('/api/staff',{action:'birth_date',employee_id:employee,birth_date:'1988-11-11'})).status,200);
+ assert.equal((await verify()).status,401,'the previous birthday PIN stops working immediately');
+ assert.equal((await call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:employee,pin:'1111'}})).status,200,'11 November is valid even though the digits repeat');
+ const other=(await call('/api/staff',{cookie:admin})).data.people.find(p=>p.id!==employee);
+ assert.equal((await save('/api/staff',{action:'person',person:{...other,birth_date:'1992-11-11'}})).status,200);
+ assert.equal((await call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:other.id,pin:'1111'}})).data.employee_id,other.id,'shared birthdays still use the selected employee identity');
+ assert.equal((await save('/api/staff',{action:'person',person:{...created.person,birth_date:null}})).status,200);
+ assert.equal((await call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:employee,pin:'1111'}})).status,401,'no date of birth means no clock PIN');
+ assert.equal((await save('/api/staff',{action:'birth_date',employee_id:employee,birth_date:'1988-06-15'})).status,200);
+ assert.equal((await verify()).status,200);
  const punch={request_id:crypto.randomUUID(),revision:0,employee_id:employee,pin,kind:'in',at:'2000-01-01T00:00:00Z'};
  assert.equal((await call('/api/staff-clock/punch',{cookie:clock,body:punch,originHeader:'https://other.example'})).status,403);
  const results=await Promise.all([1,2].map(()=>call('/api/staff-clock/punch',{cookie:clock,body:punch})));assert.deepEqual(results.map(r=>r.status),[200,200]);assert.equal(results.filter(r=>r.data.replayed).length,1);assert.ok(Math.abs(Date.parse(results[0].data.at)-Date.now())<60000,'untrusted client timestamp is ignored');
@@ -50,11 +63,18 @@ test('native Staff: real D1 permissions, device isolation, PINs, idempotency, co
  const leave=crypto.randomUUID();assert.equal((await save('/api/staff',{action:'leave_request',employee_id:employee,record_id:leave,type:'Annual',date:'2026-10-19',units:0.5,reason:'Synthetic half day'})).status,200);
  const approval={request_id:crypto.randomUUID(),revision:rev,action:'leave_decision',employee_id:employee,record_id:leave,decision:'Approved',reason:'Verified half day'};assert.equal((await save('/api/staff',approval)).status,200);assert.equal((await call('/api/staff',{cookie:admin,body:approval})).data.replayed,true);
  let saved=(await call('/api/staff',{cookie:admin})).data;assert.equal(saved.state.leave[0].paid_minutes,270);assert.equal(saved.state.ledger.filter(x=>x.kind==='usage').length,1);
+ // Birth dates can be prepared before the server secret. They become ready
+ // automatically when the secret is configured; no second PIN setup is needed.
+ await mf.dispose();mf=new Miniflare(convertV4MiniflareOptions({...config,bindings:{...config.bindings,STAFF_PIN_PEPPER:''}}));admin=await login('alex',key);
+ assert.equal((await save('/api/staff',{action:'birth_date',employee_id:employee,birth_date:'1988-06-15'})).status,200);
+ assert.equal((await call('/api/staff',{cookie:admin})).data.people.find(p=>p.id===employee).pin_ready,false);
+ assert.equal((await verify()).status,503);
  // Restart the Worker against the same persisted D1 storage, then read with a new session.
  await mf.dispose();mf=new Miniflare(convertV4MiniflareOptions(config));admin=await login('alinda',key+'a');saved=(await call('/api/staff',{cookie:admin})).data;assert.equal(saved.revision,rev);assert.equal(saved.state.leave[0].paid_minutes,270);assert.equal((await call('/api/staff-clock/state',{cookie:clock})).status,200);
- for(let i=0;i<5;i++)assert.equal((await call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:employee,pin:'999998'}})).status,401);
+ assert.equal(saved.people.find(p=>p.id===employee).birth_date,'1988-06-15');assert.equal(saved.people.find(p=>p.id===employee).pin_ready,true);assert.equal((await verify()).status,200);
+ for(let i=0;i<5;i++)assert.equal((await call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:employee,pin:'9998'}})).status,401);
  assert.equal((await verify()).status,429,'correct PIN cannot bypass failure cooldown');
  r=await save('/api/staff/device',{action:'revoke',device_id:device});assert.equal(r.status,200);assert.equal((await call('/api/staff-clock/state',{cookie:clock})).status,401);assert.equal((await call('/api/staff-clock/punch',{cookie:clock,body:punch})).status,401,'revocation applies even to retries');
  db=await mf.getD1Database('DB');assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_events').first()).n,0);assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_production_events').first()).n,0,'Staff does not mutate production');
- assert.doesNotMatch(JSON.stringify((await db.prepare('SELECT * FROM v2_staff_register').all()).results),new RegExp(pin));
+ assert.doesNotMatch(JSON.stringify((await db.prepare('SELECT * FROM v2_staff_register').all()).results),/\"pin\"\s*:/);
 });

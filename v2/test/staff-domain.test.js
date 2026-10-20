@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {blankStaff,applyStaffAction,periodHours,shiftSummary,appendPunch,balance,dayAt} from '../src/staff-domain.js';
+import {blankStaff,applyStaffAction,periodHours,shiftSummary,appendPunch,balance,dayAt,birthdayPin} from '../src/staff-domain.js';
 const id=crypto.randomUUID();
 const person={id,code:'SYN-001',name:'Synthetic worker',team:'Test',start_date:'2026-01-01',active:true};
 const act=(state,b)=>applyStaffAction(state,b,'alinda','2026-10-19T09:00:00.000Z').state;
@@ -47,4 +47,17 @@ test('missing attendance and work/leave overlap stay visible rather than becomin
  const s=setup(),r=periodHours(s.people,[],[],'2026-10-19','2026-10-19',Date.parse('2026-10-21T12:00:00Z'))[0];assert.ok(r.issues.includes('Missing attendance record'));assert.equal(s.ledger.length,0);
  const a=shift(punch('in','2026-10-19T07:00:00'),punch('out','2026-10-19T12:00:00'));const result=periodHours(s.people,[a],[{employee_id:id,date:'2026-10-19',status:'Approved',units:0.5,paid_minutes:270}],'2026-10-19','2026-10-19')[0];assert.ok(result.issues.includes('Work and leave on the same day'));assert.equal(result.payroll_ready,false);
  assert.equal(dayAt('2026-10-19T22:30:00Z'),'2026-10-20');assert.throws(()=>periodHours(s.people,[],[],'2026-01-01','2026-02-01'),/31 days/);
+});
+
+test('birthday PINs keep month/day order, leading zeros and leap-day birthdays; private dates survive other edits',()=>{
+ for(const [date,pin] of [['1988-06-15','0615'],['1990-01-01','0101'],['2000-02-29','0229'],['1985-11-11','1111'],['1995-12-31','1231']])assert.equal(birthdayPin(date),pin);
+ for(const date of ['2001-02-29','2000-13-01','15/06/1988',null])assert.throws(()=>birthdayPin(date),/valid/);
+ let s=act(blankStaff(),{action:'person',person:{...person,birth_date:'1988-06-15'}});assert.equal(s.people[0].birth_date,'1988-06-15');
+ s=act(s,{action:'person',person:{...person,name:'Changed name'}});assert.equal(s.people[0].birth_date,'1988-06-15');
+ s=act(s,{action:'birth_date',employee_id:id,birth_date:'2000-02-29'});assert.equal(birthdayPin(s.people[0].birth_date),'0229');
+ assert.throws(()=>act(s,{action:'birth_date',employee_id:id,birth_date:'2026-10-20'}),/future/);
+ assert.throws(()=>act(s,{action:'person',person:{...person,birth_date:'2099-06-15'}}),/future/);
+ s=act(s,{action:'person',person:{...person,birth_date:null}});assert.equal(s.people[0].birth_date,null);
+ const imported={...blankStaff(),people:[{...person,start_date:null,employment_verified:false,source_profile:{identity_number:'synthetic-only'},schedules:[]}]};
+ s=act(imported,{action:'birth_date',employee_id:id,birth_date:'1988-06-15'});assert.equal(s.people[0].start_date,null);assert.equal(s.people[0].employment_verified,false);assert.equal(s.people[0].source_profile.identity_number,'synthetic-only');
 });

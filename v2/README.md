@@ -1,3 +1,26 @@
+## 20 October 2026 — automatic birthday clock PINs (0.20.2)
+
+Alex requested four-digit employee PINs calculated from birth month and day:
+15 June → 0615. Date of birth is now an optional private employee field, with a
+Birthday / PIN action that also works before imported employment dates are
+confirmed. Saving or correcting it sets the accepted PIN automatically. There
+is no manual PIN to maintain. Missing, impossible and future dates cannot enable
+clocking. The phone accepts exactly four digits and keeps leading zeros.
+
+The independent registered-phone credential, per-employee/shared-device failure
+limits, private Staff roles, peppered verification and clock history protections
+remain. Birthday details are never sent to the kiosk. Existing source archives
+and employee records are not rewritten by deployment; real birthdays still need
+admin entry. The former verifier table is preserved but unused. See
+[Staff setup and security notes](docs/staff-module.md).
+
+Validation: all 211 Node/workerd regression checks pass. Local desktop/mobile
+Chromium exercises birthday entry/correction, 0615 clock-in/out, device isolation
+and lost-response recovery. Runtime checks include shared birthdays, 1111,
+missing/invalid/future dates, automatic readiness after secret setup, persistence
+and failed-PIN throttling. Worker deployment dry-run passes. Actual yard-phone
+and Safari acceptance are still for the owner to perform.
+
 ## 19 October 2026 — separate Staff connector consent (0.20.1)
 
 Adds explicitly approved, admin-only Staff read access through the existing

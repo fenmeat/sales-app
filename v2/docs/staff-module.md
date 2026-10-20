@@ -1,6 +1,13 @@
-# Native Staff core — 0.20.1
+# Native Staff core — 0.20.2
 
-Version 0.20.1 adds a separately consented, admin-only, read-only connector.
+Version 0.20.2 uses the employee's saved date of birth for a four-digit clock
+PIN (MMDD), as Alex requested on 20 October: 15 June is 0615. Alex/Alinda enter
+or correct Date of birth in Add/Edit employee or People → Birthday / PIN.
+Saving a date immediately determines the PIN, including leading zeros and
+29 February. A changed date changes the PIN; a missing date blocks clocking.
+Do not infer birth dates from identity numbers or ambiguous imported cells.
+
+Version 0.20.1 added a separately consented, admin-only, read-only connector.
 See [Staff connector access](../PA_STAFF_READ_ACCESS.md). Existing general
 connector scopes still confer no Staff access.
 
@@ -74,10 +81,18 @@ Existing Sales and Production data is not migrated or rewritten.
 - Admin-created, single-use 10-minute device codes; independently scoped,
   HttpOnly/Secure/SameSite=Strict clock cookies; 90-day device expiry and immediate
   server-side revocation. Enrolment invalidates any app session on that phone.
-- Employee PINs of 6–12 digits, common trivial patterns rejected, random salts,
-  HMAC with a separate server secret, then PBKDF2-SHA256/100,000 iterations.
-  PINs are never returned, stored in plain text, included in audit snapshots or
-  placed in browser storage. Per-employee and per-device failure limits apply.
+- Exactly four-digit MMDD birthday PINs. Valid birthdays such as 11 November
+  (1111) are accepted. The selected employee UUID disambiguates shared birthdays.
+  The private date is the source of truth: compare verifiers using HMAC with the
+  separate server secret, PBKDF2-SHA256/100,000 iterations and the employee UUID
+  as a unique salt. No separately editable PIN/verifier can drift from that date.
+  The birth date is kept in admin-only employee/audit state; neither birth dates
+  nor derived PINs are sent to the kiosk or placed in browser storage. A DOB is
+  predictable to someone who knows it, so this identifies a person on an already
+  authorised clock device; it never grants management access. The existing
+  five-failure employee limit, shared-device limit and device revocation remain.
+  Birth dates can be saved before the server secret is configured; clocking
+  fails closed until it is configured, then becomes ready without another reset.
 - Server-timestamped clock-in/out and recorded breaks. Per-employee revisions
   and atomic D1 writes prevent conflicting clocks and repeated saves. The phone
   shows only active names, current status and the verified employee's last action.
@@ -116,7 +131,7 @@ sessions remain valid; no destructive migration is required.
 | --- | --- |
 | `v2_staff_register` | Append-only admin revisions and audited employee/leave state |
 | `v2_staff_requests` | Request fingerprint and exact accepted response for safe retries |
-| `v2_staff_pins` | Salted, peppered PIN verifiers only |
+| `v2_staff_pins` | Legacy verifiers retained for rollback; unused from 0.20.2 |
 | `v2_staff_devices` | Hashed enrolment/session credentials, expiry and revocation |
 | `v2_staff_time` | Append-only versions of individual shift records |
 
@@ -165,9 +180,11 @@ reconciliation. None of these records has been imported by the code change.
 2. Set a new independent `STAFF_PIN_PEPPER` secret in the Worker using a password
    manager-generated random value of at least 32 characters. Never put it in
    `wrangler.jsonc`, a command argument, a source file or a screenshot. The clock
-   setup and PIN endpoints fail closed without it; other Staff preparation works.
-3. Reconcile/import employee identities and schedules; set employee PINs privately;
-   load verified balances with dates and source notes. No default PINs or inferred
+   setup and clock verification fail closed without it; other Staff preparation works.
+3. Reconcile/import employee identities and schedules; save each verified date
+   of birth to enable the automatic MMDD PIN. The imported records have no native
+   birth dates, so they remain pending until an admin enters the actual dates.
+   Load verified balances with dates and source notes. No guessed dates or
    statutory leave balances are created.
 4. Register the yard phone under Staff → Devices. Test a designated synthetic
    record before clocking any real employee. Confirm the actual phone's storage,
@@ -175,10 +192,14 @@ reconciliation. None of these records has been imported by the code change.
 5. Reconcile attendance and leave with the existing records before an explicit
    clock cutover date. Maintain the existing source snapshot and rollback route.
 
-Changing the PIN secret invalidates all existing PIN verifiers; reset employee
-PINs and communicate privately. It does not erase clock history. Revoking a
-device prevents new actions and retries through that credential; managers can
-still review its previously accepted actions.
+A corrected birth date immediately replaces the accepted birthday PIN; previous
+random six-digit PINs are no longer accepted. Changing the server secret does
+not change a birthday PIN, but affects request fingerprints, so reconcile any
+pending clock retries before secret rotation. Clock history remains intact.
+Revoking a device prevents new actions and retries through that credential;
+managers can still review its previously accepted actions. A rollback before
+0.20.2 restores the older PIN policy and would require managed PIN setup again;
+do not treat deployment rollback as a seamless credential migration.
 
 ## Payroll phase still required
 
