@@ -95,10 +95,12 @@ function forecastStatus(){
  return warning?`<div class="forecast-status alert"><strong>${s.stale?'Updated forecast available':'Forecast needs review'}</strong>${content}${s.stale?'<p>Your plan, actual loads and notes will be kept.</p><button id="refresh-forecast">Refresh suggestions</button>':''}</div>`:`<details class="forecast-status"><summary>Forecast checked · View details</summary>${content}</details>`;
 }
 function forecastDetails(i){
- return (i.forecast?.samples?'<p>Expected '+number(i.forecast.base)+' + buffer '+number(i.forecast.buffer)+'<br>'+(i.forecast.used_samples??i.forecast.samples)+' observations · last '+escape(i.forecast.last_date??'date unavailable')+'</p>':'<p>No usable history</p>')+(i.forecast?.last_qty!=null?'<p>Last comparable sold: '+number(i.forecast.last_qty)+(i.forecast.last_constrained?' · possible stockout':'')+'</p>':'');
+ const f=i.forecast;
+ return (f?.samples?'<p>Model estimate '+number(f.base)+' + buffer '+number(f.buffer)+'<br>'+(f.used_samples??f.samples)+' observations · last '+escape(f.last_date??'date unavailable')+'</p>':'<p>No usable history</p>')+(f?.last_qty!=null?'<p>Last comparable sold: '+number(f.last_qty)+(f.last_constrained?' · possible stockout':'')+'</p>':'')+(f?.recent_sales_minimum!=null?'<p>Safety minimum: '+number(f.last_qty)+' sold + '+number(f.recent_sales_buffer)+' safety units = '+number(f.recent_sales_minimum)+'. The suggestion uses the higher of this minimum and the model estimate with its buffer. The allowance is included once.</p>':'');
 }
 function forecastWarnings(i){
- return (i.forecast?.last_constrained?'<small class="bad">Possible stockout on the last comparable visit.</small>':'')+(i.forecast?.qty!=null&&i.forecast.qty<i.forecast.last_qty?'<small class="bad">Below last comparable sales — review quantity.</small>':'')+(i.forecast?.last_date&&state.result.forecast_status&&i.forecast.last_date<state.result.forecast_status.expected_visit?'<small class="bad">Recent comparable sales are missing.</small>':'');
+ const f=i.forecast,covered=f?.recent_sales_minimum!=null;
+ return (f?.last_constrained?(covered?'<small>Stockout allowance included · minimum '+number(f.recent_sales_minimum)+'</small>':'<small class="bad">Historical suggestion · possible stockout on the last comparable visit.</small>'):(f?.recent_sales_uplift>0?'<small>Recent sales allowance included · minimum '+number(f.recent_sales_minimum)+'</small>':''))+(f?.qty!=null&&f.qty<f.last_qty?'<small class="bad">Below last comparable sales — review quantity.</small>':'')+(f?.last_date&&state.result.forecast_status&&f.last_date<state.result.forecast_status.expected_visit?'<small class="bad">Recent comparable sales are missing.</small>':'');
 }
 function captureProduct(i,evening){
  const unit=String(i.unit??'').split(':')[0].trim();

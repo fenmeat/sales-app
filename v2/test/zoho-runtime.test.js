@@ -85,7 +85,7 @@ test('workerd forecasts from confirmed returns before cash close and refresh pre
  assert.equal(loaded.forecast_status.stale,true);assert.equal(loaded.run.items[0].planned,77);assert.equal(loaded.run.items[0].forecast.base,10);
  const refresh={run:loaded.run,revision:loaded.revision,action:'forecast',request_id:crypto.randomUUID()};
  const result=await call('/api/run',refresh);assert.equal(result.status,200,JSON.stringify(result));loaded=result.data;
- assert.equal(loaded.run.items[0].forecast.base,14);assert.equal(loaded.run.items[0].forecast.last_qty,18);assert.equal(loaded.run.items[0].planned,77);assert.equal(loaded.run.notes,'Keep this manual quantity');assert.equal(loaded.forecast_status.stale,false);
+ assert.equal(loaded.run.items[0].forecast.base,14);assert.equal(loaded.run.items[0].forecast.last_qty,18);assert.equal(loaded.run.items[0].forecast.qty,21);assert.equal(loaded.run.items[0].forecast.recent_sales_minimum,21);assert.equal(loaded.run.items[0].planned,77);assert.equal(loaded.run.notes,'Keep this manual quantity');assert.equal(loaded.forecast_status.stale,false);
  assert.equal((await call('/api/run',refresh)).data.replayed,true);
  assert.equal((await call('/api/run',{...refresh,request_id:crypto.randomUUID()})).status,409);
  const stable=(await call('/api/run?date=2026-10-08&route=R07')).data;assert.equal(stable.forecast_status.stale,false);assert.equal(stable.run.items[0].planned,77);

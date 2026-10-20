@@ -1,5 +1,5 @@
 import {addDays,weekday,roundQty} from './domain.js';
-import {forecast} from './forecast.js';
+import {forecast,applyRecentSalesFloor} from './forecast.js';
 
 const mean=values=>values.reduce((sum,value)=>sum+value,0)/values.length;
 const median=values=>{const sorted=[...values].sort((a,b)=>a-b),mid=Math.floor(sorted.length/2);return sorted.length%2?sorted[mid]:(sorted[mid-1]+sorted[mid])/2;};
@@ -46,7 +46,7 @@ export function forecastRoute(routeRows,date,productCodes){
   const base=original.base*cycle.factor;
   const buffer=base===0?0:Math.ceil(Math.max(original.buffer,base*.15)),qty=Math.ceil(base+buffer);
   const warnings=(original.warning||'').replace('Suggested load is below the latest comparable sales.','').trim();
-  forecasts[code]={...original,base:roundQty(base),buffer,qty,method:original.method+'+month_phase',mae:null,backtest_count:0,month_cycle:{...cycle,factor:roundQty(cycle.factor),baseline_base:original.base,baseline_mae:original.mae,baseline_backtest_count:original.backtest_count},warning:[warnings,qty<original.last_qty?'Suggested load is below the latest comparable sales.':''].filter(Boolean).join(' ')};
+  forecasts[code]=applyRecentSalesFloor({...original,base:roundQty(base),buffer,qty,method:original.method+'+month_phase',mae:null,backtest_count:0,month_cycle:{...cycle,factor:roundQty(cycle.factor),baseline_base:original.base,baseline_mae:original.mae,baseline_backtest_count:original.backtest_count},warning:warnings});
  }
  return {forecasts,month_cycle:{...cycle,factor:roundQty(cycle.factor)}};
 }

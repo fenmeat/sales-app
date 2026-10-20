@@ -1,3 +1,30 @@
+## 20 October 2026 — latest comparable sales safety minimum (0.20.6)
+
+The owner approved the expanded loading policy and publication on 20 October.
+Deployment changes no actual sales, manual plans or production decisions.
+
+New suggestions use the higher of the existing model with its buffer and the
+latest usable comparable sale plus the larger of 3 units or 15%, rounded up.
+This covers both sold-out visits and visits with returns. The minimum is applied
+after month-cycle adjustment and is not an extra allowance added to an already
+higher forecast. It is a cautious loading policy, not measured unmet demand.
+The existing route/service-cycle and history validity filters remain in place.
+Missing evidence stays missing and a latest zero sale does not create a minimum.
+
+The model snapshot changes so saved unconfirmed plans offer Refresh suggestions.
+Refresh retains manual plans, loads, returns, cash and notes. Historical captures
+retain their original forecasts. Sales, new production forecasts and uncovered
+Order Guy dates continue to share the same model; confirmed decisions are kept.
+Product Details explains the minimum without enlarging the capture controls.
+
+Validation: 221 Node/workerd checks and the Worker deployment dry-run pass.
+Targeted checks cover recent sales with returns, stockouts, higher existing
+forecasts, month-phase reductions, route variants, missing/zero/invalid evidence,
+and preservation of saved choices and actual counts. UI explanatory text is
+checked in isolation; no physical-device or authenticated live-browser test is
+claimed. The existing Staff and keyboard/dock changes are retained. This release
+has no database migration; rollback is the preceding application version.
+
 ## 20 October 2026 — reusable casual clock PINs (0.20.4)
 
 Staff → Casuals → Add casual needs a name, work/team and confirmed employment

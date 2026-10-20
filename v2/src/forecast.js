@@ -1,5 +1,18 @@
 import {addDays,weekday,roundQty} from './domain.js';
 const average = list => list.reduce((s,x)=>s+x,0)/list.length;
+// A loading suggestion must cover the latest usable comparable sale with one
+// safety allowance. The caller has already restricted the route/service cycle.
+// Apply this after month seasonality as well, and keep any higher model result.
+// This is a planning minimum, not a claim that unmet demand was measured.
+export function applyRecentSalesFloor(result,{bufferMin=3,bufferRate=.15}={}) {
+  if(result.qty===null)return result;
+  const covered=Number.isFinite(result.last_qty)&&result.last_qty>0;
+  const safety=covered?Math.ceil(Math.max(bufferMin,result.last_qty*bufferRate)):0;
+  const minimum=covered?Math.ceil(result.last_qty+safety):null;
+  const qty=covered?Math.max(result.qty,minimum):result.qty;
+  const warning=(result.warning||'').replace('Suggested load is below the latest comparable sales.','').trim();
+  return {...result,qty,recent_sales_buffer:safety,recent_sales_minimum:minimum,recent_sales_uplift:qty-result.qty,warning};
+}
 function estimate(rows,date,mode) {
   const cutoff=addDays(date,mode==='average8'?-56:-84);
   const eligible=rows.filter(r=>r.date>=cutoff&&r.date<date&&weekday(r.date)===weekday(date));
@@ -22,5 +35,5 @@ export function forecast(rows,date,{bufferMin=3,bufferRate=.15,mode='auto'}={}) 
   const buffer=base===0?0:Math.ceil(Math.max(bufferMin,base*bufferRate,residual));
   const constrained=samples.filter(r=>r.constrained===true).length,last=samples.at(-1),qty=Math.ceil(base+buffer);
   const missing=[];for(let d=addDays(date,-7);d>=(method==='average8'?addDays(date,-56):addDays(date,-84));d=addDays(d,-7))if(!samples.some(r=>r.date===d))missing.push(d);
-  return {qty,base:roundQty(base),buffer,samples:samples.length,used_samples:samples.filter(r=>r.date>=addDays(date,method==='average8'?-56:-84)).length,method,last_date:last.date,last_qty:last.qty,last_constrained:last.constrained===true,missing_dates:missing,backtest_count:scores[method].length,mae:scores[method].length?roundQty(average(scores[method].map(Math.abs))):null,warning:[samples.length<4?'Limited history.':'',samples.some(r=>r.quality==='provisional')?'Provisional actuals: invoice reconciliation unverified.':'',constrained?'Recent stockouts may understate demand.':'',qty<last.qty?'Suggested load is below the latest comparable sales.':'',last.constrained?'Latest comparable visit may have sold out; actual demand is unknown.':''].filter(Boolean).join(' ')};
+  return applyRecentSalesFloor({qty,base:roundQty(base),buffer,samples:samples.length,used_samples:samples.filter(r=>r.date>=addDays(date,method==='average8'?-56:-84)).length,method,last_date:last.date,last_qty:last.qty,last_constrained:last.constrained===true,missing_dates:missing,backtest_count:scores[method].length,mae:scores[method].length?roundQty(average(scores[method].map(Math.abs))):null,warning:[samples.length<4?'Limited history.':'',samples.some(r=>r.quality==='provisional')?'Provisional actuals: invoice reconciliation unverified.':'',constrained?'Recent stockouts may understate demand.':'',last.constrained?'Stockout safety allowance included; unmet demand remains unknown.':''].filter(Boolean).join(' ')},{bufferMin,bufferRate});
 }

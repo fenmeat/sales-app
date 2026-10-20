@@ -37,7 +37,7 @@ test('refresh suggestions preserves custom plans including zero, captured quanti
  const next=applyForecastRefresh(r,{snapshot:'new',forecasts:{W01:{qty:25,base:20,buffer:5}}});
  assert.equal(next.items[0].planned,0);assert.equal(next.items[0].loaded,20);assert.equal(next.items[0].returned,2);assert.deepEqual(next.cash,before.cash);assert.equal(next.notes,before.notes);assert.deepEqual(r,before);assert.equal(next.items[0].forecast.qty,25);
 });
-test('forecast discloses source dates, gaps and a load below the latest observation without fabricating demand',()=>{
+test('forecast discloses source dates and gaps while covering the latest sale with one safety allowance',()=>{
  const rows=[['2026-08-27',10],['2026-09-03',10],['2026-09-10',10],['2026-09-17',10],['2026-10-01',30]].map(([date,qty])=>({date,qty,quality:'provisional'}));
- const f=forecast(rows,'2026-10-08');assert.equal(f.last_date,'2026-10-01');assert.equal(f.last_qty,30);assert.ok(f.missing_dates.includes('2026-09-24'));assert.ok(f.qty<30);assert.match(f.warning,/below the latest/);assert.equal(f.used_samples,5);
+ const f=forecast(rows,'2026-10-08');assert.equal(f.last_date,'2026-10-01');assert.equal(f.last_qty,30);assert.ok(f.missing_dates.includes('2026-09-24'));assert.equal(f.qty,35);assert.doesNotMatch(f.warning,/below the latest/);assert.equal(f.used_samples,5);assert.equal(f.recent_sales_buffer,5);
 });
