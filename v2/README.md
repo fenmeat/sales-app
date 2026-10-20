@@ -1,3 +1,27 @@
+## 20 October 2026 — reliable stock and production printing (0.20.7)
+
+Sales Stock Load & Return, Production staff sheet, detailed Production and
+Trolley printing now share one preparation/selection lifecycle. Wait for the
+saved sheet, fonts and two layout frames before opening native print. Ignore
+repeated taps during preparation. Missing saved data, failed reads and an
+oversized staff sheet do not fall through to printing the application screen.
+
+Keep the selected print-only mode and DOM after `print()` returns and after an
+`afterprint` event: native previews can still paginate at that point. Reapply
+the selection in `beforeprint`; change it only on another explicit print action.
+Screen CSS continues to show the app normally. More → Print current view clears
+the document selection explicitly. Existing saved quantities and A4 layouts
+are retained, including the cash count and production trolley/label sections.
+
+Validation: 10 targeted Node/workerd tests and deployment dry-run pass. Actual
+local Worker/assets with isolated synthetic D1 and Chromium verify first print,
+cancel/retry simulation, early afterprint, slow reads/double taps, failed-read
+retry, route changes, print-mode switching, unsaved-edit preservation and no
+business-data writes by printing. Both 29-product samples and their retries
+render as one A4 page and were visually inspected. Native iPhone/iPad Safari
+and physical AirPrint acceptance remain untested on the owner's device.
+No schema migration. Rollback uses the previous code version.
+
 ## 20 October 2026 — latest comparable sales safety minimum (0.20.6)
 
 The owner approved the expanded loading policy and publication on 20 October.
