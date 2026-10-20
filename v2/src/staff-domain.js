@@ -10,9 +10,26 @@ export function uuid(value){check(typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f
 export function staffPerson(state,id){const p=state.people.find(p=>p.id===id);check(p,'Employee not found.',404);return p;}
 export function validateBirthDate(value,asOf=dayAt(Date.now())){const date=dateKey(value);check(date<=asOf,'Date of birth cannot be in the future.');return date;}
 export function birthdayPin(value){const date=dateKey(value);return date.slice(5,7)+date.slice(8,10);}
+export const isCasual=p=>p.employment_type==='Casual';
+const validSlot=n=>Number.isInteger(n)&&n>=1&&n<=9999;
+export function casualPin(p){return isCasual(p)&&p.active&&validSlot(p.casual_pin_slot)?String(p.casual_pin_slot).padStart(4,'0'):null;}
+export function clockPin(p){return isCasual(p)?casualPin(p):p.birth_date?birthdayPin(p.birth_date):null;}
+function assignCasualPin(state,p,old){
+ // Slots are reusable credentials, never employee identifiers. Only active
+ // casuals reserve slots; immutable register revisions retain assignment history.
+ p.casual_pin_slot=null;
+ if(!isCasual(p)||!p.active)return;
+ check(!(old?.source_profile?.issues??[]).some(x=>x.startsWith('Shared casual label:')),'This imported record combines different casuals. Add a separate person under Add casual; keep the shared history unchanged.');
+ const used=new Set(state.people.filter(x=>x.id!==p.id&&isCasual(x)&&x.active).map(x=>x.casual_pin_slot));
+ if(old?.active&&isCasual(old)&&validSlot(old.casual_pin_slot)&&!used.has(old.casual_pin_slot)){p.casual_pin_slot=old.casual_pin_slot;return;}
+ let slot=1;while(used.has(slot)&&slot<=9999)slot++;
+ check(slot<=9999,'All casual PINs are in use. Make a finished casual inactive first.');p.casual_pin_slot=slot;
+}
 export function validatePerson(raw,old,asOf){
  check(raw&&typeof raw==='object','Enter an employee.');
- const p={id:uuid(raw.id),code:text(raw.code,'employee code',24).toUpperCase(),name:text(raw.name,'employee name',80),team:text(raw.team,'team',60),start_date:dateKey(raw.start_date),active:raw.active};
+ const kind=raw.employment_type??old?.employment_type??'Regular';check(['Regular','Casual'].includes(kind),'Choose Regular or Casual.');
+ const id=uuid(raw.id),code=!old&&kind==='Casual'&&!raw.code?'CAS-'+id.replaceAll('-','').slice(0,12).toUpperCase():raw.code;
+ const p={id,code:text(code,'employee code',24).toUpperCase(),name:text(raw.name,'employee name',80),team:text(raw.team,'team',60),start_date:dateKey(raw.start_date),active:raw.active,employment_type:kind};
  check(/^[A-Z0-9_-]+$/.test(p.code),'Use letters, numbers, - or _ in the employee code.');
  check(typeof p.active==='boolean','Choose active or inactive.');
  if(old){check(old.code===p.code,'The permanent employee code cannot change.');check(old.start_date===null||old.start_date===p.start_date,'The employment start date cannot change after the record is created.');}
@@ -37,10 +54,17 @@ export function applyStaffAction(state,b,actor,stamp){
   const old=next.people.find(p=>p.id===b.person?.id),p=validatePerson(b.person,old,dayAt(stamp));
   check(!next.people.some(x=>x.id!==p.id&&x.code===p.code),'That employee code is already in use.');
   check(old||next.people.length<200,'The employee register is full.');
+  assignCasualPin(next,p,old);
   if(old)Object.assign(old,p);else next.people.push(p);detail={employee_id:p.id};
  }else{
   const p=staffPerson(next,b.employee_id);detail={employee_id:p.id};
-  if(b.action==='birth_date'){
+  if(b.action==='status'||b.action==='clock_type'){
+   const old={...p};
+   if(b.action==='status'){check(typeof b.active==='boolean','Choose active or inactive.');p.active=b.active;}
+   else{check(['Regular','Casual'].includes(b.employment_type),'Choose Regular or Casual.');p.employment_type=b.employment_type;}
+   assignCasualPin(next,p,old);detail.active=p.active;detail.employment_type=p.employment_type??'Regular';
+  }
+  else if(b.action==='birth_date'){
    p.birth_date=validateBirthDate(b.birth_date,dayAt(stamp));
   }
   else if(b.action==='employment_date'){

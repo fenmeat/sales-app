@@ -1,6 +1,6 @@
 import {check,UserError,dateKey,today,addDays} from './domain.js';
 import {hash,randomToken,isAdmin,sameOrigin} from './auth.js';
-import {blankStaff,applyStaffAction,staffPerson,uuid,text,shiftSummary,appendPunch,periodHours,dayStart,dayAt,LEAVE_TYPES,balance,birthdayPin} from './staff-domain.js';
+import {blankStaff,applyStaffAction,staffPerson,uuid,text,shiftSummary,appendPunch,periodHours,dayStart,dayAt,LEAVE_TYPES,balance,clockPin,casualPin,isCasual} from './staff-domain.js';
 import {IMPORT_SCHEMA,staffImportApi} from './staff-import.js';
 
 export const STAFF_SCHEMA=[
@@ -32,16 +32,15 @@ async function pinDigest(pin,salt,env){
  return Array.from(new Uint8Array(bits),b=>b.toString(16).padStart(2,'0')).join('');
 }
 async function verifyPin(db,person,pin,device,env){
- requiredPepper(env);check(typeof pin==='string'&&/^\d{4}$/.test(pin),'Enter your 4-digit PIN: birth month, then day.',401);
+ requiredPepper(env);check(typeof pin==='string'&&/^\d{4}$/.test(pin),'Enter your 4-digit PIN.',401);
  const bucket=await limited(db,'pin:'+person.id,5),deviceBucket=await limited(db,'device:'+device.id,80);
- check(person.birth_date,'Ask Alex or Alinda to save your date of birth before clocking.',401);
- // The private birth date is the source of truth. Derive both verifiers with
- // the existing pepper/PBKDF2 scheme and the employee UUID as a unique salt.
- // No independent PIN can drift from a corrected birth date. Legacy verifiers
- // remain in their table for rollback, but are never accepted or returned.
- const digest=await pinDigest(pin,person.id,env),expected=await pinDigest(birthdayPin(person.birth_date),person.id,env);
+ const assigned=clockPin(person);
+ check(assigned,isCasual(person)?'Ask Alex or Alinda to assign your casual PIN.':'Ask Alex or Alinda to save your date of birth before clocking.',401);
+ // The selected employee UUID always owns the time records. Reusing a casual
+ // slot cannot transfer their history or authenticate an inactive employee.
+ const digest=await pinDigest(pin,person.id,env),expected=await pinDigest(assigned,person.id,env);
  let diff=0;for(let i=0;i<64;i++)diff|=digest.charCodeAt(i)^expected.charCodeAt(i);
- check(diff===0,'PIN is incorrect. Use your birth month followed by the day, or ask Alex or Alinda to check your date of birth.',401);
+ check(diff===0,isCasual(person)?'PIN is incorrect. Ask Alex or Alinda for your current casual PIN.':'PIN is incorrect. Use your birth month followed by the day, or ask Alex or Alinda to check your date of birth.',401);
  // Correct PINs do not use up the failure allowance for a shared device.
  await db.batch([db.prepare('DELETE FROM v2_auth_limits WHERE bucket=?').bind(bucket),db.prepare('UPDATE v2_auth_limits SET attempts=MAX(0,attempts-1) WHERE bucket=?').bind(deviceBucket)]);
 }
@@ -109,7 +108,7 @@ export async function staffApi({request,url,env,user,bodyOf}){
  if(path==='/api/staff'&&request.method==='GET'){
   const devices=(await db.prepare('SELECT id,name,code_expires,expires,revoked,created_by,created_at,token_hash IS NOT NULL AS enrolled FROM v2_staff_devices ORDER BY created_at DESC').all()).results;
   const open=(await db.prepare(`SELECT t.employee_id,t.state,t.start_at FROM v2_staff_time t WHERE t.state!='out' AND ${latestCondition}`).all()).results;
-  return {...current,username:user.username,pin_secret_configured:hasPepper(env),people:current.state.people.map(p=>({...p,pin_ready:hasPepper(env)&&!!p.birth_date,state:open.find(r=>r.employee_id===p.id)?.state??'out',balances:Object.fromEntries(LEAVE_TYPES.filter(t=>t!=='Unpaid').map(t=>[t,balance(current.state,p.id,t,today())]))})),devices,payroll_ready:false};
+  return {...current,username:user.username,pin_secret_configured:hasPepper(env),people:current.state.people.map(p=>({...p,pin_ready:hasPepper(env)&&!!clockPin(p),casual_pin:casualPin(p),state:open.find(r=>r.employee_id===p.id)?.state??'out',balances:Object.fromEntries(LEAVE_TYPES.filter(t=>t!=='Unpaid').map(t=>[t,balance(current.state,p.id,t,today())]))})),devices,payroll_ready:false};
  }
  if(path==='/api/staff/hours'&&request.method==='GET'){
   const from=dateKey(url.searchParams.get('from')??addDays(today(),-6)),to=dateKey(url.searchParams.get('to')??today());check(from<=to&&dayStart(to)-dayStart(from)<31*86400000,'Review up to 31 days at a time.');
@@ -123,10 +122,18 @@ export async function staffApi({request,url,env,user,bodyOf}){
  check(Number.isInteger(b.revision)&&b.revision===current.revision,'Staff records changed. Reload before saving.',409);
  if(path==='/api/staff'){
   const result=applyStaffAction(current.state,b,user.username,stamp);
-  return op.commit([registerInsert(db,current,result.state,b.action,user.username,result.detail,stamp)],{ok:true,revision:current.revision+1});
+  const before=current.state.people.find(p=>p.id===result.detail.employee_id),after=result.state.people.find(p=>p.id===result.detail.employee_id),statements=[];
+  if(before&&((before.active&&!after.active)||isCasual(before)!==isCasual(after))){
+   const openSql=`SELECT 1 FROM v2_staff_time t WHERE employee_id=? AND t.state!='out' AND ${latestCondition}`;
+   check(!await db.prepare(openSql).bind(before.id).first(),'Clock out or correct the open shift before making this person inactive or changing their PIN type.');
+   // Race a clock-in safely: if it commits first this guard rolls back the
+   // status change. If deactivation commits first, the punch register guard fails.
+   statements.push(db.prepare(`INSERT INTO v2_staff_requests(id,request_hash,result) SELECT ?, '', '' WHERE EXISTS (${openSql})`).bind(op.id,before.id));
+  }
+  return op.commit([...statements,registerInsert(db,current,result.state,b.action,user.username,result.detail,stamp)],{ok:true,revision:current.revision+1,employee_id:result.detail.employee_id});
  }
  if(path==='/api/staff/pin'){
-  throw new UserError('PINs now use the birth month and day. Refresh Staff and save the employee date of birth under People → Birthday / PIN.');
+  throw new UserError('Refresh Staff. Use People → Birthday / PIN for regular staff, or Casuals for assigned casual PINs.');
  }
  if(path==='/api/staff/device'){
   let stmt,detail;

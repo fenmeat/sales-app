@@ -1,3 +1,32 @@
+## 20 October 2026 — reusable casual clock PINs (0.20.4)
+
+Staff → Casuals → Add casual needs a name, work/team and confirmed employment
+start. The server creates the permanent employee code and assigns the lowest
+available four-digit casual PIN: 0001, 0002, 0003. No birthday is needed for a
+casual clock PIN. Existing employees keep birthday PINs unless an administrator
+explicitly selects Casual or Assign casual PIN. Imported individual casuals
+retain their original records and still require employment-date confirmation.
+
+Make inactive releases the PIN and hides the person on the yard phone. It is
+blocked while a shift is open, including a simultaneous clock-in. Activate
+again uses the same employee record and assigns an available PIN, which may
+differ from the old one. PIN reuse never changes clock or leave ownership.
+Deactivation is explicit; no end date, payment or employment termination is
+inferred. Shared imported casual labels cannot be activated as one person.
+
+213 Node/workerd regression tests passed. Isolated Chromium desktop/mobile
+acceptance covers birthday and casual clocking, leading zeros, PIN reuse,
+reactivation, reload persistence, separate time histories, role isolation and
+lost-response retry. Screenshots were inspected at phone width. An actual
+iPhone/Safari acceptance check is still a user-device check.
+
+The change is additive to private register payloads, with no new SQL migration
+and no deployment-time rewrite of live employees. Older versions do not
+understand casual PINs: preserve register history and prefer a forward fix;
+rolling back disables casual PIN clocking and requires reconciliation before
+resuming casual administration. Full payroll and payment execution remain off.
+The published 0.20.3 keyboard/dock changes are retained.
+
 ## 20 October 2026 — keep the workflow dock below the keyboard (0.20.3)
 
 The Sales save/navigation dock and Production save dock stay anchored at

@@ -1,10 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {blankStaff,applyStaffAction,periodHours,shiftSummary,appendPunch,balance,dayAt,birthdayPin} from '../src/staff-domain.js';
+import {blankStaff,applyStaffAction,periodHours,shiftSummary,appendPunch,balance,dayAt,birthdayPin,clockPin} from '../src/staff-domain.js';
 const id=crypto.randomUUID();
 const person={id,code:'SYN-001',name:'Synthetic worker',team:'Test',start_date:'2026-01-01',active:true};
 const act=(state,b)=>applyStaffAction(state,b,'alinda','2026-10-19T09:00:00.000Z').state;
 function setup(){let s=act(blankStaff(),{action:'person',person});return act(s,{action:'schedule',employee_id:id,from:'2026-01-01',minutes:[540,540,540,540,540,480,0],reason:'Synthetic verified schedule'});}
+test('casual slots reuse the lowest free PIN while employee identity, original import and leave history remain separate',()=>{
+ const a={...person,code:undefined,employment_type:'Casual',casual_pin_slot:9999},b={...a,id:crypto.randomUUID(),name:'Synthetic second casual'};
+ let s=act(blankStaff(),{action:'person',person:a});assert.equal(clockPin(s.people[0]),'0001');assert.match(s.people[0].code,/^CAS-/);assert.equal(s.people[0].birth_date,null);
+ s=act(s,{action:'person',person:b});assert.equal(clockPin(s.people[1]),'0002');
+ s=act(s,{action:'status',employee_id:a.id,active:false});assert.equal(clockPin(s.people[0]),null);assert.equal(s.people[0].casual_pin_slot,null);
+ const c={...b,id:crypto.randomUUID(),name:'Synthetic new casual'};s=act(s,{action:'person',person:c});assert.equal(clockPin(s.people[2]),'0001');
+ s=act(s,{action:'status',employee_id:a.id,active:true});assert.equal(clockPin(s.people[0]),'0003');assert.equal(s.people[0].id,a.id);
+ s=act(s,{action:'person',person:{...s.people[0],name:'Synthetic corrected name',casual_pin_slot:1}});assert.equal(clockPin(s.people[0]),'0003','caller cannot override a slot');
+ const legacy={...person,start_date:null,employment_verified:false,source_profile:{kind:'Casual',source_name:'Original name'},schedules:[]};
+ s=act({...blankStaff(),people:[legacy]},{action:'clock_type',employee_id:id,employment_type:'Casual'});
+ assert.equal(s.people[0].start_date,null);assert.equal(s.people[0].employment_verified,false);assert.deepEqual(s.people[0].source_profile,legacy.source_profile);assert.equal(clockPin(s.people[0]),'0001');
+ const shared={...legacy,source_profile:{kind:'Casual',issues:['Shared casual label: identify the individual before activating']}};
+ assert.throws(()=>act({...blankStaff(),people:[shared]},{action:'clock_type',employee_id:id,employment_type:'Casual'}),/combines different casuals/);
+ const regular=act(blankStaff(),{action:'person',person:{...person,birth_date:'1988-06-15'}}).people[0];assert.equal(clockPin(regular),'0615');
+});
 const punch=(kind,at)=>({kind,at:new Date(at+'+02:00').toISOString()});
 const shift=(...punches)=>({id:crypto.randomUUID(),employee_id:id,punches});
 const request=(type,units,date='2026-10-19')=>({action:'leave_request',employee_id:id,record_id:crypto.randomUUID(),type,units,date,reason:'Synthetic request'});

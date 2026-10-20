@@ -1,6 +1,45 @@
-# Native Staff core — 0.20.2
+# Native Staff core — 0.20.4
 
-Version 0.20.2 uses the employee's saved date of birth for a four-digit clock
+## Casual PINs
+
+Version 0.20.4 adds Staff → Casuals. Add casual captures the individual's name,
+work/team and verified employment start, then creates a permanent UUID/code.
+The server assigns the lowest available slot from 1–9999 and pads it to four
+digits (0001 onwards). A slot is a reusable clock credential, never a worker
+identity. A missing DOB does not block a configured casual PIN. Regular staff
+retain MMDD PINs; existing imported individuals only change PIN type when an
+administrator explicitly chooses Assign casual PIN or edits Staff type.
+Original source profiles and the original imported register are unchanged.
+
+Active casual slots are unique in each private register revision. Admin-only
+responses display the current PIN; the kiosk still receives only id/name/state,
+and the read connector's explicit field list excludes slots and PINs. PIN
+verification retains the configured server secret, UUID salt, PBKDF2 and rate
+limits. Assignment requests use the register revision and idempotency key:
+concurrent creates cannot allocate the same active slot. Caller-supplied slots
+are ignored. Existing birthday data is retained when switching to Casual.
+
+Make inactive clears the active slot and removes the person from the kiosk.
+The API first requires all shifts to be closed, then checks again inside the
+transaction. Together with the punch register guard, this prevents a racing
+clock-in from leaving an inactive worker with an open shift. The same checks
+apply to edits and PIN-type changes. Old inactive employee IDs cannot verify,
+punch or replay a successful punch. Activate again preserves the UUID, original
+employment start, original profile, clock history and leave ledger, assigning
+the lowest currently free slot. Shared imported casual labels are rejected;
+each individual needs a separate record. No automatic end-date processing or
+termination is implied by the active/inactive switch.
+
+Tests cover allocation, leading zeros, inactive denial, release/reuse,
+reactivation, concurrent registrations, clock-in/deactivation races, restart,
+separate historical time ownership and kiosk/admin access separation. Local
+phone-width Chromium exercises the actual forms and registered-device flow.
+There is no new database migration. Do not delete historical people to recycle
+PINs. The existing bounded register limits still apply. A rollback retains data
+but older code cannot authenticate casual PINs; prefer a forward fix and review
+the register before re-enabling casual administration on a restored version.
+
+Version 0.20.2 introduced the employee's saved date of birth for a four-digit clock
 PIN (MMDD), as Alex requested on 20 October: 15 June is 0615. Alex/Alinda enter
 or correct Date of birth in Add/Edit employee or People → Birthday / PIN.
 Saving a date immediately determines the PIN, including leading zeros and
