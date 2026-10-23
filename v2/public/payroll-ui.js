@@ -3,7 +3,7 @@ import {localDay,hoursLabel} from './staff-model.js';
 import {printDocument} from './print-document.js';
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const money=n=>n===null||n===undefined?'Pending':'R '+(n/100).toLocaleString('en-ZA',{minimumFractionDigits:2,maximumFractionDigits:2});
-const field=(label,name,value='',type='text',extra='')=>`<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" ${type==='text'?'inputmode="decimal"':''} ${extra} required></label>`;
+const field=(label,name,value='',type='text',extra='')=>`<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" ${type==='text'&&!extra.includes('inputmode=')?'inputmode="decimal"':''} ${extra} required></label>`;
 const select=(label,name,values,value)=>`<label>${label}<select name="${name}">${values.map(v=>`<option ${value===v?'selected':''}>${esc(v)}</option>`).join('')}</select></label>`;
 const note=(label='Review note',value='')=>`<label>${label}<textarea name="note" maxlength="500" required>${esc(value)}</textarea></label>`;
 const check=(label,name)=>`<label class="check"><input type="checkbox" name="${name}" required>${label}</label>`;
@@ -14,7 +14,7 @@ const rowBy=id=>state.run.rows.find(r=>r.employee_id===id),person=id=>ctx.people
 const latestProfile=id=>state.settings.profiles.filter(p=>p.employee_id===id&&p.from<=state.run.from).sort((a,b)=>a.from.localeCompare(b.from)).at(-1);
 export const payrollPanel=()=>'<section id="payroll-root" aria-live="polite"><p class="empty">Loading Payroll…</p></section>';
 export function bindPayroll(context){ctx=context;load();}
-async function load(){const seq=++loading;try{const result=await ctx.api(`/api/staff/payroll?pay_date=${payDate}&month=${month}`);if(seq!==loading||!document.querySelector('#payroll-root'))return;state=result;render();}catch(e){const root=document.querySelector('#payroll-root');if(root)root.innerHTML=`<p class="empty">${esc(e.message)}</p><button id="pay-retry">Retry Payroll</button>`;document.querySelector('#pay-retry')?.addEventListener('click',load);}}
+async function load(){const seq=++loading,root=document.querySelector('#payroll-root');if(root)root.innerHTML='<p class="empty">Loading Payroll…</p>';try{const result=await ctx.api(`/api/staff/payroll?pay_date=${payDate}&month=${month}`);if(seq!==loading||!document.querySelector('#payroll-root'))return;state=result;render();}catch(e){const root=document.querySelector('#payroll-root');if(root)root.innerHTML=`<p class="empty">${esc(e.message)}</p><button id="pay-retry">Retry Payroll</button>`;document.querySelector('#pay-retry')?.addEventListener('click',load);}}
 function editor(title,html,build){ctx.form(title,html,'/api/staff/payroll',f=>({...build(f),pay_date:payDate,payroll_revision:state.revision,time_version:state.source.time_version}));}
 function confirmAction(title,action,html='',extra=()=>({})){editor(title,html+note(),f=>({action,note:f.get('note'),...extra(f)}));}
 function badges(r){return `<span class="pill ${r.status}">${esc(r.status)}</span>`;}
