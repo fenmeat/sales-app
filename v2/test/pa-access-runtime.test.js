@@ -280,6 +280,10 @@ test('Staff import verification fails closed on corrupt source or original revis
  const original=JSON.parse(row.payload),person=original.people[0];
  const saved=await f.req('/api/staff',{headers:{Cookie:session},body:{request_id:crypto.randomUUID(),revision:1,action:'employment_date',employee_id:person.id,date:'2023-03-16',reason:'Synthetic confirmed employment date'}});assert.equal(saved.status,200,await saved.clone().text());
  const verified=(await summary()).structuredContent;assert.equal(verified.revision,2);assert.equal(verified.verified_import.import_revision,1);assert.equal(verified.import_verified,true);assert.equal(verified.connection.owner,'alinda');
+ const fresh=structuredClone(source.bundle);fresh.source.captured_at='2026-10-23T12:00:00.000Z';fresh.sheets.at(-1).rows[0].cells[0].formattedValue='Newer archived note';const raw=JSON.stringify(fresh),id=await hash(raw);
+ for(const [path,body]of [['start',{import_id:id,manifest:{id,parts:[id]}}],['chunk',{import_id:id,part:0,payload:raw}],['finish',{import_id:id,revision:2,mode:'history'}]]){const r=await f.req('/api/staff/imports/'+path,{headers:{Cookie:session},body});assert.equal(r.status,200,await r.clone().text());}
+ const freshSummary=(await summary()).structuredContent;assert.equal(freshSummary.revision,3);assert.equal(freshSummary.import_verified,true);assert.equal(freshSummary.verified_import.import_revision,1);assert.equal(freshSummary.latest_history.checksum,id);assert.equal(freshSummary.latest_history.checksum_verified,true);assert.equal(freshSummary.latest_history.existing_people_preserved,5);
+ const freshRows=await ok(f,tokens,'get_staff_data',{query:{resource:'source_rows',sheet_id:9}});assert.equal(freshRows.id,id);assert.equal(freshRows.rows[0].cells[0].formattedValue,'Newer archived note');
  const resultRow=await f.db.prepare('SELECT result FROM v2_staff_imports WHERE id=?').bind(source.id).first(),bad=JSON.parse(resultRow.result);bad.rows++;
  await f.db.prepare('UPDATE v2_staff_imports SET result=? WHERE id=?').bind(JSON.stringify(bad),source.id).run();assert.equal((await summary()).isError,true);
 });

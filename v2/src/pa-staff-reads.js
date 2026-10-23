@@ -40,7 +40,17 @@ export async function readStaffData(args,env,username,scopes){
    check(imported.source_import===id&&JSON.stringify(imported.people)===JSON.stringify(people),'The original employee import differs from its verified source.',409);
    verified={checksum:id,checksum_verified:true,original_register_verified:true,linked_to_current_register:state.source_import===id,import_revision:recorded.revision,completed_at:loaded.batch.completed_at,summary};
   }
-  return result({initialized:true,import_verified:!!verified?.linked_to_current_register,verified_import:verified,imports,
+  let latestHistory=null;
+  if(state.latest_history_import&&state.latest_history_import!==state.source_import){
+   const latest=await loadBundle(db,state.latest_history_import),saved=JSON.parse(latest.batch.result??'null');
+   check(latest.batch.status==='complete'&&saved?.checksum===state.latest_history_import,'Latest source history has not been verified.',409);
+   const derived=await deriveImport(latest.bundle,state.latest_history_import);
+   check(Object.entries(derived.summary).every(([k,v])=>JSON.stringify(saved[k])===JSON.stringify(v)),'Latest history summary differs from its source archive.',409);
+   const register=await db.prepare('SELECT payload,action FROM v2_staff_register WHERE revision=?').bind(saved.revision).first();
+   check(register?.action==='source_history_import'&&JSON.parse(register.payload).source_history_imports?.includes(state.latest_history_import),'The history import revision is missing.',409);
+   latestHistory={...saved,checksum_verified:true,completed_at:latest.batch.completed_at};
+  }
+  return result({initialized:true,import_verified:!!verified?.linked_to_current_register,verified_import:verified,latest_history:latestHistory,imports,
    current:{people:state.people.length,active:state.people.filter(p=>p.active).length,inactive:state.people.filter(p=>!p.active).length,
     employment_dates_unconfirmed:state.people.filter(p=>p.employment_verified===false).length,missing_start_dates:state.people.filter(p=>!p.start_date).length,
     without_schedules:state.people.filter(p=>p.active&&!p.schedules.length).length,leave_requests:state.leave.length,leave_ledger_entries:state.ledger.length},
@@ -56,7 +66,7 @@ export async function readStaffData(args,env,username,scopes){
    private_profile_included:!!args.employee_id});
  }
  if(resource==='source_rows'){
-  const id=args.import_id??state.source_import;check(id,'No source import is linked. Read summary first.',409);check(Number.isInteger(args.sheet_id),'Choose a sheet ID from summary.');
+  const id=args.import_id??state.latest_history_import??state.source_import;check(id,'No source import is linked. Read summary first.',409);check(Number.isInteger(args.sheet_id),'Choose a sheet ID from summary.');
   const url=new URL('https://fenmeat.invalid/api/staff/imports/rows');for(const[k,v]of Object.entries({id,sheet:args.sheet_id,q:args.q??'',offset:args.offset??0}))url.searchParams.set(k,String(v));
   return result(await staffImportApi({request:new Request(url),url,db,user:{username},bodyOf,current}));
  }

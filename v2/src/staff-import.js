@@ -1,5 +1,6 @@
 import {check,dateKey} from './domain.js';
 import {hash} from './auth.js';
+import {employeeHistory,historyCoverage} from './staff-history.js';
 
 export const IMPORT_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_staff_imports (id TEXT PRIMARY KEY, manifest TEXT NOT NULL, status TEXT NOT NULL, result TEXT, actor TEXT NOT NULL, created_at TEXT NOT NULL, completed_at TEXT)`,
@@ -81,7 +82,11 @@ export async function staffImportApi({request,url,db,user,bodyOf,current}){
  const path=url.pathname,stamp=new Date().toISOString();
  if(request.method==='GET'){
   if(path==='/api/staff/imports')return {imports:(await db.prepare('SELECT id,status,result,actor,created_at,completed_at FROM v2_staff_imports ORDER BY created_at DESC LIMIT 20').all()).results.map(r=>({...r,result:r.result?JSON.parse(r.result):null}))};
-  const id=url.searchParams.get('id');check(hex(id),'Invalid import ID.');const loaded=await loadBundle(db,id);check(loaded.batch.status==='complete','Import is not complete.',409);
+  const id=url.searchParams.get('id')||(path==='/api/staff/imports/history'?(current.state.latest_history_import??current.state.source_import):null);check(hex(id),'No completed source import is available.');const loaded=await loadBundle(db,id);check(loaded.batch.status==='complete','Import is not complete.',409);
+  if(path==='/api/staff/imports/history'){
+   const p=current.state.people.find(p=>p.id===url.searchParams.get('employee_id'));check(p,'Employee not found.',404);
+   return employeeHistory(loaded.bundle,p,id);
+  }
   if(path==='/api/staff/imports/export')return {id,bundle:loaded.bundle};
   if(path==='/api/staff/imports/rows'){
    const s=loaded.bundle.sheets.find(s=>String(s.id)===url.searchParams.get('sheet'));check(s,'Source sheet not found.',404);
@@ -111,11 +116,31 @@ export async function staffImportApi({request,url,db,user,bodyOf,current}){
  if(path==='/api/staff/imports/finish'){
   if(batch.status==='complete')return {ok:true,replayed:true,...JSON.parse(batch.result)};
   check(b.revision===current.revision,'Staff changed. Refresh and resume this import.',409);
-  check(current.state.people.length===0&&current.state.leave.length===0&&current.state.ledger.length===0,'Initial source import requires an empty Staff register. Existing records will not be overwritten.',409);
-  const {bundle}=await loadBundle(db,b.import_id),derived=await deriveImport(bundle,b.import_id),state={...current.state,people:derived.people,source_import:b.import_id,uif_workflow:derived.summary.uif_workflow};
-  check(JSON.stringify(state).length<600000,'The imported register is too large.');const result={...derived.summary,revision:current.revision+1,checksum:b.import_id};
+  check(b.mode===undefined||b.mode==='initial'||b.mode==='history','Invalid import mode.');
+  const history=b.mode==='history';
+  if(!history)check(current.state.people.length===0&&current.state.leave.length===0&&current.state.ledger.length===0,'Initial source import requires an empty Staff register. Existing records will not be overwritten.',409);
+  const {bundle}=await loadBundle(db,b.import_id),derived=await deriveImport(bundle,b.import_id);
+  let state,newPeople=[];
+  if(history){
+   check(current.state.source_import,'Complete the initial Staff source import first.',409);
+   const previous=await loadBundle(db,current.state.latest_history_import??current.state.source_import);
+   check(previous.batch.status==='complete'&&previous.bundle.source.spreadsheet_id===bundle.source.spreadsheet_id,'History must come from the same original spreadsheet.',409);
+   const used=new Map(current.state.people.map(p=>[p.id,p]));
+   for(const p of derived.people){
+    const existing=used.get(p.id);
+    if(existing){check(norm(existing.source_profile?.source_name)===norm(p.source_profile.source_name),'An employee identity differs from its source mapping. Review before importing.',409);continue;}
+    check(!current.state.people.some(x=>norm(x.name)===norm(p.name)||norm(x.source_profile?.source_name)===norm(p.name)),'A new source name matches another employee record. Review the identity before importing.',409);
+    // New identities remain inactive until a person verifies them. Existing
+    // birthdays, PIN assignments, schedules, pay setup and balances stay intact.
+    newPeople.push({...p,active:false});
+   }
+   check(current.state.people.length+newPeople.length<=200,'The register would exceed 200 employee identities.');
+   const newer=Date.parse(bundle.source.captured_at)>=Date.parse(previous.bundle.source.captured_at);
+   state={...current.state,people:[...current.state.people,...newPeople],latest_history_import:newer?b.import_id:(current.state.latest_history_import??current.state.source_import),source_history_imports:[...new Set([current.state.source_import,...(current.state.source_history_imports??[]),b.import_id])]};
+  }else state={...current.state,people:derived.people,source_import:b.import_id,uif_workflow:derived.summary.uif_workflow};
+  check(JSON.stringify(state).length<600000,'The imported register is too large.');const result={...derived.summary,revision:current.revision+1,checksum:b.import_id,mode:history?'history':'initial',history_coverage:historyCoverage(bundle),...(history?{existing_people_preserved:current.state.people.length,new_inactive_people:newPeople.length,latest_history_import:state.latest_history_import}:{})};
   try{await db.batch([
-   db.prepare('INSERT INTO v2_staff_register VALUES(?,?,?,?,?,?)').bind(current.revision+1,JSON.stringify(state),'source_import',user.username,stamp,JSON.stringify({import_id:b.import_id,people:derived.people.length,rows:derived.summary.rows})),
+   db.prepare('INSERT INTO v2_staff_register VALUES(?,?,?,?,?,?)').bind(current.revision+1,JSON.stringify(state),history?'source_history_import':'source_import',user.username,stamp,JSON.stringify({import_id:b.import_id,people:derived.people.length,rows:derived.summary.rows,...(history?{existing_people_preserved:current.state.people.length,new_inactive_people:newPeople.length}:{})})),
    db.prepare('UPDATE v2_staff_imports SET status=\'complete\',result=?,completed_at=? WHERE id=?').bind(JSON.stringify(result),stamp,b.import_id)
   ]);}catch{const done=await db.prepare('SELECT status,result FROM v2_staff_imports WHERE id=?').bind(b.import_id).first();check(done?.status==='complete','Staff changed. Refresh and resume this import.',409);return {ok:true,replayed:true,...JSON.parse(done.result)};}
   return {ok:true,...result};
