@@ -1,0 +1,7 @@
+## Decimal comma input — 8 October 2026 (0.10.2)
+
+Production and Sales decimal fields accept both `0,5` and `0.5`, including cooked stock, half-batch Vienna plans, yields, packing, route quantities and separate receipt amounts. Text remains unchanged during typing and is converted to numeric JSON for the existing API; money remains integer cents. The decimal keypad and select-all replacement behavior remain. Native minimum/maximum/step validation is reused through a numeric validation control; whole-number roll, casing and denomination counts stay whole numbers. Invalid/ambiguous text blocks saving rather than silently becoming blank or zero. No schema, recipe, forecast, credential or stored-data migration is needed.
+
+Implementation reference: https://developer.mozilla.org/en-US/docs/Web/HTML/Reference/Global_attributes/inputmode (locale-dependent decimal keypad).
+
+Verification: all 96 Node/domain/API/workerd tests and the deployment dry-run pass. Mobile af-ZA Chromium against the real Worker/assets and isolated synthetic D1 verifies incremental comma typing, select-all replacement, all production decimal categories, half-batch and numeric constraints, null versus zero, save/reload, failed-save retention, sales plan copying/load/returns, integer-cent receipts, unchanged manual trolleys/notes and cross-workflow isolation. Layout checks pass at 320/390/768/1024px with no browser errors. Physical iPhone/iPad Safari remains owner acceptance; no live business records were changed for QA.
