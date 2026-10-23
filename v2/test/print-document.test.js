@@ -33,11 +33,11 @@ test('double taps prepare and print once; cancel/retry and explicit current-view
  await f.print('printing-stock',()=>{throw Error('duplicate preparation');});
  release({});await f.tick();await f.tick();await job;
  assert.equal(calls,1);assert.equal(f.prints.length,1);
- for(const mode of ['printing-production-staff','printing-production',null,'printing-stock']){
+ for(const mode of ['printing-production-staff','printing-production',null,'printing-payroll','printing-stock']){
   const retry=f.print(mode,()=>({}));await f.tick();await f.tick();await retry;
   assert.deepEqual([...f.classes],mode?[mode]:[]);
  }
- assert.equal(f.prints.length,5);
+ assert.equal(f.prints.length,6);
 });
 test('missing saved plan, fit failure or network error cannot print the app screen; retry is allowed',async()=>{
  const f=fixture();

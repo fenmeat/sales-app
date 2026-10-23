@@ -1,10 +1,12 @@
 import {check,UserError,dateKey,today,addDays} from './domain.js';
 import {hash,randomToken,isAdmin,sameOrigin} from './auth.js';
 import {blankStaff,applyStaffAction,staffPerson,uuid,text,shiftSummary,appendPunch,periodHours,dayStart,dayAt,LEAVE_TYPES,balance,clockPin,casualPin,isCasual} from './staff-domain.js';
+import {PAYROLL_SCHEMA,payrollApi} from './payroll-api.js';
 import {IMPORT_SCHEMA,staffImportApi} from './staff-import.js';
 
 export const STAFF_SCHEMA=[
  ...IMPORT_SCHEMA,
+ ...PAYROLL_SCHEMA,
  `CREATE TABLE IF NOT EXISTS v2_staff_register (revision INTEGER PRIMARY KEY, payload TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, detail TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_staff_requests (id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, result TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_staff_pins (employee_id TEXT PRIMARY KEY, salt TEXT NOT NULL, digest TEXT NOT NULL, pepper_id TEXT NOT NULL)`,
@@ -104,11 +106,12 @@ export async function staffClockApi({request,url,env,bodyOf}){
 export async function staffApi({request,url,env,user,bodyOf}){
  check(isAdmin(user.username),'Only Alex or Alinda can access Staff administration.',403);
  const db=env.DB,path=url.pathname,current=await staffState(db),stamp=new Date().toISOString();
+ if(path==='/api/staff/payroll'||path==='/api/staff/payroll/history')return payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,env});
  if(path==='/api/staff/imports'||path.startsWith('/api/staff/imports/'))return staffImportApi({request,url,db,user,bodyOf,current});
  if(path==='/api/staff'&&request.method==='GET'){
   const devices=(await db.prepare('SELECT id,name,code_expires,expires,revoked,created_by,created_at,token_hash IS NOT NULL AS enrolled FROM v2_staff_devices ORDER BY created_at DESC').all()).results;
   const open=(await db.prepare(`SELECT t.employee_id,t.state,t.start_at FROM v2_staff_time t WHERE t.state!='out' AND ${latestCondition}`).all()).results;
-  return {...current,username:user.username,pin_secret_configured:hasPepper(env),people:current.state.people.map(p=>({...p,pin_ready:hasPepper(env)&&!!clockPin(p),casual_pin:casualPin(p),state:open.find(r=>r.employee_id===p.id)?.state??'out',balances:Object.fromEntries(LEAVE_TYPES.filter(t=>t!=='Unpaid').map(t=>[t,balance(current.state,p.id,t,today())]))})),devices,payroll_ready:false};
+  return {...current,username:user.username,pin_secret_configured:hasPepper(env),people:current.state.people.map(p=>({...p,pin_ready:hasPepper(env)&&!!clockPin(p),casual_pin:casualPin(p),state:open.find(r=>r.employee_id===p.id)?.state??'out',balances:Object.fromEntries(LEAVE_TYPES.filter(t=>t!=='Unpaid').map(t=>[t,balance(current.state,p.id,t,today())]))})),devices,payroll_enabled:true,payroll_ready:false};
  }
  if(path==='/api/staff/hours'&&request.method==='GET'){
   const from=dateKey(url.searchParams.get('from')??addDays(today(),-6)),to=dateKey(url.searchParams.get('to')??today());check(from<=to&&dayStart(to)-dayStart(from)<31*86400000,'Review up to 31 days at a time.');

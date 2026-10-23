@@ -1,4 +1,11 @@
-# Native Staff core — 0.20.4
+# Native Staff core — 0.21.0
+
+## Weekly payroll
+
+Version 0.21.0 adds Friday wages, reviewed and locked payslips, payment recording
+and monthly UIF reports. See [Payroll setup, calculation and persistence](payroll.md).
+Imported source rates still require confirmation; native hours alone are not
+approved wages. Payroll does not submit UIF or execute bank payments.
 
 ## Casual PINs
 
@@ -240,21 +247,13 @@ managers can still review its previously accepted actions. A rollback before
 0.20.2 restores the older PIN policy and would require managed PIN setup again;
 do not treat deployment rollback as a seamless credential migration.
 
-## Payroll phase still required
+## Payroll development boundary
 
-Not implemented: wage/rate history, normal/overtime/public-holiday pay rules,
-statutory leave accrual engines, deductions/loans, PAYE/UIF/SDL/ETI calculations,
-EMP201/EMP501/IRP5 output, immutable approved pay periods, payslips, bank batches,
-payments, payroll reversals, document storage, employee self-service and automatic
-production staffing/cost allocation. The Staff UI states that payroll is not
-enabled; all hours results return `payroll_ready: false`.
-
-These require employer/contract applicability and current official requirements,
-not a copy of unverified spreadsheet formulas. Build and reconcile the native
-payroll engine against two complete historical pay periods before approving its
-use for pay or submissions. Attendance cutover and payroll cutover are separate
-decisions. The current implementation does not claim SimplePay replacement is
-operationally complete.
+The first payroll workflow is implemented in 0.21.0; see [Payroll](payroll.md)
+for its explicit review steps and limits. Automatic PAYE/SDL/ETI, statutory
+filing, paid-run adjustments and banking integrations remain separate work.
+The auditors supply PAYE and submit UIF. Source histories remain dated evidence,
+not approved payroll inputs.
 
 ## Verification
 

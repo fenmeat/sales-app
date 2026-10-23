@@ -48,7 +48,7 @@ does not initialize business schemas or read PIN/device credential tables.
 There are no Staff write, generic SQL/URL, payment or submission tools.
 All results retain dates, revisions, unknown balances and payroll limitations.
 The UIF workflow remains Fen calculation, payment to auditors by Alex, auditor
-submission. Native payroll and a live clock cutover remain separate work.
+submission. Native weekly payroll is available in Staff administration; its write operations are not exposed by this connector. Confirm its setup and reconcile source openings before approval.
 
 ## Verification
 

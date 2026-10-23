@@ -11,7 +11,7 @@ const warnings=[
  'Imported source records are a dated snapshot; later Google Sheet changes are not synchronized.',
  'Source rates, employment dates and leave balances are evidence awaiting reconciliation, not approved payroll inputs.',
  'Historical source clock and leave rows are separate from native shifts and the approved leave ledger.',
- 'Payroll is not enabled. Fen Meat calculates UIF; Alex pays the auditors; the auditors submit it.'
+ 'Payroll is available in Staff administration. Confirm pay setup and opening amounts and approve each week; source records alone are not payroll-ready. Fen calculates UIF; Alex pays the auditors; the auditors submit it.'
 ];
 
 // This adapter has no schema initializer, write action, credential query or raw SQL input.
@@ -23,7 +23,7 @@ export async function readStaffData(args,env,username,scopes){
  const connection={app:'FenMeat Staff',owner:username,access:'read_only',scope:STAFF_READ_SCOPE,generated_at:new Date().toISOString(),timezone:'Africa/Johannesburg'};
  if(!exists){check(resource==='summary','Staff has not been initialized.',409);return {initialized:false,import_verified:false,payroll_ready:false,connection};}
  const current=await staffState(db),state=current.state;
- const result=data=>({...data,revision:current.revision,saved_at:current.saved_at,payroll_ready:false,warnings,connection});
+ const result=data=>({...data,revision:current.revision,saved_at:current.saved_at,payroll_ready:false,payroll_feature_enabled:true,warnings,connection});
  const bodyOf=()=>{throw Error('Staff connector is read-only');};
  if(resource==='summary'){
   const hasImports=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='v2_staff_imports'").first();

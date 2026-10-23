@@ -1,7 +1,7 @@
 // A native print preview may paginate again after window.print() returns or
 // afterprint fires. Keep its chosen document and print-only CSS until the next
 // explicit print action; @media print already restores the normal screen.
-const modes=['printing-stock','printing-production','printing-production-staff'];
+const modes=['printing-stock','printing-production','printing-production-staff','printing-payroll'];
 let selected=null,preparing=false;
 function applySelection(){
  document.body.classList.remove(...modes);
