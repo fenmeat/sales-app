@@ -33,7 +33,7 @@ test('only a complete same-route/date Zoho snapshot can autofill, and a verified
 });
 test('Cash-up and Reconcile render the amount, source, read date and unverified statement status',async()=>{
  const source=await readFile(new URL('../public/app.js',import.meta.url),'utf8'),r=fixture();
- const views=source.slice(source.indexOf('function shop2shopField('),source.indexOf('async function printStock('))+source.slice(source.indexOf('function reconView('),source.indexOf('function zohoReconPanel('));
+ const views=source.slice(source.indexOf('function shop2shopField('),source.indexOf('function printStock('))+source.slice(source.indexOf('function reconView('),source.indexOf('function zohoReconPanel('));
  const context={state:{result:{run:r}},summarise,CASH_DENOMINATIONS,escape:String,money:v=>v==null?'—':(v/100).toFixed(2),number:String,zohoReconPanel:()=>''};
  const html=runInNewContext(views+';cashView()+reconView()',context);
  assert.match(html,/readonly value="178.45"/);assert.match(html,/Volgens Zoho/);assert.match(html,/SAST/);assert.match(html,/Statement not checked/);assert.match(html,/not an independent statement match/);

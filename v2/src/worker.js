@@ -1,4 +1,4 @@
-import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,summarise,isQty,effectiveAvailability,routeScheduled,routeName,comparableRouteVisit,previousRouteVisit} from './domain.js';
+import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,addDraftProducts,summarise,isQty,effectiveAvailability,routeScheduled,routeName,comparableRouteVisit,previousRouteVisit} from './domain.js';
 import {orderGuyApi} from './order-guy-api.js';
 import {productionApi} from './production-api.js';
 import {staffApi,staffClockApi} from './staff-api.js';
@@ -33,7 +33,7 @@ async function forecastResult(db,date,route,c){
  const snapshot=await hash(JSON.stringify({version:'1.4-recent-sales-floor',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
  return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline with measured month phase and latest comparable sales safety minimum',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.22.0',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.22.1',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
@@ -82,13 +82,24 @@ async function handle(request,env,paUser=null){
  statements.push(env.DB.prepare('INSERT INTO v2_sync VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET saved_at=excluded.saved_at,payload=excluded.payload').bind('history',new Date().toISOString(),JSON.stringify({actor:user.username,last_batch:b.rows.length})));
  const results=await env.DB.batch(statements);return json({accepted:results.slice(0,-1).reduce((s,r)=>s+(r.meta?.changes??0),0),protected_rows:results.slice(0,-1).filter(r=>!r.meta?.changes).length});}
  if(path==='/api/day'&&method==='GET'){const date=dateKey(url.searchParams.get('date'));const rows=await env.DB.prepare('SELECT e.* FROM v2_events e JOIN (SELECT run_id,MAX(revision) revision FROM v2_events WHERE service_date=? GROUP BY run_id) latest ON e.run_id=latest.run_id AND e.revision=latest.revision').bind(date).all();return json({runs:rows.results.map(e=>({route:e.route,revision:e.revision,phase:JSON.parse(e.payload).phase,saved_at:e.saved_at}))});}
- if(path==='/api/run'&&method==='GET'){const date=dateKey(url.searchParams.get('date')),route=url.searchParams.get('route'),c=await catalog(env.DB);check(c.routes.some(r=>r.code===route),'Choose an imported route.');const old=await runResult(env.DB,date,route);if(old&&old.run.phase!=='plan')return json(old);const latest=await forecastResult(env.DB,date,route,c);const {forecasts,...status}=latest;if(old)return json({...old,forecast_status:{...status,stale:old.run.forecast_snapshot!==latest.snapshot}});const run=applyForecastRefresh(emptyRun(date,route,c.products),latest);return json({run,revision:0,summary:summarise(run),forecast_status:{...status,stale:false}});}
+ if(path==='/api/print/stock'&&method==='GET'){
+  const date=dateKey(url.searchParams.get('date')),route=url.searchParams.get('route'),c=await catalog(env.DB);
+  check(c.routes.some(r=>r.code===route),'Choose an imported route.');
+  const saved=await runResult(env.DB,date,route);check(saved,'Save a load plan before printing.',404);
+  const {stockPrintPDF}=await import('./stock-print-pdf.js');
+  const pdf=await stockPrintPDF(saved,c);
+  return new Response(pdf,{headers:{...headers,'Content-Type':'application/pdf','Content-Disposition':`inline; filename="FenMeat-Stock-${date}-${route}.pdf"`}});
+ }
+ if(path==='/api/run'&&method==='GET'){const date=dateKey(url.searchParams.get('date')),route=url.searchParams.get('route'),c=await catalog(env.DB);check(c.routes.some(r=>r.code===route),'Choose an imported route.');const old=await runResult(env.DB,date,route);if(old&&old.run.phase!=='plan')return json(old);const latest=await forecastResult(env.DB,date,route,c);const {forecasts,...status}=latest;if(old){const run=addDraftProducts(old.run,c.products,forecasts);return json({...old,run,summary:summarise(run),forecast_status:{...status,stale:run.forecast_snapshot!==latest.snapshot}});}const run=applyForecastRefresh(emptyRun(date,route,c.products),latest);return json({run,revision:0,summary:summarise(run),forecast_status:{...status,stale:false}});}
  if(path==='/api/run'&&method==='POST'){
  const b=await bodyOf(request);check(typeof b.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(b.request_id),'Missing save identifier.');const fingerprint=await hash(JSON.stringify(b));const replay=await env.DB.prepare('SELECT * FROM v2_events WHERE request_id=?').bind(b.request_id).first();if(replay){check(replay.request_hash===fingerprint,'Save identifier was reused for different data.',409);return json({run:JSON.parse(replay.payload),revision:replay.revision,saved_at:replay.saved_at,actor:replay.actor,summary:summarise(JSON.parse(replay.payload)),replayed:true});}
  const old=await lastEvent(env.DB,dateKey(b.run.date),b.run.route);check(b.revision===(old?.revision??0),'Another person saved this route. Reload before making further changes.',409);const previous=old?JSON.parse(old.payload):null;
  const c=await catalog(env.DB);check(c.routes.some(r=>r.code===b.run.route),'Unknown route.');check(Array.isArray(b.run.items),'Missing route items.');for(const i of b.run.items)check(c.products.some(p=>p.code===i.code),'Unknown product.');
  await verifyZohoSnapshot(env.DB,b.run.recon,previous,c);
  if(previous)check(previous.items.every(p=>b.run.items.some(i=>i.code===p.code)),'Saved products cannot be removed from a run.');
+ // A stale browser may still submit the old product list. Add only blank rows
+ // before load confirmation; never append to historical or confirmed runs.
+ if(!previous||previous.phase==='plan')b.run=addDraftProducts({...b.run,phase:previous?.phase??'plan'},c.products);
  let latest=null;
  if(b.action==='forecast'){check((previous?.phase??'plan')==='plan','Forecast refresh is only available before confirming the load.');latest=await forecastResult(env.DB,b.run.date,b.run.route,c);b.run=applyForecastRefresh(b.run,latest);}
  if(b.run.date>=today())for(const i of b.run.items){const p=c.products.find(p=>p.code===i.code);if(p.active&&p.available)continue;const loaded=previous?.items.find(x=>x.code===i.code)?.loaded??0;check((i.loaded??0)<=loaded,'A product is no longer available. Reload the product list before adding a load.',409);if(i.loaded===null)i.loaded=0;if(i.loaded===0&&i.returned===null)i.returned=0;}

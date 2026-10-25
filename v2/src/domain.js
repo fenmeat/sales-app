@@ -60,6 +60,15 @@ export function validateCatalog(c) {
 export function emptyRun(date,route,products,forecasts={}) {
   return {date,route,trip:1,phase:'plan',rep:'',vehicle:'',notes:'',items:products.filter(p=>p.active).map(p=>({code:p.code,name:p.name,unit:p.unit,price_cents:p.price_cents,available:p.available,forecast:forecasts[p.code]??null,planned:null,loaded:null,returned:null,sold_out:null,adjustment:0,adjustment_reason:''})),cash:{denominations:null,counted:null,float:0,banked:0,expenses:0,extra:0,adjustment_reason:'',shop2shop:null,card:null,eft:null},recon:null};
 }
+// Current unconfirmed plans must offer newly added catalogue products. Keep
+// every existing snapshot and entry, including explicit zeros. Reads stage
+// blank new rows only; the ordinary revisioned save persists them.
+export function addDraftProducts(run,products,forecasts={},asOf=today()) {
+  if(run.phase!=='plan'||run.date<asOf)return run;
+  const seen=new Set(run.items.map(i=>i.code));
+  const added=emptyRun(run.date,run.route,products,forecasts).items.filter(i=>!seen.has(i.code));
+  return added.length?{...run,items:[...run.items,...added]}:run;
+}
 export function itemSales(item) {
   if(item.loaded===null||item.returned===null) return null;
   return roundQty(item.loaded-item.returned-item.adjustment);

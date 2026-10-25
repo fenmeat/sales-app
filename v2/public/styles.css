@@ -313,3 +313,5 @@ footer p{margin:7px 0}
  .product-details-label,.capture-table .copy-product-plan{display:none}
  .capture-unit{display:block;font-size:10px;font-weight:400}
 }
+
+.print-link{display:inline-flex;align-items:center;justify-content:center;padding:7px 11px;border:1px solid var(--line);border-radius:9px;background:white;color:var(--blue);font:inherit;font-size:12px;font-weight:650;text-decoration:none;min-height:44px}.print-link:hover{background:#e7f2fb}

@@ -1,6 +1,6 @@
 {
   "name": "fenmeat-sales-test",
-  "version": "0.22.0",
+  "version": "0.22.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -20,6 +20,7 @@
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.3",
     "@modelcontextprotocol/sdk": "1.32.1",
+    "pdf-lib": "1.17.1",
     "zod": "4.6.6"
   }
 }
