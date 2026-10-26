@@ -249,7 +249,7 @@ export async function readCustomerBalance(env,user,customerId) {
  check(issued.every(i=>i.status!=='paid'||i.balance===0),'A paid invoice still has a balance. Review Zoho first.',409);
  const invoices=issued.filter(i=>i.balance>0),balance_cents=invoices.reduce((n,i)=>n+i.balance,0);
  check(Number.isSafeInteger(balance_cents),'Account amount is too large.',409);
- return {organisation:ZOHO_ORGANISATION,customer_id:id,customer:second.at(-1).customer,complete:true,balance_cents,invoices,invoice_count:second.length,drafts:second.filter(i=>i.status==='draft').map(i=>({id:i.id,number:i.number,date:i.date,total:i.total})),latest_invoice:issued.at(-1)??null,generated_at:new Date().toISOString(),read_only:true,basis:'Issued invoice balances; draft and void invoices excluded. Unallocated customer credits are not included.'};
+ return {organisation:ZOHO_ORGANISATION,customer_id:id,customer:second.at(-1).customer,complete:true,balance_cents,invoices,invoice_count:second.length,drafts:second.filter(i=>i.status==='draft').map(i=>({id:i.id,number:i.number,date:i.date,total:i.total})),latest_invoice:[...issued].sort((a,b)=>a.date.localeCompare(b.date)||a.number.localeCompare(b.number)).at(-1)??null,generated_at:new Date().toISOString(),read_only:true,basis:'Issued invoice balances; draft and void invoices excluded. Unallocated customer credits are not included.'};
 }
 export async function previewZohoInvoices(env,user,input){
  check(isAdminUser(user),'Sign in as Alex or Alinda to check Zoho invoices.',403);
