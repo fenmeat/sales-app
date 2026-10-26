@@ -186,6 +186,7 @@ export async function readZoho(env,user,input={}) {
  const resource=input.resource??'status';
  if(resource==='status')return {...await zohoStatus(env,user),live_checked:false};
  if(resource==='check')return {...await checkZoho(env,user),live_checked:true};
+ if(resource==='customer_balance')return readCustomerBalance(env,user,input.id);
  const allowed=['items','salespersons','invoices','invoice','payments','payment'];
  check(allowed.includes(resource),'Choose a supported Zoho read.');
  const page=input.page??1;check(Number.isSafeInteger(page)&&page>=1&&page<=100,'Choose a valid page.');
@@ -217,6 +218,38 @@ export async function readZoho(env,user,input={}) {
   resource==='payments'?rows.map(p=>{check(p.date===params.date,'Payment date differs from requested date.',502);return common(p);}):rows.map(i=>previewHeader(i,params.date));
  check(new Set(values.map(v=>v.id)).size===values.length,'Zoho returned duplicate records.',502);
  return {organisation:ZOHO_ORGANISATION,resource,date:params.date??null,page,has_more:pg?.has_more_page??false,records:values,generated_at:new Date().toISOString(),read_only:true};
+}
+
+// Read the complete invoice account, including old debt. A recent date window
+// or a paid/unpaid label alone can never establish a customer's opening balance.
+export async function readCustomerBalance(env,user,customerId) {
+ const id=zohoId(customerId);
+ async function scan(){
+  const rows=[],seen=new Set();
+  for(let page=1;page<=20;page++){
+   const d=await readFenBooks(env,user,'invoices',{customer_id:id,page:String(page),per_page:'200',sort_column:'invoice_number',sort_order:'A'});
+   check(Array.isArray(d.invoices)&&d.invoices.length<=200&&Number(d.page_context?.page)===page&&typeof d.page_context?.has_more_page==='boolean','Zoho did not confirm a complete customer invoice page. Balance unknown.',502);
+   for(const i of d.invoices){
+    check(String(i.customer_id)===id,'Zoho returned a different customer. Balance unknown.',502);
+    const iid=zohoId(i.invoice_id);check(!seen.has(iid),'Duplicate invoice in Zoho account. Balance unknown.',502);seen.add(iid);
+    check(i.currency_code==='ZAR','The customer has a non-ZAR invoice. Review the account.',409);
+    check(['draft','void','paid','sent','overdue','unpaid','partially_paid','viewed'].includes(i.status),'Unrecognised invoice status. Review the account.',409);
+    const cents=v=>{check(typeof v==='number'&&Number.isFinite(v)&&v>=0&&Math.abs(v*100-Math.round(v*100))<0.0001&&Number.isSafeInteger(Math.round(v*100)),'Missing or invalid Zoho amount. Balance unknown.',502);return Math.round(v*100);};
+    const row={id:iid,number:textValue(i.invoice_number,100),customer_id:id,customer:textValue(i.customer_name),date:dateKey(i.date),due_date:i.due_date?dateKey(i.due_date):null,status:i.status,total:cents(i.total),balance:cents(i.balance),last_modified:textValue(i.last_modified_time,80),salesperson_id:i.salesperson_id?zohoId(i.salesperson_id):null};
+    check(row.balance<=row.total,'Invalid Zoho outstanding amount.',502);rows.push(row);
+   }
+   if(!d.page_context.has_more_page)return rows;
+  }
+  throw new UserError('This account exceeds the bounded import. Balance unknown.',409);
+ }
+ const first=await scan(),second=await scan();
+ check(JSON.stringify(first)===JSON.stringify(second),'The Zoho account changed while reading. Refresh before using its balance.',409);
+ check(second.length>0,'No invoices were found for this customer ID. Review the customer before using a zero balance.',409);
+ const issued=second.filter(i=>!['draft','void'].includes(i.status));
+ check(issued.every(i=>i.status!=='paid'||i.balance===0),'A paid invoice still has a balance. Review Zoho first.',409);
+ const invoices=issued.filter(i=>i.balance>0),balance_cents=invoices.reduce((n,i)=>n+i.balance,0);
+ check(Number.isSafeInteger(balance_cents),'Account amount is too large.',409);
+ return {organisation:ZOHO_ORGANISATION,customer_id:id,customer:second.at(-1).customer,complete:true,balance_cents,invoices,invoice_count:second.length,drafts:second.filter(i=>i.status==='draft').map(i=>({id:i.id,number:i.number,date:i.date,total:i.total})),latest_invoice:issued.at(-1)??null,generated_at:new Date().toISOString(),read_only:true,basis:'Issued invoice balances; draft and void invoices excluded. Unallocated customer credits are not included.'};
 }
 export async function previewZohoInvoices(env,user,input){
  check(isAdminUser(user),'Sign in as Alex or Alinda to check Zoho invoices.',403);

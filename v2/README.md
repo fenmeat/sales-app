@@ -1,3 +1,7 @@
+# Customer invoice balances — 0.22.3
+
+Owner-only `customer_balance` reads every invoice page for one exact FEN customer ID twice. It returns current integer-cent outstanding balances, older/part-paid invoices, source time and separate drafts. Missing amounts, incomplete pages, unexpected currencies/statuses, changed results and unknown customer IDs fail closed; nothing is imported as zero. This uses the existing read-only Zoho grant and makes no Zoho or ledger writes. Unallocated customer credits are explicitly outside the invoice-balance total. Verified with nine workerd integration cases including partial/old debt, explicit zero and missing data.
+
 ## 20 October 2026 — reliable stock and production printing (0.20.7)
 
 Sales Stock Load & Return, Production staff sheet, detailed Production and

@@ -44,6 +44,11 @@ async function fixture(t){
     assert.equal(request.method,'GET');assert.equal(url.searchParams.get('organization_id'),'852102281');
     if(url.pathname.endsWith('/9001'))return Response.json({code:0,invoice:fake.invoice});
     if(/\/[0-9]+$/.test(url.pathname))return Response.json({code:0,invoice:fake.oldInvoice});
+    if(url.searchParams.has('customer_id')){
+     assert.equal(url.searchParams.get('customer_id'),'6001');
+     const page=Number(url.searchParams.get('page'));
+     return Response.json({code:0,...fake.customerPages[page]});
+    }
     assert.equal(url.searchParams.get('date'),'2026-10-01');assert.ok(['20','100'].includes(url.searchParams.get('per_page')));
     return Response.json({code:0,...fake.invoicePages[url.searchParams.get('page')]});
    }
@@ -238,4 +243,16 @@ test('real Worker reads every page and old receipt allocation, saves only a comp
  for(let n=0;n<2;n++){last=await call('/api/zoho/reconcile',{job_id:changed.id,version:changed.version});if(last.status!==200)break;changed=last.data;}
  assert.equal(last.status,409);assert.match(last.data.error,/changed while/);
  assert.equal((await call('/api/run?date=2026-10-01&route=R01')).data.revision,imported.data.revision);
+});
+
+test('customer balance reads all invoice pages twice, keeps partial and older debt, excludes drafts, fails closed',async t=>{
+ const f=await fixture(t);await f.finish(await f.start());
+ const row=(id,status,balance,date='2026-10-01')=>({invoice_id:id,customer_id:'6001',customer_name:'Test customer',invoice_number:'TEST-'+id,date,status,currency_code:'ZAR',total:100,balance,last_modified_time:'2026-10-26T09:00:00Z'});
+ f.fake.customerPages={1:{invoices:[row('901','overdue',20,'2025-01-01'),row('902','draft',100)],page_context:{page:1,has_more_page:true}},2:{invoices:[row('903','partially_paid',50),row('904','paid',0)],page_context:{page:2,has_more_page:false}}};
+ const read=()=>f.call('/api/zoho/read',{body:{resource:'customer_balance',id:'6001'},cookie:f.session});
+ let r=await read(),d=await r.json();assert.equal(r.status,200,JSON.stringify(d));assert.equal(d.balance_cents,7000);assert.equal(d.invoices.length,2);assert.equal(d.invoice_count,4);assert.equal(d.drafts.length,1);assert.equal(d.complete,true);
+ delete f.fake.customerPages[2].invoices[0].balance;r=await read();assert.equal(r.status,502);
+ f.fake.customerPages[1]={invoices:[],page_context:{page:1,has_more_page:false}};r=await read();assert.equal(r.status,409);
+ f.fake.customerPages[1]={invoices:[row('905','paid',0)],page_context:{page:1,has_more_page:false}};r=await read();assert.equal(r.status,200);assert.equal((await r.json()).balance_cents,0);
+ f.fake.customerPages[1].invoices[0].customer_id='6002';r=await read();assert.equal(r.status,502);
 });
