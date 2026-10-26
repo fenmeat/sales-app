@@ -31,3 +31,10 @@ Prepared sessions freeze catalogue prices. Historical lines retain their own nam
 251 automated tests and deployment dry-run passed. Tests include workerd/D1 authorization, zero versus missing debt, old/partial receipts, full Shop2Shop payment, delivery checks, server prices, due dates, audited reductions, refund rejection, stale/concurrent/replayed requests, ordered offline replay, reload persistence, finish and reconciliation with forged-comparison rejection. Fixtures are isolated; no live financial test records exist.
 
 Browser checks used the actual Worker and asset router with synthetic D1: split debt collection, current partial payment, reload and item-edit history worked. Input replacement was verified with actual selection bounds. The browser tool then stopped responding. Subsequent small copy, offline-status and reauthentication updates received syntax/automated checks, not physical-device browser verification. Before a working route, check the first real invoice against goods delivered, money received, shared saved records, phone offline cold startup and WhatsApp handoff.
+
+
+## 0.23.1 — simpler route entry
+
+The start screen now presents one primary Start route action, followed by a short explicit handover confirmation. The shop/order view appears after starting; View stores and balances remains available read-only beforehand. During a visit, More contains sync, reload, offline setup and route finish. Store administration and balance-source details are collapsed. Unknown payment terms have a clear Set payment terms action with no preselected approval. No account, receipt, balance or credit permission is changed by this UI update.
+
+The shell update activates without reloading the page or touching IndexedDB; versioned entry links load the new UI from an older cached shell. Isolated UI-state checks cover start, unconfirmed handover, read-only browsing, active work, terms selection, an unfinished previous day, another phone and reauthentication. Offline-shell checks cover versioned navigation/assets and exclude private APIs. Existing invoice/asset tests pass. Physical-phone visual acceptance remains to be checked.
