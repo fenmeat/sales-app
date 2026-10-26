@@ -67,3 +67,6 @@ body.preparing-staff-print #production-staff-print{display:block;position:absolu
 
 #production-staff-print[data-density=tight] .staff-notes{margin:2mm 0 1mm}
 #production-staff-print .staff-products td:nth-child(2){font-size:8.5pt;overflow-wrap:normal}
+
+.production-header .print-link{font-size:inherit;font-weight:650;padding:11px 17px;text-align:center;line-height:1.3}
+@media(max-width:760px){.production-header .print-link{font-size:14px;min-height:48px;padding:9px 6px;white-space:normal}}

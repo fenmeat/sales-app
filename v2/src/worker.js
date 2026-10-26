@@ -33,7 +33,7 @@ async function forecastResult(db,date,route,c){
  const snapshot=await hash(JSON.stringify({version:'1.4-recent-sales-floor',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
  return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline with measured month phase and latest comparable sales safety minimum',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.22.1',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.22.2',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
@@ -49,6 +49,14 @@ async function handle(request,env,paUser=null){
  const allowKey=path.startsWith('/api/sync/')||path.startsWith('/api/import/');const user=paUser??await authenticate(request,env,{allowKey});
  if(!paUser&&method==='POST'&&!(allowKey&&request.headers.get('Authorization')?.startsWith('Bearer ')))sameOrigin(request);
  if(['/api/recipes','/api/recipes/audit','/api/import/recipes','/api/order-guy','/api/sync/order-guy','/api/stocktake','/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path))return json(await orderGuyApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),bodyOf,forecastResult,readPlan:async date=>productionApi({request:new Request(url.origin+'/api/production?date='+date),url:new URL(url.origin+'/api/production?date='+date),db:env.DB,user,catalog:await catalog(env.DB),forecastResult,runResult,bodyOf})}));
+ if(path==='/api/print/production'&&method==='GET'){
+  const date=dateKey(url.searchParams.get('date'));
+  const row=await env.DB.prepare('SELECT * FROM v2_production_events WHERE production_date=? ORDER BY revision DESC LIMIT 1').bind(date).first();
+  check(row,'Save your production plan before printing.',404);
+  const {productionStaffPDF}=await import('./production-print-pdf.js');
+  const pdf=await productionStaffPDF({plan:JSON.parse(row.payload),revision:row.revision},await catalog(env.DB));
+  return new Response(pdf,{headers:{...headers,'Content-Type':'application/pdf','Content-Disposition':`inline; filename="FenMeat-Production-${date}.pdf"`}});
+ }
  if((path==='/api/production'||path==='/api/production/audit')&&['GET','POST'].includes(method))return json(await productionApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),forecastResult,runResult,bodyOf}));
  if(path==='/api/logout'&&method==='POST'){const token=request.headers.get('Cookie')?.match(/fm_session=([a-f0-9]{64})/)?.[1];if(token)await env.DB.prepare('DELETE FROM v2_sessions WHERE token_hash=?').bind(await hash(token)).run();return json({ok:true},200,{'Set-Cookie':'fm_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0'});}
  if(path==='/api/staff'||path.startsWith('/api/staff/'))return json(await staffApi({request,url,env,user,bodyOf}));
