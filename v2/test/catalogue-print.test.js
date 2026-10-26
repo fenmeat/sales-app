@@ -77,15 +77,12 @@ test('real Worker adds new draft rows through read/save/refresh while print rema
  assert.deepEqual((await call(path)).data.run,state.run,'confirmed route snapshots are retained');
 });
 
-test('stock print control is a direct PDF navigation and keeps unsaved edits',async()=>{
+test('stock print opens the in-app preview without navigating or changing unsaved entries',async()=>{
  const vm=await import('node:vm'),source=await readFile(new URL('../public/app.js',import.meta.url),'utf8');
- const header=source.slice(source.indexOf('function header('),source.indexOf('\nfunction ',source.indexOf('function header(')+1));
  const click=source.slice(source.indexOf('function printStock('),source.indexOf('\nfunction reconView('));
- const state={bootstrap:{username:'alex'},result:{run:{date:'2026-10-26',route:'TEST'}},savedRun:{items:[{planned:7}]},dirty:true};
- const notices=[],context=vm.createContext({state,escape:x=>x,notice:x=>notices.push(x),encodeURIComponent});
- vm.runInContext(header+'\n'+click,context);
- assert.match(context.header(),/href="\/api\/print\/stock\?date=2026-10-26&amp;route=TEST" target="_blank" rel="noopener"/);
- const before=structuredClone(state);let blocked=false;context.printStock({preventDefault(){blocked=true;}});
- assert.equal(blocked,false);assert.deepEqual(state,before);assert.match(notices[0],/saved plan/);
- state.savedRun=null;context.printStock({preventDefault(){blocked=true;}});assert.equal(blocked,true);
+ const state={result:{run:{date:'2026-10-26',route:'TEST'}},savedRun:{items:[{planned:7}]},dirty:true};
+ const notices=[],previews=[],c=vm.createContext({state,notice:x=>notices.push(x),encodeURIComponent,openPrintPreview:x=>previews.push(x)});
+ vm.runInContext(click,c);const before=structuredClone(state);c.printStock();
+ assert.deepEqual(state,before);assert.equal(previews.length,1);assert.equal(previews[0].unsaved,true);assert.equal(previews[0].url,'/api/print/stock?date=2026-10-26&route=TEST');
+ state.savedRun=null;c.printStock();assert.equal(previews.length,1);assert.match(notices[0],/Save a load plan/);
 });

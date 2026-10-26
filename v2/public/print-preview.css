@@ -1,0 +1,24 @@
+body.file-preview-open{overflow:hidden}
+#file-print-preview{position:fixed;inset:0;z-index:10000;background:#dfe8ef;display:grid;grid-template-rows:auto minmax(0,1fr);color:#172e45;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom)}
+.file-print-toolbar{background:#fff;border-bottom:1px solid #bbcbd8;padding:12px max(12px,env(safe-area-inset-left));box-shadow:0 2px 6px #0001}
+#file-print-title{font-size:18px;line-height:1.25;margin:0 0 9px;letter-spacing:0}
+.file-print-actions{display:flex;gap:8px;max-width:600px}
+.file-print-actions button{flex:1;min-width:0;min-height:48px;font-size:16px;padding:9px 7px;white-space:normal}
+#file-print-go{background:#14558a;color:#fff}
+#file-print-status{font-size:14px;line-height:1.35;margin:8px 0 0}
+#file-print-retry{margin-top:8px}
+#file-print-pages{overflow:auto;overscroll-behavior:contain;padding:12px;-webkit-overflow-scrolling:touch}
+.file-print-page{margin:0 auto 14px;max-width:794px;background:white;box-shadow:0 2px 6px #0003}
+.file-print-page img{display:block;width:100%;height:auto}
+.file-print-text{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+@page file-preview{size:A4;margin:0}
+@media print{
+ body.printing-file-preview{overflow:visible!important;margin:0!important;background:white!important}
+ body.printing-file-preview>:not(#file-print-preview){display:none!important}
+ body.printing-file-preview #file-print-preview{display:block!important;position:static!important;height:auto!important;overflow:visible!important;padding:0!important;background:white!important}
+ body.printing-file-preview .file-print-toolbar,body.printing-file-preview .file-print-text{display:none!important}
+ body.printing-file-preview #file-print-pages{display:block!important;overflow:visible!important;padding:0!important}
+ body.printing-file-preview .file-print-page{page:file-preview;width:210mm;height:297mm;max-width:none;margin:0!important;padding:0!important;box-shadow:none;break-after:page;break-inside:avoid}
+ body.printing-file-preview .file-print-page:last-child{break-after:auto}
+ body.printing-file-preview .file-print-page img{display:block;width:100%;height:100%;object-fit:contain}
+}

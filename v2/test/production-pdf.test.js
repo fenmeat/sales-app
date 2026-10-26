@@ -64,13 +64,11 @@ test('production PDF endpoint reads the latest persisted revision, authenticates
  assert.equal((await raw('/api/print/production?date='+addDays(date,1))).status,404);
  assert.equal((await raw(path,{})).status,404);
 });
-test('staff print follows a direct PDF link and protects unsaved/new plans',async()=>{
+test('staff print opens the in-app preview and retains unsaved plans',async()=>{
  const vm=await import('node:vm'),source=await readFile(new URL('../public/production-app.js',import.meta.url),'utf8');
- assert.match(source,/href="\/api\/print\/production\?date=\$\{encodeURIComponent\(p.date\)\}" target="_blank" rel="noopener"/);
  const click=source.slice(source.indexOf('function printStaffSheet('),source.indexOf("window.addEventListener('beforeunload'"));
- const state={saved:{plan:{groups:[{planned:2}]}},dirty:true,selection:null},before=structuredClone(state),notices=[];
- const c=vm.createContext({state,notice:x=>notices.push(x)});vm.runInContext(click,c);
- let blocked=false;c.printStaffSheet({preventDefault(){blocked=true;}});
- assert.equal(blocked,false);assert.deepEqual(state,before);assert.match(notices[0],/saved production plan/);
- state.saved=null;c.printStaffSheet({preventDefault(){blocked=true;}});assert.equal(blocked,true);
+ const state={saved:{plan:{groups:[{planned:2}]}},result:{plan:{date:'2026-10-26'}},dirty:true,selection:null},before=structuredClone(state),notices=[],previews=[];
+ const c=vm.createContext({state,notice:x=>notices.push(x),encodeURIComponent,openPrintPreview:x=>previews.push(x)});vm.runInContext(click,c);c.printStaffSheet();
+ assert.equal(previews.length,1);assert.equal(previews[0].url,'/api/print/production?date=2026-10-26');assert.equal(previews[0].unsaved,true);assert.deepEqual(state,before);
+ state.saved=null;c.printStaffSheet();assert.equal(previews.length,1);assert.match(notices[0],/Save your production plan/);
 });
