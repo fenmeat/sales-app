@@ -1,0 +1,25 @@
+import {installInputSelection} from './input-selection.js';
+installInputSelection();
+const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let phones=[],busy=false,activation='';
+async function api(body){const r=await fetch('/api/invoicing/phones',{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,cache:'no-store'}),d=await r.json();if(!r.ok){const e=Error(d.error);e.status=r.status;throw e;}return d;}
+function error(e){$('#error').hidden=false;$('#error').textContent=e.message;}
+const name=p=>p.rep==='tapiz'?'Tapiz':'Musa';
+async function reload(){
+ phones=(await api()).phones;
+ $('#setup').innerHTML=`<section class="panel"><h2>Register a road phone</h2><p>Choose the rep. Give the one-time code to that rep on the road phone; they choose their PIN there.</p><form id="create"><label>Rep<select name="rep"><option value="tapiz">Tapiz</option><option value="mosa">Musa</option></select></label><label>Phone name<input name="name" placeholder="e.g. Tapiz road phone" maxlength="80"></label><button>Create activation code</button></form><p class="small">Rep accounts can use Invoices only. Alex and Alinda keep their existing access.</p></section>`;
+ $('#phones').innerHTML=phones.map(p=>`<section class="panel"><h2>${name(p)}</h2><p>${esc(p.name)}</p><p><strong>${p.revoked?'Blocked':p.enrolled?(p.expires>Date.now()?'Registered':'Registration expired'):'Waiting for registration'}</strong></p>${p.active_route?`<p class="warning">Route ${esc(p.active_route)} is still open. Sync its work and finish it before replacing this phone.</p>`:''}${p.last_login?`<p class="small">Last sign-in: ${esc(new Date(p.last_login).toLocaleString('en-ZA',{timeZone:'Africa/Johannesburg'}))} SAST</p>`:''}${!p.revoked?`<div class="row buttons"><button class="secondary" data-action="code" data-id="${p.id}">${p.enrolled?'Reset PIN':'New activation code'}</button><button class="danger" data-action="revoke" data-id="${p.id}">Block phone</button></div>`:''}</section>`).join('')||'<p>No rep phones registered yet.</p>';
+}
+function showCode(d){activation=location.origin+'/invoicing/?v=0.24.0#setup='+d.code;$('#code').innerHTML=`<section class="panel debt"><h2>${d.rep==='tapiz'?'Tapiz':'Musa'} · ${d.reset?'Reset PIN':'Activate phone'}</h2><p>${d.reset?'On the already registered phone, open Invoices → Forgot your PIN?':'On the road phone, open Invoices → Set up this road phone.'}</p><label>One-time code<input readonly value="${d.code.match(/.{4}/g).join('-')}" aria-label="One-time activation code"></label><p>Valid until ${esc(new Date(d.expires).toLocaleTimeString('en-ZA',{hour:'2-digit',minute:'2-digit',timeZone:'Africa/Johannesburg'}))} SAST (15 minutes).</p><button id="copy">Copy activation link</button><p class="small">Share this link privately with this rep. Their PIN is chosen on the road phone and is never shown here.</p><button id="hideCode" class="secondary">Hide code</button></section>`;$('#code').scrollIntoView({block:'start'});}
+document.addEventListener('submit',async e=>{e.preventDefault();if(busy)return;busy=true;$('#error').hidden=true;try{const f=new FormData(e.target);
+ if(e.target.id==='ownerLogin'){const key=f.get('key');e.target.querySelector('[name=key]').value='';const r=await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:f.get('username'),key})}),d=await r.json();if(!r.ok)throw Error(d.error);await reload();return;}
+ const r=await api({action:'create',rep:f.get('rep'),...(String(f.get('name')).trim()?{name:f.get('name')}:{})});await reload();showCode(r);}catch(e){error(e);}finally{busy=false;}});
+document.addEventListener('click',async e=>{const b=e.target.closest('button');if(!b||busy)return;busy=true;$('#error').hidden=true;try{
+ if(b.id==='reloadPhones'){await reload();return;}
+ if(b.id==='copy'){await navigator.clipboard.writeText(activation);b.textContent='Link copied';return;}
+ if(b.id==='hideCode'){activation='';$('#code').innerHTML='';return;}
+ if(!b.dataset.action)return;const p=phones.find(p=>p.id===b.dataset.id);if(!p)return;
+ if(b.dataset.action==='revoke'&&!confirm('Block '+name(p)+' on this phone? Online access stops immediately. Unsynced work and cached records remain on the phone; keep it safe.'))return;
+ const r=await api({action:b.dataset.action,id:p.id,revision:p.revision});await reload();if(r.code)showCode(r);else{activation='';$('#code').innerHTML='<p class="success">Phone blocked.</p>';}
+ }catch(e){error(e);}finally{busy=false;}});
+reload().catch(e=>{error(e);$('#setup').innerHTML=e.status===401?'<section class="panel"><h2>Owner sign-in</h2><p>Sign in to register Tapiz and Musa’s road phones.</p><form id="ownerLogin"><label>Owner<select name="username"><option value="alex">Alex</option><option value="alinda">Alinda</option></select></label><label>Personal access key<input name="key" type="password" autocomplete="current-password" required></label><button>Sign in</button></form></section>':'<p>Only Alex or Alinda can manage rep phones.</p>';});

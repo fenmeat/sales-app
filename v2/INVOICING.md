@@ -1,6 +1,25 @@
-# Riversdale invoicing pilot — 0.23.0
+# Route invoicing — 0.24.0
 
-Open **Invoices** in the existing app or `/invoicing/`, using the existing personal username/key. Access is limited to Alex, Alinda and Mosa; deployment does not create credentials or change access secrets. New UI text is English.
+Open **Invoices** in the existing app or `/invoicing/`. Alex and Alinda use their existing personal username/key. Tapiz and Musa use a six-digit PIN on their registered road phone. Deployment creates no actual PINs or invitations and does not change access secrets. All new UI text is English. Musa retains the existing internal username `mosa` so his audit history stays consistent.
+
+## Register the two road phones
+
+1. On the owner's phone, sign in as Alex or Alinda. Open **Invoices → Route options / More → Rep phones**, or `/invoicing/phones`.
+2. Choose **Tapiz** or **Musa** and **Create activation code**. Finish and sync any existing route for that rep first. One active phone registration is allowed per rep.
+3. On that rep's road phone, open `/invoicing/` in the browser they will use on the road. Under **Set up this road phone**, enter the activation code and choose/confirm a private six-digit PIN. A copied activation link can prefill the code. Codes expire after 15 minutes and work once.
+4. Repeat for the second phone. Sign in online before leaving, start the prepared route and check offline setup on the actual phone. The app lists only routes with prepared invoice-store data; this release does not import or approve additional routes.
+
+The owner never needs to know the rep's PIN. ID numbers and date-of-birth clock PINs are not used. **Forgot your PIN?** uses an owner-generated reset code on the same registered phone. **Lock app** first syncs pending transactions, then ends the PIN session. Keep unsynced work on its original phone; do not clear site data to resolve a sign-in problem.
+
+## Invoice-only access and phone recovery
+
+PIN sessions last 12 hours. A currently signed-in route can cold-start offline during that window. After expiry, reconnect and enter the PIN; queued invoices and receipts remain unchanged. Phone registration lasts 90 days. Browser cookies are the device credential, so use the same browser/profile for registration and daily work.
+
+Tapiz, `mosa` and the legacy alias `musa` are restricted at the server to invoice APIs. Production, Order Guy, recipes, Staff, Sales management, imports and other non-invoice business APIs deny them; direct module pages redirect to Invoices. Only Alex and Alinda can manage phones, refresh Zoho opening balances, approve credit terms or export the server ledger. Once a rep enrolls a phone, their old long-key sessions cannot bypass the phone requirement, including after revocation. Other staff access is preserved.
+
+**Rep phones → Block phone** revokes online access immediately, including the authorization condition inside financial writes. It does not remotely erase cached offline records or cancel already issued invoices. Unsynced work on a lost phone needs owner reconciliation; this release deliberately has no silent route takeover. **Reset PIN** retains the phone identity and pending transaction identifiers. A replacement or expired registration needs the old registration blocked, its existing route resolved, and a new activation code. A revoked/expired cookie can be replaced without clearing IndexedDB.
+
+Additive authentication tables are `v2_invoice_phones` and `v2_invoice_phone_audit`. Random device/session credentials use Secure, HttpOnly, SameSite=Strict host cookies; only their hashes are stored. PIN verification is keyed by the separate random device credential, with a random salt and five attempts per device per 15-minute bucket. Activation also has an IP rate limit. Codes, PINs and raw credentials never enter financial state, audit events, exports or localStorage. The offline invoice store is not encrypted by the PIN. Owner phone actions use revision checks and an audit trail.
 
 ## Route operation
 
@@ -37,4 +56,8 @@ Browser checks used the actual Worker and asset router with synthetic D1: split 
 
 The start screen now presents one primary Start route action, followed by a short explicit handover confirmation. The shop/order view appears after starting; View stores and balances remains available read-only beforehand. During a visit, More contains sync, reload, offline setup and route finish. Store administration and balance-source details are collapsed. Unknown payment terms have a clear Set payment terms action with no preselected approval. No account, receipt, balance or credit permission is changed by this UI update.
 
-The shell update activates without reloading the page or touching IndexedDB; versioned entry links load the new UI from an older cached shell. Isolated UI-state checks cover start, unconfirmed handover, read-only browsing, active work, terms selection, an unfinished previous day, another phone and reauthentication. Offline-shell checks cover versioned navigation/assets and exclude private APIs. Existing invoice/asset tests pass. Physical-phone visual acceptance remains to be checked.
+The shell update activates without reloading the page or touching IndexedDB. A phone with an older cached shell may need to reopen or refresh after its background update; never clear its site data with pending work. Isolated UI-state checks cover start, unconfirmed handover, read-only browsing, active work, terms selection, an unfinished previous day, another phone and reauthentication. Offline-shell checks cover versioned navigation/assets and exclude private APIs. Existing invoice/asset tests pass. Physical-phone visual acceptance remains to be checked.
+
+## 0.24.0 verification
+
+The automated test suite and Cloudflare deployment dry-run passed, including the real Worker/D1 phone registration, one-time concurrent code consumption, PIN/session rotation, expiry, per-device throttling, legacy rep restrictions, direct module redirects, bearer import denial, owner/staff access preservation, atomic revocation during an invoice write, and exact replay after PIN renewal. UI execution tests cover the actual PIN form and application code, unsynced queue retention, expired offline sign-in, valid offline cold startup, activation fragment removal and protection against discarding another identity's drafts. Tests use synthetic records only. Actual road-phone registration and mobile browser/offline acceptance still require the physical phones; no staff PINs or production invitations were created by deployment.

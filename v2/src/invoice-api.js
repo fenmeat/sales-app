@@ -1,5 +1,6 @@
 import {check,UserError,today,dateKey,addDays} from './domain.js';
 import {isAdmin,hash} from './auth.js';
+import {isInvoiceRep,invoicePhoneGuard,repName} from './invoice-auth.js';
 import {readCustomerBalance} from './zoho.js';
 import {openingAccount,accountSummary,applyInvoiceCommand} from './invoice-domain.js';
 export const INVOICE_SCHEMA=[
@@ -9,7 +10,7 @@ export const INVOICE_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_invoice_events(request_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, session_id INTEGER NOT NULL, sequence INTEGER NOT NULL, customer_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, captured_at TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(customer_id,revision), UNIQUE(session_id,sequence))`,
  `CREATE INDEX IF NOT EXISTS v2_invoice_customer_events ON v2_invoice_events(customer_id,revision)`
 ];
-export function invoiceAccess(user){check(isAdmin(user.username)||user.username==='mosa','This pilot is available to Alex, Alinda and Mosa.',403);}
+export function invoiceAccess(user){check(isAdmin(user.username)||isInvoiceRep(user.username),'This app is available to Alex, Alinda, Tapiz and Musa.',403);}
 function routeStores(c,route){const r=c.routes.find(r=>r.code===route);check(r&&Array.isArray(r.invoice_stores)&&r.invoice_stores.length>0,'This route has not been prepared for invoicing.',409);check(r.invoice_stores.length<=250,'Route is too large.');return r.invoice_stores.map(s=>({...s,route:r.code}));}
 async function current(db,store){
  const e=await db.prepare('SELECT payload FROM v2_invoice_events WHERE customer_id=? ORDER BY revision DESC LIMIT 1').bind(store.id).first();if(e)return JSON.parse(e.payload);
@@ -18,12 +19,14 @@ async function current(db,store){
 }
 const viewSession=s=>s?{id:s.id,route:s.route,actor:s.actor,device:s.device,date:s.service_date,status:s.status,sequence:s.sequence,products:JSON.parse(s.catalog).products,catalog_revision:JSON.parse(s.catalog).revision,opened_at:s.opened_at}:null;
 export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
- invoiceAccess(user);const db=env.DB,path=url.pathname;
+ invoiceAccess(user);const db=env.DB,path=url.pathname,guard=invoicePhoneGuard(user);
  if(path==='/api/invoicing/bootstrap'&&request.method==='GET'){
-  const route=url.searchParams.get('route')??'R03',stores=routeStores(catalog,route),accounts={};
+  const available_routes=catalog.routes.filter(r=>r.invoice_stores?.length).map(r=>({code:r.code,name:r.name}));
+  const own=user.phone_id?await db.prepare("SELECT route FROM v2_invoice_sessions WHERE device=? AND actor=? AND status='active'").bind(user.phone_id,user.username).first():null;
+  const route=own?.route??url.searchParams.get('route')??available_routes[0]?.code??'R03',stores=routeStores(catalog,route),accounts={};
   for(const s of stores)accounts[s.id]=await current(db,s);
   const session=await db.prepare("SELECT * FROM v2_invoice_sessions WHERE route=? AND status='active'").bind(route).first();
-  return {username:user.username,admin:isAdmin(user.username),date:today(),route,route_name:catalog.routes.find(r=>r.code===route).name,stores:stores.map(({opening,...s})=>s),accounts,products:catalog.products.filter(p=>p.active),catalog_revision:catalog.revision,session:viewSession(session),zoho_write:false};
+  return {username:user.username,display_name:repName(user.username),admin:isAdmin(user.username),rep_phone_id:user.phone_id??null,rep_session_expires:user.phone_id?user.expires:null,date:today(),route,route_name:catalog.routes.find(r=>r.code===route).name,available_routes,stores:stores.map(({opening,...s})=>s),accounts,products:catalog.products.filter(p=>p.active),catalog_revision:catalog.revision,session:viewSession(session),zoho_write:false};
  }
  if(path==='/api/invoicing/reconciliation'&&request.method==='GET')return invoiceReconciliation(db,url.searchParams.get('date'),url.searchParams.get('route'));
  if(path==='/api/invoicing/export'&&request.method==='GET'){
@@ -40,6 +43,7 @@ export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
   await db.prepare('INSERT INTO v2_invoice_balances VALUES(?,?,?) ON CONFLICT(customer_id) DO UPDATE SET payload=excluded.payload,checked_at=excluded.checked_at').bind(s.id,JSON.stringify(balance),balance.generated_at).run();return balance;
  }
  check(typeof b.device==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(b.device),'Missing phone identifier.');
+ if(user.phone_id)check(b.device===user.phone_id,'Use the phone registered to this rep.',403);
  if(path==='/api/invoicing/start'){
   const date=dateKey(b.date);check(date===today(),'Prepare today’s route while online.');
   const old=await db.prepare("SELECT * FROM v2_invoice_sessions WHERE route=? AND status='active'").bind(route).first();
@@ -47,13 +51,15 @@ export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
   check(b.cutover_ack===true,'Confirm that this route’s invoices and collections will now be recorded in this app.');
   for(const s of stores){const a=await current(db,s);check(a,'A shop has no verified opening balance: '+s.name,409);if(a.revision===0)check(Date.parse(a.opening.generated_at)>=Date.now()-36*3600000,'Refresh the opening balance for '+s.name,409);}
   const snapshot={products:catalog.products,revision:catalog.revision};let row;
-  try{row=await db.prepare("INSERT INTO v2_invoice_sessions(route,actor,device,service_date,status,sequence,catalog,opened_at) VALUES(?,?,?,?,'active',0,?,?) RETURNING *").bind(route,user.username,b.device,date,JSON.stringify(snapshot),new Date().toISOString()).first();}catch{throw new UserError('Another phone started this route. Refresh to check.',409);}
+  const single=user.phone_id?"NOT EXISTS(SELECT 1 FROM v2_invoice_sessions WHERE (actor=? OR device=?) AND status='active')":'1=1';
+  try{row=await db.prepare(`INSERT INTO v2_invoice_sessions(route,actor,device,service_date,status,sequence,catalog,opened_at) SELECT ?,?,?,?,'active',0,?,? WHERE ${guard.sql} AND ${single} RETURNING *`).bind(route,user.username,b.device,date,JSON.stringify(snapshot),new Date().toISOString(),...guard.args,...(user.phone_id?[user.username,user.phone_id]:[])).first();}catch{throw new UserError('Another phone started this route. Refresh to check.',409);}
+  check(row,'Phone access changed or another route is still open. Sign in and finish the existing route first.',409);
   return {session:viewSession(row)};
  }
  const session=await db.prepare('SELECT * FROM v2_invoice_sessions WHERE id=?').bind(b.session_id).first();check(session&&session.route===route&&session.actor===user.username&&session.device===b.device,'This route belongs to a different signed-in person or phone.',403);
  if(path==='/api/invoicing/finish'){
   check(Number.isSafeInteger(b.sequence)&&b.sequence===session.sequence,'Some transactions are not synced. Sync before finishing.',409);
-  const result=await db.prepare("UPDATE v2_invoice_sessions SET status='closed',closed_at=? WHERE id=? AND sequence=? AND status='active'").bind(new Date().toISOString(),session.id,b.sequence).run();check(result.meta.changes===1||session.status==='closed','Route changed while finishing. Refresh.',409);return {closed:true};
+  const result=await db.prepare(`UPDATE v2_invoice_sessions SET status='closed',closed_at=? WHERE id=? AND sequence=? AND status='active' AND ${guard.sql}`).bind(new Date().toISOString(),session.id,b.sequence,...guard.args).run();check(result.meta.changes===1||session.status==='closed','Route or phone access changed while finishing. Refresh.',409);return {closed:true};
  }
  check(path==='/api/invoicing/command','Unknown invoice operation.',404);
  const c=b.command;check(c&&typeof c==='object','Missing invoice command.');
@@ -66,7 +72,7 @@ export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
  const next=applyInvoiceCommand(a,c,ctx),stamp=new Date().toISOString();
  try{
   await db.batch([
-   db.prepare("INSERT INTO v2_invoice_events(request_id,request_hash,session_id,sequence,customer_id,revision,action,payload,actor,captured_at,saved_at) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM v2_invoice_sessions WHERE id=? AND status='active' AND sequence=?)").bind(c.request_id,fingerprint,session.id,b.sequence,next.customer_id,next.revision,c.action,JSON.stringify(next),user.username,c.captured_at,stamp,session.id,b.sequence-1),
+   db.prepare(`INSERT INTO v2_invoice_events(request_id,request_hash,session_id,sequence,customer_id,revision,action,payload,actor,captured_at,saved_at) SELECT ?,?,?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM v2_invoice_sessions WHERE id=? AND status='active' AND sequence=?) AND ${guard.sql}`).bind(c.request_id,fingerprint,session.id,b.sequence,next.customer_id,next.revision,c.action,JSON.stringify(next),user.username,c.captured_at,stamp,session.id,b.sequence-1,...guard.args),
    db.prepare('UPDATE v2_invoice_sessions SET sequence=? WHERE id=? AND sequence=? AND EXISTS(SELECT 1 FROM v2_invoice_events WHERE request_id=?)').bind(b.sequence,session.id,b.sequence-1,c.request_id)
   ]);
  }catch{throw new UserError('A save conflicted or its result is uncertain. Keep this transaction and sync the same identifier again.',409);}
