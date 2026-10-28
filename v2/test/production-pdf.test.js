@@ -60,6 +60,11 @@ test('production PDF endpoint reads the latest persisted revision, authenticates
  const before=await events(),response=await raw(path),pdf=await PDFDocument.load(await response.arrayBuffer());
  assert.equal(response.status,200);assert.equal(response.headers.get('content-type'),'application/pdf');assert.equal(response.headers.get('cache-control'),'no-store');assert.match(response.headers.get('content-disposition'),/inline; filename="FenMeat-Production-/);assert.equal(pdf.getPageCount(),1);
  assert.deepEqual(await events(),before);assert.match(pdfText(pdf),/Saved revision 2/);assert.doesNotMatch(pdfText(pdf),/Saved revision 1/);
+ assert.equal(response.headers.get('x-fenmeat-print-revision'),'2');
+ const pinned=await raw(path+'&revision=1');assert.equal(pinned.status,200);assert.equal(pinned.headers.get('x-fenmeat-print-revision'),'1');
+ assert.match(pdfText(await PDFDocument.load(await pinned.arrayBuffer())),/Saved revision 1/);
+ assert.equal((await raw(path+'&revision=999')).status,404);assert.equal((await raw(path+'&revision=0')).status,400);
+ assert.equal((await raw(path+'&revision=1e2')).status,400);assert.deepEqual(await events(),before);
  assert.equal((await raw('/api/print/production?date=bad')).status,400);
  assert.equal((await raw('/api/print/production?date='+addDays(date,1))).status,404);
  assert.equal((await raw(path,{})).status,404);

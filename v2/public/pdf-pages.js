@@ -15,7 +15,17 @@ export async function renderPDFPages(bytes,{signal,onPage,canvasFactory=()=>docu
    canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);
    try{
     await page.render({canvasContext:canvas.getContext('2d'),viewport,background:'white',intent:'print'}).promise;
-    check();const text=(await page.getTextContent()).items.map(i=>i.str??'').join(' ');
+    // PDF.js getTextContent uses for-await on ReadableStream. Shipping Safari
+    // versions may support getReader without implementing Symbol.asyncIterator.
+    // Consume the text stream explicitly so a rendered page is not discarded.
+    check();const reader=page.streamTextContent().getReader(),parts=[];
+    try{
+     for(;;){
+      check();const {done,value}=await reader.read();check();if(done)break;
+      for(const item of value.items)if(typeof item.str==='string')parts.push(item.str);
+     }
+    }finally{reader.releaseLock();}
+    const text=parts.join(' ');
     await onPage({number,total:pdf.numPages,dataUrl:canvas.toDataURL('image/png'),text});
    }finally{canvas.width=0;canvas.height=0;page.cleanup();}
   }

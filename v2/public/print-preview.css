@@ -7,6 +7,8 @@ body.file-preview-open{overflow:hidden}
 #file-print-go{background:#14558a;color:#fff}
 #file-print-status{font-size:14px;line-height:1.35;margin:8px 0 0}
 #file-print-retry{margin-top:8px}
+.file-print-help{display:inline-block;margin-top:8px;padding:12px 4px;color:#14558a;font-size:16px;font-weight:700}
+.file-print-help[hidden]{display:none}
 #file-print-pages{overflow:auto;overscroll-behavior:contain;padding:12px;-webkit-overflow-scrolling:touch}
 .file-print-page{margin:0 auto 14px;max-width:794px;background:white;box-shadow:0 2px 6px #0003}
 .file-print-page img{display:block;width:100%;height:auto}

@@ -75,6 +75,11 @@ test('real Worker adds new draft rows through read/save/refresh while print rema
  state=(await call('/api/run',{run:state.run,revision:state.revision,action:'load',request_id:crypto.randomUUID()})).data;
  assert.equal((await call('/api/catalog',{revision:2,catalog:{...catalog,products:[...catalog.products,fresh,product('LATER')]}})).status,200);
  assert.deepEqual((await call(path)).data.run,state.run,'confirmed route snapshots are retained');
+ const beforePrint=await events(),pinned=await raw(print+'&revision=1');assert.equal(pinned.status,200);assert.equal(pinned.headers.get('x-fenmeat-print-revision'),'1');
+ const latest=await raw(print);assert.equal(latest.headers.get('x-fenmeat-print-revision'),String(state.revision));
+ assert.equal((await raw(print+'&revision=999')).status,404);assert.equal((await raw(print+'&revision=-1')).status,400);
+ assert.equal((await raw('/api/print/stock?date='+addDays(date,1)+'&route=TEST&revision=1')).status,404);
+ assert.deepEqual(await events(),beforePrint,'revision-pinned browser printing is read-only');
 });
 
 test('stock print opens the in-app preview without navigating or changing unsaved entries',async()=>{
