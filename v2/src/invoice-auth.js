@@ -4,7 +4,7 @@ import {authenticate,hash,isAdmin,randomToken,sameOrigin} from './auth.js';
 export const isInvoiceRep=username=>['tapiz','mosa','musa'].includes(username);
 export const repName=username=>username==='tapiz'?'Tapiz':isInvoiceRep(username)?'Musa':username;
 const PHONE='__Host-fm_invoice_phone',SESSION='__Host-fm_invoice_session';
-const DAY=86400000,SESSION_MS=12*3600000,PHONE_MS=90*DAY;
+const DAY=86400000,SESSION_MS=24*3600000,PHONE_MS=90*DAY;
 const cookie=(name,value,seconds)=>`${name}=${value}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=${seconds}`;
 const tokenOf=(request,name)=>request.headers.get('Cookie')?.split(';').map(s=>s.trim()).find(s=>s.startsWith(name+'='))?.slice(name.length+1);
 export const hasInvoicePhone=request=>!!tokenOf(request,PHONE);

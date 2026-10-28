@@ -1,4 +1,4 @@
-# Route invoicing — 0.24.0
+# Route invoicing — 0.24.1
 
 Open **Invoices** in the existing app or `/invoicing/`. Alex and Alinda use their existing personal username/key. Tapiz and Musa use a six-digit PIN on their registered road phone. Deployment creates no actual PINs or invitations and does not change access secrets. All new UI text is English. Musa retains the existing internal username `mosa` so his audit history stays consistent.
 
@@ -13,7 +13,7 @@ The owner never needs to know the rep's PIN. ID numbers and date-of-birth clock 
 
 ## Invoice-only access and phone recovery
 
-PIN sessions last 12 hours. A currently signed-in route can cold-start offline during that window. After expiry, reconnect and enter the PIN; queued invoices and receipts remain unchanged. Phone registration lasts 90 days. Browser cookies are the device credential, so use the same browser/profile for registration and daily work.
+PIN sessions last 24 hours from PIN sign-in, covering a 05:00–21:00 route day. A currently signed-in route can cold-start offline during that window. After expiry, reconnect and enter the PIN; queued invoices and receipts remain unchanged. Phone registration lasts 90 days. Browser cookies are the device credential, so use the same browser/profile for registration and daily work.
 
 Tapiz, `mosa` and the legacy alias `musa` are restricted at the server to invoice APIs. Production, Order Guy, recipes, Staff, Sales management, imports and other non-invoice business APIs deny them; direct module pages redirect to Invoices. Only Alex and Alinda can manage phones, refresh Zoho opening balances, approve credit terms or export the server ledger. Once a rep enrolls a phone, their old long-key sessions cannot bypass the phone requirement, including after revocation. Other staff access is preserved.
 
@@ -61,3 +61,9 @@ The shell update activates without reloading the page or touching IndexedDB. A p
 ## 0.24.0 verification
 
 The automated test suite and Cloudflare deployment dry-run passed, including the real Worker/D1 phone registration, one-time concurrent code consumption, PIN/session rotation, expiry, per-device throttling, legacy rep restrictions, direct module redirects, bearer import denial, owner/staff access preservation, atomic revocation during an invoice write, and exact replay after PIN renewal. UI execution tests cover the actual PIN form and application code, unsynced queue retention, expired offline sign-in, valid offline cold startup, activation fragment removal and protection against discarding another identity's drafts. Tests use synthetic records only. Actual road-phone registration and mobile browser/offline acceptance still require the physical phones; no staff PINs or production invitations were created by deployment.
+
+## 0.24.1 — long route days
+
+Rep PIN sessions now last 24 hours from registration, PIN reset or PIN sign-in. A sign-in at 05:00 remains valid until 05:00 the following day, allowing a 16-hour route with intermittent signal. Online contact continues the existing sync/replay flow and does not silently extend the sign-in period. Owner key-session policy and invoice-only permissions are unchanged. Existing sessions retain their issued expiry; sign in with the PIN again to start a new 24-hour session. Stored invoices, receipts and pending sync identifiers are preserved.
+
+Verification covers the server-issued expiry and secure cookie lifetime, access after 16 elapsed hours, expiry after 24 hours, and offline cold startup late in the shift. No live financial records or credentials are changed.

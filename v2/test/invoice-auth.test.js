@@ -126,6 +126,25 @@ test('expired invitation and expired session fail closed, while a valid phone ca
  await f.db.prepare('UPDATE v2_invoice_phones SET expires=? WHERE id=?').bind(Date.now()-1,p.phone_id).run();
  assert.equal((await f.req('/api/invoicing/access/login',{pin},p.cookie)).status,401);
 });
+test('rep sessions cover a 16-hour route day and expire after 24 hours without a silent extension',async t=>{
+ const f=await fixture(t),p=await f.paired();
+ async function checkWindow(response){
+  assert.match(response.headers.getSetCookie().find(c=>c.startsWith('__Host-fm_invoice_session=')),/Max-Age=86400(?:;|$)/);
+  const row=await f.db.prepare('SELECT session_expires,last_login FROM v2_invoice_phones WHERE id=?').bind(p.phone_id).first();
+  assert.equal(row.session_expires-Date.parse(row.last_login),24*3600000);
+  assert.equal(response.data.expires,row.session_expires);return row;
+ }
+ await checkWindow(p.response);
+ const login=await f.req('/api/invoicing/access/login',{pin},p.cookie);assert.equal(login.status,200);
+ const row=await checkWindow(login),cookie=p.cookie.split('; ').find(c=>c.startsWith('__Host-fm_invoice_phone='))+'; '+cookies(login);
+ // Backdate the issued expiry to represent time spent on the route; no real wait.
+ const lateShift=row.session_expires-16*3600000;
+ await f.db.prepare('UPDATE v2_invoice_phones SET session_expires=? WHERE id=?').bind(lateShift,p.phone_id).run();
+ for(let i=0;i<3;i++){const r=await f.req('/api/invoicing/bootstrap',null,cookie);assert.equal(r.status,200);assert.equal(r.data.rep_session_expires,lateShift,'intermittent online use does not alter the fixed expiry');}
+ await f.db.prepare('UPDATE v2_invoice_phones SET session_expires=? WHERE id=?').bind(row.session_expires-24*3600000-1000,p.phone_id).run();
+ assert.equal((await f.req('/api/invoicing/bootstrap',null,cookie)).status,401);
+ const reset=await f.update(p.phone_id,'code'),resetPhone=await f.enroll(reset.data,cookie,'951704');await checkWindow(resetPhone.response);
+});
 test('concurrent activation consumes one code once; a blocked registration can be replaced without clearing phone storage',async t=>{
  const f=await fixture(t),inv=await f.create(),body={code:inv.code,pin,pin_confirm:pin};
  const results=await Promise.all([f.req('/api/invoicing/access/enroll',body),f.req('/api/invoicing/access/enroll',body)]);
