@@ -52,6 +52,7 @@ test('stocktake completion requires the assigned user, date and all requested ma
  const material=id=>({id,name:id,unit:'kg',supplier:'Crown',pack_qty:20,procure:true,notes:'',source:'Synthetic',price:{amount:null,status:'unknown',date:null,valid_until:null,source:''},stock:{qty:null,date:null,reserve:null,incoming:[],source:''}});
  const register={schema_version:1,notes:'Synthetic',materials:[material('RM01'),material('RM02')],recipes:[],packaging:[]};
  assert.equal((await call('alex','/api/recipes',{revision:0,request_id:crypto.randomUUID(),reason:'Synthetic fixture',register})).status,200);
+ assert.equal((await call('alinda','/api/tasks',task({kind:'stocktake',supplier:'crown',due_date:date,requires_evidence:true}))).status,400);
  const b=task({kind:'stocktake',supplier:'crown',due_date:date});const created=await call('alinda','/api/tasks',b);assert.equal(created.status,200,JSON.stringify(created.data));assert.deepEqual(created.data.task.required_materials,['RM01','RM02']);
  const partial={revision:1,request_id:crypto.randomUUID(),supplier:'crown',date,rows:[{material:'RM01',packs:0,reserve:0}]};
  const saved=await call('xalinda','/api/stocktake',partial);assert.equal(saved.status,200);assert.deepEqual(saved.data.completed_tasks,[]);

@@ -53,7 +53,7 @@ function validateTask(raw,env){
  t.required_materials=t.required_materials??[];check(Array.isArray(t.required_materials)&&t.required_materials.length<=300&&t.required_materials.every(x=>typeof x==='string'&&/^[A-Z0-9_-]{1,40}$/.test(x)),'Invalid stocktake materials.');t.required_materials=[...new Set(t.required_materials)];
  t.po_number=optionalText(t.po_number,30);t.po_revision=optionalText(t.po_revision,80);
  if(t.kind==='po_dispatch'){check(/^PO-\d{3,6}(?:\/[A-Z])?$/.test(t.po_number)&&t.document_url&&t.po_revision&&t.parent_cycle_id,'A dispatch task needs its approved PO, document revision and existing PA cycle.');}
- if(t.kind==='stocktake'){check(t.supplier&&t.due_date,'A stocktake needs a supplier and count date.');check(['alex','alinda','xavier','xalinda'].includes(t.assigned_to),'Choose a user with Stocktake access.');}
+ if(t.kind==='stocktake'){check(t.supplier&&t.due_date,'A stocktake needs a supplier and count date.');check(['alex','alinda','xavier','xalinda'].includes(t.assigned_to),'Choose a user with Stocktake access.');check(!t.requires_evidence,'A stocktake uses its complete saved count as evidence. Use a separate general task if an additional photo is needed.');}
  return t;
 }
 function notification(db,requestId,username,task,kind,at){return db.prepare('INSERT INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind(requestId+'-'+username,username,task.id,kind,at);}
@@ -180,7 +180,7 @@ export async function tasksApi({request,url,env,user,bodyOf}){
   await env.DB.prepare('INSERT INTO v2_task_attachments VALUES(?,?,?,?,?,?,?,?)').bind(b.id,task.id,user.username,b.mime_type,filename,bytes,new Date().toISOString()).run();return {id:b.id};
  }
  if(path==='/api/tasks')return saveTask(env,user,b);
- if(path==='/api/tasks/read'){check(/^[a-zA-Z0-9-]{8,140}$/.test(b.id??''),'Invalid notification.');await env.DB.prepare('UPDATE v2_task_notifications SET read_at=? WHERE id=? AND username=?').bind(new Date().toISOString(),b.id,user.username).run();return {saved:true};}
+ if(path==='/api/tasks/read'){check(/^[a-zA-Z0-9_-]{8,140}$/.test(b.id??''),'Invalid notification.');await env.DB.prepare('UPDATE v2_task_notifications SET read_at=? WHERE id=? AND username=?').bind(new Date().toISOString(),b.id,user.username).run();return {saved:true};}
  throw new UserError('Task endpoint not found.',404);
 }
 function openTask(task){return ['Pending','Waiting'].includes(task.status);}

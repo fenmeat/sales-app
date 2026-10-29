@@ -1,7 +1,7 @@
 # Customer invoice balances — 0.22.3
 
 
-## Tasks pilot — 0.25.0
+## Tasks pilot — 0.25.1
 
 `/tasks` gives each existing app user their own assignments. Alex and Alinda can
 create, assign, review, cancel and reopen tasks. General tasks support completion
