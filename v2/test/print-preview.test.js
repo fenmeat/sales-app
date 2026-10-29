@@ -8,9 +8,9 @@ import {fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 import {openPrintPreview} from '../public/print-preview.js';
 
-async function sample(){
+async function sample(count=2){
  const d=await PDFDocument.create(),font=await d.embedFont(StandardFonts.Helvetica);
- for(let i=1;i<=2;i++){const p=d.addPage();p.drawText('Synthetic page '+i+' | saved quantity 17 | labels 187',{x:30,y:700,size:12,font});}
+ for(let i=1;i<=count;i++){const p=d.addPage();p.drawText('Synthetic page '+i+' | saved quantity 17 | labels 187',{x:30,y:700,size:12,font});}
  return d.save();
 }
 async function until(fn){for(let n=0;n<500;n++){if(fn())return;await delay(10);}throw Error('Preview did not reach expected state');}
@@ -55,6 +55,7 @@ test('in-app preview supports ready print, share/cancel/retry and back without l
  const el=id=>document.getElementById(id);
  const ready=()=>el('file-print-go')&&!el('file-print-go').disabled;
  open();open();assert.equal(document.querySelectorAll('#file-print-preview').length,1);assert.equal(el('file-print-go').disabled,true);assert.equal(el('file-print-back').disabled,false);
+ assert.equal(el('file-print-fit').hidden,true);assert.equal(el('file-print-preview').classList.contains('file-print-fit'),false);
  await until(ready);assert.equal(el('app').inert,true);assert.equal(document.querySelectorAll('iframe,object,embed,a[href$=".pdf"]').length,0);
  assert.equal(new URL(el('file-print-browser').href,'https://test.invalid').searchParams.get('revision'),'7');
  assert.equal(calls.length,0,'preparation never launches native print');
@@ -93,6 +94,34 @@ test('in-app preview supports ready print, share/cancel/retry and back without l
  assert.equal(el('file-print-signin').hidden,false);assert.equal(el('file-print-signin').href,'/production');assert.equal(el('file-print-go').disabled,true);
  fetcher=async()=>new Response(bytes,{headers:{'Content-Type':'application/pdf'}});el('file-print-retry').onclick();await until(ready);
  assert.ok(el('file-print-signin').hidden);el('file-print-back').onclick();assert.equal(input.value,'41,5');
+});
+
+test('Stocktake fits the page initially and can zoom without printing, changing app state or losing the return path',async t=>{
+ const {document,window}=parseHTML('<html><body><main id="app"><input id="draft" value="9"><button id="opener">PDF Summary</button></main></body></html>');
+ const descriptors=new Map(),set=(k,v)=>{descriptors.set(k,Object.getOwnPropertyDescriptor(globalThis,k));Object.defineProperty(globalThis,k,{configurable:true,writable:true,value:v});};
+ const bytes=await sample(1),states=[{view:'stock'}];let index=0,focused=null,prints=0,shares=0,closes=0,fetcher=async()=>new Response(bytes,{headers:{'Content-Type':'application/pdf','X-FenMeat-Print-Revision':'76'}});
+ const history={get state(){return states[index];},pushState(v){states.splice(++index);states[index]=v;},back(){if(index>0)index--;window.dispatchEvent(new window.Event('popstate'));}};
+ Object.defineProperty(document,'activeElement',{get:()=>focused});window.HTMLElement.prototype.focus=function(){focused=this;};
+ window.HTMLImageElement.prototype.decode=async function(){await loadImage(this.src);};
+ const create=document.createElement.bind(document);document.createElement=name=>name==='canvas'?createCanvas(1,1):create(name);
+ window.print=()=>prints++;window.close=()=>closes++;
+ set('window',window);set('document',document);set('history',history);set('navigator',{canShare:()=>true,share:()=>{shares++;return Promise.resolve();}});set('requestAnimationFrame',fn=>setImmediate(fn));set('fetch',(...args)=>fetcher(...args));
+ t.after(()=>{document.getElementById('file-print-back')?.onclick();for(const [k,d] of descriptors){if(d)Object.defineProperty(globalThis,k,d);else delete globalThis[k];}});
+ const el=id=>document.getElementById(id),opener=el('opener'),options={url:'/api/print/stocktake?date=2026-10-27&supplier=margot+swiss&revision=76',title:'Stocktake Summary',filename:'stocktake.pdf',fitPage:true};
+ opener.focus();el('draft').value='12';openPrintPreview(options);
+ assert.equal(el('file-print-fit').hidden,false);assert.equal(el('file-print-fit').disabled,true);
+ assert.equal(el('file-print-preview').classList.contains('file-print-fit'),true);
+ await until(()=>!el('file-print-go').disabled);
+ assert.equal(document.querySelectorAll('.file-print-page img').length,1);assert.equal(el('file-print-fit').disabled,false);assert.equal(el('file-print-fit').textContent,'Zoom in');
+ el('file-print-fit').onclick();assert.equal(el('file-print-preview').classList.contains('file-print-fit'),false);assert.equal(el('file-print-fit').textContent,'Fit page');
+ el('file-print-pages').scrollTop=80;el('file-print-pages').scrollLeft=20;
+ el('file-print-fit').onclick();assert.equal(el('file-print-preview').classList.contains('file-print-fit'),true);assert.equal(el('file-print-fit').textContent,'Zoom in');
+ assert.equal(el('file-print-pages').scrollTop,0);assert.equal(el('file-print-pages').scrollLeft,0);assert.equal(prints,0);assert.equal(shares,0);
+ const handoff=new URL(el('file-print-browser').href,'https://test.invalid');assert.equal(handoff.searchParams.get('supplier'),'margot swiss');assert.equal(handoff.searchParams.get('revision'),'76');
+ el('file-print-back').onclick();assert.equal(el('file-print-preview'),null);assert.equal(el('draft').value,'12');assert.equal(document.activeElement,opener);assert.deepEqual(history.state,{view:'stock'});
+ fetcher=async()=>Response.json({error:'Sign in to continue.'},{status:401});openPrintPreview({...options,browserPage:true});
+ await until(()=>!el('file-print-retry').hidden);assert.equal(el('file-print-signin').href,'/recipes?view=stock');assert.equal(el('file-print-go').disabled,true);
+ el('file-print-back').onclick();assert.equal(closes,1);assert.equal(prints,0);assert.equal(shares,0);assert.equal(el('draft').value,'12');
 });
 
 test('both app shells load the print-only overlay styles and renderer remains self-hosted',async()=>{

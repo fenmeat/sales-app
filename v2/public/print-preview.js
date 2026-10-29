@@ -1,17 +1,23 @@
 import {browserPrintURL,usesAppleHomeScreen} from './print-page-options.js';
 let active=null;
 
-export function openPrintPreview({url,title,filename,unsaved=false,browserPage=false}){
+export function openPrintPreview({url,title,filename,unsaved=false,browserPage=false,fitPage=false}){
  if(active){active.back.focus();return;}
  const opener=document.activeElement,app=document.getElementById('app'),wasInert=app?.inert;
  const root=document.createElement('section');root.id='file-print-preview';root.setAttribute('role','dialog');root.setAttribute('aria-modal','true');root.setAttribute('aria-labelledby','file-print-title');
- root.innerHTML='<div class="file-print-toolbar"><h1 id="file-print-title"></h1><div class="file-print-actions"><button id="file-print-back">Back to app</button><button id="file-print-go" disabled>Print</button><button id="file-print-share" disabled>Share PDF</button></div><p id="file-print-status" role="status" aria-live="polite"></p><a id="file-print-browser" class="file-print-help" target="_blank" rel="noopener noreferrer external" hidden>Open print page</a><a id="file-print-signin" class="file-print-help" target="_blank" rel="noopener noreferrer" hidden>Open FenMeat in this browser</a><button id="file-print-retry" hidden>Retry</button></div><div id="file-print-pages" tabindex="0" aria-label="Document preview"></div>';
- const find=id=>root.querySelector('#'+id),back=find('file-print-back'),print=find('file-print-go'),share=find('file-print-share'),status=find('file-print-status'),pages=find('file-print-pages'),retry=find('file-print-retry');
+ root.innerHTML='<div class="file-print-toolbar"><h1 id="file-print-title"></h1><div class="file-print-actions"><button id="file-print-back">Back to app</button><button id="file-print-go" disabled>Print</button><button id="file-print-share" disabled>Share PDF</button><button id="file-print-fit" aria-controls="file-print-pages" hidden disabled>Zoom in</button></div><p id="file-print-status" role="status" aria-live="polite"></p><a id="file-print-browser" class="file-print-help" target="_blank" rel="noopener noreferrer external" hidden>Open print page</a><a id="file-print-signin" class="file-print-help" target="_blank" rel="noopener noreferrer" hidden>Open FenMeat in this browser</a><button id="file-print-retry" hidden>Retry</button></div><div id="file-print-pages" tabindex="0" aria-label="Document preview"></div>';
+ const find=id=>root.querySelector('#'+id),back=find('file-print-back'),print=find('file-print-go'),share=find('file-print-share'),fit=find('file-print-fit'),status=find('file-print-status'),pages=find('file-print-pages'),retry=find('file-print-retry');
+ if(fitPage){root.classList.add('file-print-fit');fit.hidden=false;}
  find('file-print-title').textContent=title;
  const browserLink=find('file-print-browser'),signIn=find('file-print-signin'),handOff=!browserPage&&usesAppleHomeScreen(navigator,window.matchMedia?.bind(window));
  if(browserPage)back.textContent='Close print page';
  const token=crypto.randomUUID();let controller,epoch=0,file=null,ready=false,sharing=false,closed=false,printTimer,nativePrintStarted=false;
  const session={back};active=session;
+ fit.onclick=()=>{
+  if(!fitPage||!ready||closed)return;
+  fit.textContent=root.classList.toggle('file-print-fit')?'Zoom in':'Fit page';
+  pages.scrollTop=0;pages.scrollLeft=0;
+ };
  document.body.append(root);document.body.classList.add('file-preview-open');if(app)app.inert=true;
  if(!browserPage)history.pushState({...history.state,filePrintPreview:token},'');
  const close=(fromHistory=false)=>{
@@ -67,13 +73,13 @@ export function openPrintPreview({url,title,filename,unsaved=false,browserPage=f
  const load=async()=>{
   controller?.abort();controller=new AbortController();const {signal}=controller,id=++epoch;
   const current=()=>!closed&&epoch===id;
-  ready=false;file=null;print.disabled=true;share.disabled=true;retry.hidden=true;browserLink.hidden=true;browserLink.removeAttribute('href');signIn.hidden=true;clearTimeout(printTimer);pages.replaceChildren();
+  ready=false;file=null;print.disabled=true;share.disabled=true;fit.disabled=true;retry.hidden=true;browserLink.hidden=true;browserLink.removeAttribute('href');signIn.hidden=true;clearTimeout(printTimer);pages.replaceChildren();
   document.body.classList.remove('printing-file-preview');
   status.textContent='Preparing saved document…'+(unsaved?' Your unsaved entries stay in the app.':'');
   try{
    const response=await fetch(url,{credentials:'same-origin',cache:'no-store',signal});
    if(!current())return;
-   if(browserPage&&response.status===401){signIn.href=url.startsWith('/api/print/production?')?'/production':'/';signIn.hidden=false;throw Error('Open FenMeat in this browser to sign in, then return to this page and tap Retry.');}
+   if(browserPage&&response.status===401){signIn.href=url.startsWith('/api/print/production?')?'/production':url.startsWith('/api/print/stocktake?')?'/recipes?view=stock':'/';signIn.hidden=false;throw Error('Open FenMeat in this browser to sign in, then return to this page and tap Retry.');}
    if(!response.ok){const data=await response.json().catch(()=>({}));throw Error(data.error||'The saved document could not be loaded.');}
    if(!response.headers.get('content-type')?.includes('application/pdf'))throw Error('The server did not return a PDF.');
    const blob=await response.blob();if(!current())return;
@@ -96,7 +102,7 @@ export function openPrintPreview({url,title,filename,unsaved=false,browserPage=f
    // The print layout is mounted and images decoded before Print is enabled.
    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
    if(!current())return;
-   ready=true;print.disabled=false;
+   ready=true;print.disabled=false;fit.disabled=!fitPage;
    status.textContent=count+' page'+(count===1?'':'s')+' ready. '+(handOff?'Print opens a browser print page; tap Print there.':'Tap Print to open printer options.')+(unsaved?' Unsaved changes are excluded.':'')+(!canShare?' PDF sharing is not supported in this browser.':'');
   }catch(e){if(!current())return;status.textContent=e.name==='AbortError'?'Loading cancelled. Try again or go back.':e.message;retry.hidden=false;}
  };

@@ -3,7 +3,8 @@ import {invoiceApi,verifyInvoiceReconciliation} from './invoice-api.js';
 import {authenticateApp,isInvoiceRep,invoicePageRedirect,invoiceAccessApi,invoicePhonesApi} from './invoice-auth.js';
 import {tasksApi,completeCountTasks} from './tasks-api.js';
 import {pushApi,flushTaskPush} from './tasks-push.js';
-import {orderGuyApi} from './order-guy-api.js';
+import {orderGuyApi,readRegister} from './order-guy-api.js';
+import {withResaleMaterials} from './order-guy.js';
 import {productionApi} from './production-api.js';
 import {staffApi,staffClockApi} from './staff-api.js';
 import {forecastRoute} from './month-cycle.js';
@@ -40,7 +41,7 @@ async function forecastResult(db,date,route,c){
  const snapshot=await hash(JSON.stringify({version:'1.4-recent-sales-floor',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
  return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline with measured month phase and latest comparable sales safety minimum',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.25.1',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.25.2',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null,ctx=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
@@ -63,6 +64,25 @@ async function handle(request,env,paUser=null,ctx=null){
  if(path==='/api/tasks/push')return json(await pushApi({request,env,user,bodyOf}));
  if(path==='/api/tasks'||path.startsWith('/api/tasks/')){const result=await tasksApi({request,url,env,user,bodyOf});if(ctx&&method==='POST')ctx.waitUntil(flushTaskPush(env));return result instanceof Response?result:json(result);}
  if(path==='/api/invoicing/phones')return json(await invoicePhonesApi({request,env,user,bodyOf}));
+ if(path==='/api/print/stocktake'){
+  check(['alex','alinda','xavier','xalinda'].includes(user.username),'Your account does not have Stocktake access.',403);
+  check(method==='GET','Method not allowed.',405);
+  const date=dateKey(url.searchParams.get('date')),supplier=url.searchParams.get('supplier'),revision=printRevision(url);
+  check(date<=today(),'Choose the day on which the stock was counted, not a future date.');
+  check(supplier!==null&&supplier.length<=150&&!/[\u0000-\u001f\u007f]/.test(supplier),'Choose a supplier in Stocktake first.');
+  const c=await catalog(env.DB);let saved;
+  if(revision===null)saved=await readRegister(env.DB,c);
+  else{
+   const row=await env.DB.prepare('SELECT * FROM v2_recipe_events WHERE revision=?').bind(revision).first();
+   check(row,'This saved stocktake revision could not be found. Reload Stocktake and try again.',404);
+   saved={register:withResaleMaterials(JSON.parse(row.payload),c),revision:row.revision,saved_at:row.saved_at};
+  }
+  check(saved.revision>0,'Save a stocktake before opening PDF Summary.',404);
+  const {stocktakeSummaryPDF}=await import('./stocktake-summary-pdf.js');
+  const pdf=await stocktakeSummaryPDF(saved,{supplier,date});
+  const label=supplier.replace(/[^a-z0-9]+/gi,'-').replace(/^-+|-+$/g,'').slice(0,80)||'unassigned';
+  return new Response(pdf,{headers:{...headers,'Content-Type':'application/pdf','X-FenMeat-Print-Revision':String(saved.revision),'Content-Disposition':`inline; filename="FenMeat-Stocktake-${label}-${date}.pdf"`}});
+ }
  if(['/api/recipes','/api/recipes/audit','/api/import/recipes','/api/order-guy','/api/sync/order-guy','/api/stocktake','/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){const count=path==='/api/stocktake'&&method==='POST'&&!paUser?await request.clone().json():null;const result=await orderGuyApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),bodyOf,forecastResult,readPlan:async date=>productionApi({request:new Request(url.origin+'/api/production?date='+date),url:new URL(url.origin+'/api/production?date='+date),db:env.DB,user,catalog:await catalog(env.DB),forecastResult,runResult,bodyOf})});if(count){try{result.completed_tasks=await completeCountTasks(env,user,count);if(ctx)ctx.waitUntil(flushTaskPush(env));}catch{result.task_warning='Count saved. Open Tasks to retry its completion.';}}return json(result);}
  if(path==='/api/print/production'&&method==='GET'){
   const date=dateKey(url.searchParams.get('date'));
