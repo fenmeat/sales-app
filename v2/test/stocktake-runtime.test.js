@@ -68,7 +68,7 @@ test('Brito resale entries appear automatically, save alongside MDM and persist 
 });
 
 
-test('Xavier and Xalinda save and reload only stock, keep audit identities and cannot edit manager data',async t=>{
+test('Xavier and Xalinda save and reload stock, keep audit identities and cannot edit manager data',async t=>{
  const origin='https://staff-stock.example';
  const names=['alex','alinda','xavier','xalinda','other'];
  const access=Object.fromEntries(names.map(name=>[name,('synthetic-'+name+'-stocktake-only-').padEnd(64,'x')]));
@@ -94,7 +94,7 @@ test('Xavier and Xalinda save and reload only stock, keep audit identities and c
    assert.equal((await call(path,{cookie})).status,403,path);
    assert.equal((await call(path,{cookie,body:{register,revision,request_id:crypto.randomUUID(),reason:'Attempt outside stock scope'}})).status,403,path);
   }
-  assert.equal((await call('/api/products/availability',{cookie,body:{revision:0,code:'RAW',available:false}})).status,403);
+  assert.equal((await call('/api/catalog',{cookie,body:{revision:0,catalog:{products:[],routes:[]}}})).status,403,'separate availability permission does not grant catalogue editing');
   if(previousRequest)assert.equal((await call('/api/stocktake',{cookie,body:previousRequest})).status,409,'another user cannot replay the previous user save');
   const body={revision,request_id:crypto.randomUUID(),supplier:'test supplier',date,rows:[{material:'RAW',packs:index+2,loose:0,reserve:0}],register:{...register,materials:[]}};
   assert.equal((await call('/api/stocktake',{cookie,body,originHeader:'https://other.example'})).status,403);

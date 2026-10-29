@@ -2,6 +2,8 @@ import {check,UserError} from './domain.js';
 const encoder=new TextEncoder();
 // Named primary administrators; extra staff keys cannot introduce either account.
 export const isAdmin=username=>username==='alex'||username==='alinda';
+// Product availability is a separate permission; it does not grant admin access.
+export const canManageProductAvailability=username=>isAdmin(username)||username==='xavier'||username==='xalinda';
 export const hash=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(s)))).map(b=>b.toString(16).padStart(2,'0')).join('');
 export const randomToken=()=>Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b=>b.toString(16).padStart(2,'0')).join('');
 function readKeys(raw){

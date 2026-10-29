@@ -4,7 +4,7 @@ export async function openAvailability({api,onChange}) {
   document.querySelector('#product-availability')?.remove();
   const bootstrap=await api('/api/bootstrap');
   let catalog=bootstrap.catalog,busy=false;
-  const canManage=['alex','alinda'].includes(bootstrap.username);
+  const canManage=bootstrap.capabilities?.manage_product_availability===true;
   onChange(catalog);
   const dialog=document.createElement('dialog');dialog.id='product-availability';
   dialog.setAttribute('aria-labelledby','availability-heading');
@@ -25,5 +25,5 @@ export async function openAvailability({api,onChange}) {
   dialog.querySelector('#close-availability').onclick=()=>{if(!busy)dialog.close();};
   dialog.oncancel=e=>{if(busy)e.preventDefault();};
   dialog.onclose=()=>dialog.remove();render();dialog.showModal();
-  if(!canManage)message.textContent='Alex or Alinda can change these switches.';
+  if(!canManage)message.textContent='Your account has read-only access to product availability.';
 }
