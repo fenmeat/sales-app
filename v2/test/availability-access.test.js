@@ -18,7 +18,7 @@ const initialCatalog={
 };
 
 test('real Worker persists Xavier and Xalinda availability changes with their own audit and narrow permission',async t=>{
- const modules=['worker','invoice-auth','invoice-api','invoice-domain','staff-api','payroll-api','payroll-domain','staff-domain','staff-import','staff-history','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','zoho','zoho-matching','zoho-reconcile'];
+ const modules=['worker','invoice-auth','invoice-api','invoice-domain','staff-api','payroll-api','payroll-domain','staff-domain','staff-import','staff-history','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','tasks-api','tasks-push','webpush-bundle','zoho','zoho-matching','zoho-reconcile'];
  const mf=new Miniflare(convertV4MiniflareOptions({
   name:'availability-access-test',
   modules:modules.map(name=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+name+'.js',import.meta.url))})),

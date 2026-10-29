@@ -1,6 +1,6 @@
 {
   "name": "fenmeat-sales-test",
-  "version": "0.24.2",
+  "version": "0.25.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -20,6 +20,7 @@
     "wrangler": "4.144.0"
   },
   "dependencies": {
+    "@block65/webcrypto-web-push": "2.0.0",
     "@cloudflare/workers-oauth-provider": "1.2.3",
     "@modelcontextprotocol/sdk": "1.32.1",
     "pdf-lib": "1.17.1",

@@ -43,7 +43,9 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
   check(old.register.materials.every(m=>register.materials.some(x=>x.id===m.id)),'Existing materials cannot be removed.');
   for(const recipe of old.register.recipes){const next=register.recipes.find(x=>x.group===recipe.group&&x.version===recipe.version);check(next,'Keep earlier recipe versions.');if(JSON.stringify(next.ingredients)!==JSON.stringify(recipe.ingredients)||next.batch_kg!==recipe.batch_kg||next.effective_date!==recipe.effective_date||(next.plan_version??next.version)!==(recipe.plan_version??recipe.version)||JSON.stringify(next.consumables)!==JSON.stringify(recipe.consumables))throw new UserError('Changed recipe quantities need a new version. Keep the earlier version unchanged.');}
   const revision=old.revision+1,saved_at=new Date().toISOString();
-  try{await db.prepare('INSERT INTO v2_recipe_events(request_id,request_hash,revision,payload,actor,saved_at,reason) VALUES(?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,revision,JSON.stringify(register),user.username,saved_at,reason.trim()).run();}catch{throw new UserError('Another save changed the register. Reload before retrying.',409);}
+  const statements=[db.prepare('INSERT INTO v2_recipe_events(request_id,request_hash,revision,payload,actor,saved_at,reason) VALUES(?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,revision,JSON.stringify(register),user.username,saved_at,reason.trim())];
+  if(path==='/api/stocktake')statements.push(db.prepare('INSERT INTO v2_task_count_receipts VALUES(?,?,?,?,?,?)').bind(b.request_id,b.supplier,b.date,JSON.stringify(b.rows.map(r=>r.material)),user.username,saved_at));
+  try{await db.batch(statements);}catch{throw new UserError('Another save changed the register. Reload before retrying.',409);}
   const result={revision,saved_at,actor:user.username,request_id:b.request_id,...extra};
   return path==='/api/stocktake'?registerResponse({...result,register},user,canManage):result;
  }

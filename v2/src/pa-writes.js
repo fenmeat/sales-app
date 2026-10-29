@@ -1,8 +1,9 @@
 import {check,UserError,dateKey} from './domain.js';
 import {hash,isAdmin} from './auth.js';
 import {catalog,paBusinessRequest} from './worker.js';
+import {ensureTaskSchema,readTasksForPa,saveTask,acknowledgeTask} from './tasks-api.js';
 
-export const WRITE_TOOLS=new Set(['save_app_data','restore_app_change','test_app_write_access']);
+export const WRITE_TOOLS=new Set(['save_app_data','restore_app_change','test_app_write_access','save_task','acknowledge_task_sync']);
 const paths={register:'/api/recipes',catalog:'/api/catalog',availability:'/api/products/availability',stocktake:'/api/stocktake',production:'/api/production',sales:'/api/run'};
 const plain=v=>!!v&&typeof v==='object'&&!Array.isArray(v);
 function safeKeys(value) {
@@ -63,6 +64,7 @@ function auditedDatabase(db,change,before) {
 
 export async function getEditContext(args,env,username) {
   check(isAdmin(username),'Admin access is required.',403);
+  if(args.target==='tasks')return readTasksForPa(env,{username},args.query??{});
   if(args.target==='catalog')return {target:'catalog',catalog:await catalog(env.DB),editing:'Supply products/routes keyed by code. Omitted entries and fields stay unchanged. Use availability target for availability switches.'};
   const path=paths[args.target];check(path,'Unsupported data target.');
   if(['register','stocktake'].includes(args.target))return {target:args.target,...await app(request('/api/recipes'),env,username),editing:args.target==='stocktake'?'Count full purchase packs only: rows contain material, packs (non-negative integer), reserve and optional included_incoming. A known pack_qty is required. No loose quantities. Preserve existing allocations unless authorised to change them. Mixed historical counts need physical confirmation; never infer zero loose stock or round old totals.':'Register patches merge materials by id, recipes by group + version, packaging by product; nested objects merge and arrays replace. Existing recipe quantities require a new version. Use the stocktake target for new full-pack physical counts, not a raw stock quantity patch.'};
@@ -79,6 +81,13 @@ export async function getChangeHistory(args,env,username) {
 
 export async function saveAppData(args,env,username,{fingerprintArgs=args,restore=false}={}) {
   check(isAdmin(username),'Admin access is required.',403);
+  if(args.target==='tasks'){
+    check(!restore,'Read the task history and reopen or update explicitly.');
+    check(typeof args.reason==='string'&&args.reason.trim().length>=5,'Record the authorised instruction.');
+    await ensureTaskSchema(env.DB);
+    const b={...args.data,revision:args.revision,request_id:args.request_id};
+    return b.action==='acknowledge_sync'?acknowledgeTask(env,{username},b):saveTask(env,{username},b);
+  }
   check(Object.hasOwn(paths,args.target),'Unsupported data target.');
   check(typeof args.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(args.request_id),'Use a unique save identifier.');
   check(Number.isSafeInteger(args.revision)&&args.revision>=0,'Read the current revision before saving.');

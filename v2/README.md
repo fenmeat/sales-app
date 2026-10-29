@@ -1,5 +1,35 @@
 # Customer invoice balances — 0.22.3
 
+
+## Tasks pilot — 0.25.0
+
+`/tasks` gives each existing app user their own assignments. Alex and Alinda can
+create, assign, review, cancel and reopen tasks. General tasks support completion
+notes and protected photo/PDF/link evidence. Supplier counts finish only from the
+assigned person's matching saved count, including all requested material rows.
+PO dispatch confirms the current approved document and actual sending channel/time;
+it does not send a PO or close receipt/payment obligations.
+
+Task events are append-only and revision checked. Idempotent saves, per-user
+notifications, admin-only PA sync acknowledgements and a unique parent-cycle key
+prevent duplicate dispatch tasks. Personal/legal PA records are not imported.
+PA integration exposes `get_tasks`, `save_task`, `acknowledge_task_sync` and the
+existing write-scoped `save_app_data` task target. The external PA bridge must
+write and read back the existing row before acknowledging the app revision.
+
+In-app notifications always work. Optional Web Push uses per-device permission,
+a D1-stored generated VAPID key and the pinned WebCrypto Web Push implementation
+(MIT license in `src/webpush-LICENSE.md`). Five-minute retries and daily 08:00
+South African reminders use a durable queue. iPhone/iPad permission requires a
+Home Screen installation. No private business records or keys are in this change.
+
+Validation: 280 automated tests, Worker deployment dry-run, and local Chromium
+against the real Worker/assets/isolated synthetic D1 passed. Browser checks cover
+assignment, staff isolation, completion, creator notification, history, select-all
+inputs and 320/390/834/1280px layouts. Actual physical-device push delivery is an
+owner acceptance check; synthetic tests do not certify live business completions.
+
+
 Owner-only `customer_balance` reads every invoice page for one exact FEN customer ID twice. It returns current integer-cent outstanding balances, older/part-paid invoices, source time and separate drafts. Missing amounts, incomplete pages, unexpected currencies/statuses, changed results and unknown customer IDs fail closed; nothing is imported as zero. This uses the existing read-only Zoho grant and makes no Zoho or ledger writes. Unallocated customer credits are explicitly outside the invoice-balance total. Verified with nine workerd integration cases including partial/old debt, explicit zero and missing data.
 
 ## 20 October 2026 — reliable stock and production printing (0.20.7)

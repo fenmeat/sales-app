@@ -121,7 +121,7 @@ test('OAuth discovery, owner consent, SDK handshake, all seven read tools and da
   const unauth=await f.rpc(null,'tools/list');assert.equal(unauth.response.status,401);assert.match(unauth.response.headers.get('www-authenticate'),/oauth-protected-resource/);
   const {tokens,session}=await f.connect();
   const init=await f.rpc(tokens,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'synthetic',version:'1'}});assert.equal(init.response.status,200);assert.equal(init.data.result.serverInfo.name,'fenmeat-read-access');
-  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,15);for(const tool of list.data.result.tools){const write=['save_app_data','restore_app_change','test_app_write_access'].includes(tool.name);assert.equal(tool.annotations.readOnlyHint,!write);assert.deepEqual(tool._meta.securitySchemes[0].scopes,write?['fenmeat:read','fenmeat:write']:tool.name==='get_staff_data'?['fenmeat:read',STAFF_READ_SCOPE]:['fenmeat:read']);}
+  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,18);for(const tool of list.data.result.tools){const write=['save_app_data','restore_app_change','test_app_write_access','save_task','acknowledge_task_sync'].includes(tool.name);assert.equal(tool.annotations.readOnlyHint,!write);assert.deepEqual(tool._meta.securitySchemes[0].scopes,write?['fenmeat:read','fenmeat:write']:tool.name==='get_staff_data'?['fenmeat:read',STAFF_READ_SCOPE]:['fenmeat:read']);}
   for(const [name,args] of [['get_catalog',{}],['get_sales',{from:'2026-10-12',to:'2026-10-12'}],['get_forecast',{date:'2026-10-13',route:'MB'}],['get_production',{date:'2026-10-12'}],['get_recipes',{}],['get_material_stock',{}],['get_order_requirements',{from:'2026-10-12',to:'2026-10-12'}]]) {
     const r=await f.rpc(tokens,'tools/call',{name,arguments:args});assert.equal(r.response.status,200);assert.equal(r.data.result?.isError,undefined,JSON.stringify(r.data));assert.equal(r.data.result.structuredContent.connection.access,'read_only');
     if(name==='get_production')assert.equal(r.data.result.structuredContent.source_kind,'unsaved_suggestion');
@@ -298,4 +298,20 @@ test('Staff-only consent preserves read-only business rights, refresh, owner iso
  await f.req('/api/pa/connections',{body:{grant_id:grants[0].id},headers:{Cookie:alinda.session}});assert.equal((await ok(f,tokens,'get_staff_data',{query:{resource:'summary'}})).import_verified,true);
  await f.req('/api/pa/connections',{body:{grant_id:grants[0].id},headers:{Cookie:alex.session}});assert.equal((await f.rpc(tokens,'tools/call',{name:'get_staff_data',arguments:{query:{resource:'summary'}}})).response.status,401);
  assert.equal((await ok(f,alinda.tokens,'get_staff_data',{query:{resource:'summary'}})).import_verified,true);
+});
+
+test('Tasks MCP keeps read grants read-only and acknowledges only a verified current PA mapping',async t=>{
+ const f=await fixture(t),read=await f.connect(),write=await f.connect(true);
+ const task={task_id:crypto.randomUUID(),revision:0,request_id:crypto.randomUUID(),action:'create',data:{title:'Synthetic task bridge',assigned_to:'alinda',review_date:'2026-10-29'}};
+ assert.equal((await f.rpc(read.tokens,'tools/call',{name:'save_task',arguments:{task}})).response.status,403);
+ const created=await ok(f,write.tokens,'save_app_data',change('tasks',0,task));assert.equal(created.task.revision,1);
+ const pending=await ok(f,read.tokens,'get_access_status',{tasks:{resource:'pending_sync'}});assert.equal(pending.tasks.tasks.length,1);
+ const ack={task_id:task.task_id,revision:0,pa_task_id:'TSK-00999',source_url:'https://docs.google.com/spreadsheets/d/synthetic/edit#range=A2'};
+ assert.equal((await call(f,write.tokens,'acknowledge_task_sync',ack)).isError,true);
+ assert.equal((await f.rpc(read.tokens,'tools/call',{name:'acknowledge_task_sync',arguments:{...ack,revision:1}})).response.status,403);
+ const saved=await ok(f,write.tokens,'acknowledge_task_sync',{...ack,revision:1});assert.equal(saved.task.pa_sync.status,'synced');
+ assert.equal((await ok(f,read.tokens,'get_tasks',{query:{resource:'pending_sync'}})).tasks.length,0);
+ assert.equal((await call(f,write.tokens,'acknowledge_task_sync',{...ack,revision:1,pa_task_id:'TSK-00998'})).isError,true);
+ const updated=await ok(f,write.tokens,'save_task',{task:{task_id:task.task_id,revision:1,request_id:crypto.randomUUID(),action:'wait',note:'Waiting for source document',review_date:'2026-10-30'}});assert.equal(updated.task.pa_sync.status,'pending');
+ assert.equal((await ok(f,read.tokens,'get_tasks',{query:{resource:'pending_sync'}})).tasks.length,1);
 });

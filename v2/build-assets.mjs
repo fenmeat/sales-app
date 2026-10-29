@@ -1,4 +1,6 @@
 import {copyFile,mkdir} from 'node:fs/promises';
+import {build} from 'esbuild';
+await build({entryPoints:['@block65/webcrypto-web-push'],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:new URL('./src/webpush-bundle.js',import.meta.url).pathname,legalComments:'inline'});
 for (const name of ['domain.js','forecast.js','forecast-history.js','production.js','stocktake.js','invoice-domain.js']) await copyFile(new URL('./src/'+name,import.meta.url),new URL('./public/'+name,import.meta.url));
 
 // Self-host the pinned PDF renderer and its fonts; no CDN or external viewer.
