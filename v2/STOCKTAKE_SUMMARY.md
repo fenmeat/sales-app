@@ -1,4 +1,4 @@
-# Stocktake PDF Summary - 0.25.2
+# Stocktake PDF Summary - 0.25.3
 
 The Stocktake screen offers **PDF Summary** beside its existing navigation.
 It opens a single portrait A4 page for the selected supplier and physical count
@@ -21,7 +21,8 @@ source notes and unrelated register fields are excluded.
 
 The existing authenticated PDF preview provides Back to app, Print and Share PDF.
 Stocktake opens with the whole page fitted to the available screen. Zoom in uses
-the existing larger view; Fit page restores the overview. Other report previews
+a full-width A4 view even on a small phone, with scrolling while zoomed; Fit page
+restores the overview. Other report previews
 retain their previous display. The Apple Home Screen browser handoff carries
 the supplier, date and saved register revision. The selected register revision
 pins stored counts; resale membership follows the current catalogue, as it does
