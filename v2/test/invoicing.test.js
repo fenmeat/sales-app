@@ -93,3 +93,25 @@ test('closed native ledger reconciles edited quantities and actual split receipt
  const forged=structuredClone(recon);forged.invoice_lines[0].qty=20;await assert.rejects(verifyInvoiceReconciliation(db,forged),/edited/);
  const report=await readInvoicePilot(db,{routes:[{code:'R03',invoice_stores:[store]}]});assert.equal(report.balances_loaded,1);assert.equal(report.total_balance_cents,5000);assert.equal(report.accounts[0].receipt_count,2);
 });
+test('route imports use the latest opening, protect active routes and preserve accounts already used',async t=>{
+ const f=await fixture(t),db=await f.mf.getD1Database('DB');
+ const cat={products:structuredClone(products),routes:[{code:'R03',name:'RIVERSDALE',weekday:2,invoice_stores:[structuredClone(store)]}]};
+ const old={...store.opening,generated_at:'2020-01-01T00:00:00.000Z'};
+ await db.prepare('INSERT INTO v2_invoice_balances VALUES(?,?,?)').bind(id,JSON.stringify(old),old.generated_at).run();
+ let boot=await f.req('/api/invoicing/bootstrap',undefined,f.cookie);
+ assert.equal(boot.data.accounts[id].opening.generated_at,store.opening.generated_at,'old cache cannot mask a newer verified import');
+ const changed=structuredClone(cat);changed.routes[0].invoice_stores[0].opening={...store.opening,balance_cents:0,invoices:[],generated_at:new Date().toISOString()};
+ assert.equal((await f.req('/api/catalog',{revision:1,catalog:changed},f.cookie)).status,409,'active route keeps its opening');
+ const unrelated=structuredClone(cat);unrelated.routes.push({code:'R04',name:'OTHER',weekday:2,invoice_stores:[]});
+ assert.equal((await f.req('/api/catalog',{revision:1,catalog:unrelated},f.cookie)).status,200,'other route can be prepared without touching this route');
+ assert.equal((await f.send(f.body('collect',{cash:10000,shop2shop:0,received:true}))).status,200);
+ assert.equal((await f.req('/api/invoicing/finish',{route:'R03',device:f.device,session_id:f.session.id,sequence:1},f.cookie)).status,200);
+ assert.equal((await f.req('/api/catalog',{revision:2,catalog:changed},f.cookie)).status,200);
+ boot=await f.req('/api/invoicing/bootstrap',undefined,f.cookie);
+ assert.equal(boot.data.accounts[id].revision,1);assert.equal(boot.data.accounts[id].receipts.length,1);
+ assert.equal(boot.data.accounts[id].opening.balance_cents,10000,'issued app history retains its original opening');
+ const removed=structuredClone(changed);removed.routes[0].invoice_stores=[];
+ assert.equal((await f.req('/api/catalog',{revision:3,catalog:removed},f.cookie)).status,409);
+ const moved=structuredClone(removed);moved.routes.push({code:'R04',name:'OTHER',weekday:2,invoice_stores:[store]});
+ assert.equal((await f.req('/api/catalog',{revision:3,catalog:moved},f.cookie)).status,409);
+});

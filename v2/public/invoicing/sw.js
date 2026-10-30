@@ -1,4 +1,4 @@
-const CACHE='fenmeat-invoicing-shell-v0241';
+const CACHE='fenmeat-invoicing-shell-v0261';
 const files=['/invoicing/','/invoicing/app.js','/invoicing/styles.css','/invoicing/storage.js','/invoicing/access-ui.js','/invoicing/input-selection.js','/invoicing/app.webmanifest','/invoice-domain.js','/domain.js'];
 self.addEventListener('install',e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(files)).then(()=>self.skipWaiting())));
 self.addEventListener('activate',e=>e.waitUntil(Promise.all([caches.keys().then(keys=>Promise.all(keys.filter(k=>k.startsWith('fenmeat-invoicing-shell-')&&k!==CACHE).map(k=>caches.delete(k)))),self.clients.claim()])));

@@ -67,3 +67,13 @@ The automated test suite and Cloudflare deployment dry-run passed, including the
 Rep PIN sessions now last 24 hours from registration, PIN reset or PIN sign-in. A sign-in at 05:00 remains valid until 05:00 the following day, allowing a 16-hour route with intermittent signal. Online contact continues the existing sync/replay flow and does not silently extend the sign-in period. Owner key-session policy and invoice-only permissions are unchanged. Existing sessions retain their issued expiry; sign in with the PIN again to start a new 24-hour session. Stored invoices, receipts and pending sync identifiers are preserved.
 
 Verification covers the server-issued expiry and secure cookie lifetime, access after 16 elapsed hours, expiry after 24 hours, and offline cold startup late in the shift. No live financial records or credentials are changed.
+
+## 0.26.1 — multiple prepared routes
+
+Choose **Route** before **Start route**. If another rep already has the selected route open, the route selector stays available so the second phone can choose a different prepared route. The phone's own unfinished route must still be synced and finished first. Its active route remains fixed by the server even if a different route is requested.
+
+Route/store imports are private catalogue changes, separate from deployment. They retain exact Zoho customer IDs, the accepted provisional visit order and explicitly dated opening balances. Newly identified accounts are appended for visit-position review; a name match alone never merges accounts or grants credit. Credit terms remain unreviewed until owner approval. Missing contacts and location pins remain for capture during visits.
+
+For unused accounts, the newer verified opening is used whether it came from the import or an owner refresh. An existing app ledger always takes priority. The catalogue save atomically rejects changes to a route's stores/openings while that route is active, and rejects removing or moving an account with app history. Preparing another route remains allowed.
+
+Verification covers route selection when another rep is working, the owner's/phone's unfinished route, two registered phones issuing on separate routes, isolation of customers and receipts, old-cache/new-import precedence, active-route import rejection, and preservation of existing ledger history. Automated checks use isolated synthetic data. The real import must be read back by exact customer ID, count, balance total and source timestamp; app tests do not prove that Zoho's recorded receipts match physical money.

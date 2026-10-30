@@ -70,6 +70,29 @@ test('an identity mismatch cannot clear another person’s offline queue',async(
  const p=await page(initial,async path=>path.endsWith('/access/status')?{registered:true,name:'Musa',phone_id:'different-phone'}:{username:'mosa',phone_id:'different-phone',expires:Date.now()+86400000});
  await p.submit('repLogin',{pin:'704862'});assert.match(p.document.querySelector('#error').textContent,/Sign in as tapiz/);assert.equal(p.ui.state.queue.length,1);assert.equal(p.ui.state.data.username,'tapiz');assert.equal(p.writes.length,0);
 });
+test('another rep occupying the initial route does not hide the other prepared routes',async()=>{
+ const initial=saved();initial.data.session.actor='mosa';initial.data.session.device='other-synthetic-phone';
+ initial.data.available_routes=[{code:'R03',name:'SYNTHETIC ROUTE'},{code:'R04',name:'OTHER ROUTE'}];
+ const next=structuredClone(initial.data);next.route='R04';next.route_name='OTHER ROUTE';next.session=null;
+ const other={...store,id:'9001002',name:'OTHER SYNTHETIC SHOP',opening:{...store.opening,customer_id:'9001002'}};
+ next.stores=[other];next.accounts={[other.id]:openingAccount(other)};
+ const p=await page(initial,async path=>path.includes('route=R04')?next:initial.data);
+ assert.equal(p.document.querySelectorAll('#routeChoice option').length,2);
+ assert.match(p.document.querySelector('#app').textContent,/Choose another route/);
+ await p.ui.refresh('R04');
+ assert.equal(p.ui.state.data.route,'R04');assert.equal(p.ui.state.selected,other.id);
+ assert.ok(p.document.querySelector('[data-action=prepare]'));
+ assert.equal(p.ui.state.device,phone);assert.equal(p.ui.state.queue.length,0);
+ assert.equal(p.ui.state.data.accounts[id],undefined);
+});
+test('an unfinished route owned by this phone still requires finishing before switching',async()=>{
+ const initial=saved();initial.data.session.date='2020-01-01';
+ initial.data.available_routes=[{code:'R03',name:'SYNTHETIC ROUTE'},{code:'R04',name:'OTHER ROUTE'}];
+ const p=await page(initial,async()=>initial.data);
+ assert.equal(p.document.querySelector('#routeChoice'),null);
+ assert.ok(p.document.querySelector('[data-action=finish]'));
+ assert.match(p.document.querySelector('#app').textContent,/Finish the previous route/);
+});
 test('owner can sign in and create a phone invitation directly on the setup page without choosing the rep PIN',async()=>{
  const {document,window}=parseHTML(await readFile(new URL('../public/invoicing/phones.html',import.meta.url),'utf8'));
  const events=new Map(),calls=[];document.addEventListener=(name,fn)=>events.set(name,fn);window.HTMLElement.prototype.scrollIntoView=()=>{};

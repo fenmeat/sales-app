@@ -60,6 +60,24 @@ test('PIN and legacy rep identities cannot reach other APIs, direct pages, owner
  assert.equal((await f.req('/api/bootstrap',null,await f.login('xavier'))).status,200);
  const unauthorized=await f.req('/api/invoicing/phones',null,await f.login('xavier'));assert.equal(unauthorized.status,403);
 });
+test('two road phones work on separate routes and keep their accounts and receipts isolated',async t=>{
+ const f=await fixture(t),tapiz=await f.paired('tapiz'),musa=await f.paired('mosa');
+ const active=[];
+ for(const [person,route,customer] of [[tapiz,'R03','9001001'],[musa,'R04','9001002']]){
+  const started=await f.req('/api/invoicing/start',{route,date:today(),device:person.phone_id,cutover_ack:true},person.cookie);
+  assert.equal(started.status,200,JSON.stringify(started.data));
+  const boot=await f.req('/api/invoicing/bootstrap?route=R03',null,person.cookie);
+  assert.equal(boot.data.route,route);assert.deepEqual(Object.keys(boot.data.accounts),[customer]);
+  const body={route,device:person.phone_id,session_id:started.data.session.id,sequence:1,command:{action:'issue',customer_id:customer,revision:0,request_id:crypto.randomUUID(),captured_at:new Date().toISOString(),lines:[{code:'P1',qty:1000,checked:true}],cash:10000,shop2shop:0,received:true}};
+  const saved=await f.req('/api/invoicing/command',body,person.cookie);assert.equal(saved.status,200,JSON.stringify(saved.data));
+  assert.equal(saved.data.account.receipts[0].actor,person.username);active.push({person,body});
+ }
+ assert.notEqual(active[0].body.session_id,active[1].body.session_id);
+ assert.equal((await f.req('/api/invoicing/command',active[0].body,musa.cookie)).status,403);
+ const wrong={...active[1].body,sequence:2,command:{...active[1].body.command,request_id:crypto.randomUUID(),customer_id:'9001001',revision:1}};
+ assert.notEqual((await f.req('/api/invoicing/command',wrong,musa.cookie)).status,200);
+ for(const {person,body} of active){const boot=await f.req('/api/invoicing/bootstrap',null,person.cookie);assert.equal(boot.data.session.sequence,1);assert.equal(boot.data.accounts[body.command.customer_id].receipts.length,1);}
+});
 test('five bad PINs are throttled; one-time reset requires the original device and invalidates old sessions',async t=>{
  const f=await fixture(t),p=await f.paired();
  for(let i=0;i<5;i++)assert.equal((await f.req('/api/invoicing/access/login',{pin:'806429'},p.cookie)).status,401);

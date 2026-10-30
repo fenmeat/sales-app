@@ -11,10 +11,22 @@ export const INVOICE_SCHEMA=[
  `CREATE INDEX IF NOT EXISTS v2_invoice_customer_events ON v2_invoice_events(customer_id,revision)`
 ];
 export function invoiceAccess(user){check(isAdmin(user.username)||isInvoiceRep(user.username),'This app is available to Alex, Alinda, Tapiz and Musa.',403);}
+// Store imports may run while the other phone is working. Keep an active
+// route's account list/openings fixed, and never move or remove a used account.
+export function invoiceCatalogGuard(previous,next){
+ const changed=previous.routes.filter(r=>JSON.stringify(r.invoice_stores??[])!==JSON.stringify(next.routes.find(n=>n.code===r.code)?.invoice_stores??[])).map(r=>r.code);
+ const owners=new Map(next.routes.flatMap(r=>(r.invoice_stores??[]).map(s=>[s.id,r.code])));
+ const removed=previous.routes.flatMap(r=>(r.invoice_stores??[]).filter(s=>owners.get(s.id)!==r.code).map(s=>s.id));
+ const clauses=[],args=[];
+ if(changed.length){clauses.push("NOT EXISTS(SELECT 1 FROM v2_invoice_sessions WHERE status='active' AND route IN (SELECT value FROM json_each(?)))");args.push(JSON.stringify(changed));}
+ if(removed.length){clauses.push('NOT EXISTS(SELECT 1 FROM v2_invoice_events WHERE customer_id IN (SELECT value FROM json_each(?)))');args.push(JSON.stringify(removed));}
+ return {sql:clauses.join(' AND ')||'1=1',args};
+}
 function routeStores(c,route){const r=c.routes.find(r=>r.code===route);check(r&&Array.isArray(r.invoice_stores)&&r.invoice_stores.length>0,'This route has not been prepared for invoicing.',409);check(r.invoice_stores.length<=250,'Route is too large.');return r.invoice_stores.map(s=>({...s,route:r.code}));}
 async function current(db,store){
  const e=await db.prepare('SELECT payload FROM v2_invoice_events WHERE customer_id=? ORDER BY revision DESC LIMIT 1').bind(store.id).first();if(e)return JSON.parse(e.payload);
- const cached=await db.prepare('SELECT payload FROM v2_invoice_balances WHERE customer_id=?').bind(store.id).first();const opening=cached?JSON.parse(cached.payload):store.opening;
+ const cached=await db.prepare('SELECT payload FROM v2_invoice_balances WHERE customer_id=?').bind(store.id).first(),stored=cached?JSON.parse(cached.payload):null;
+ const opening=stored&&(!store.opening||Date.parse(stored.generated_at)>=Date.parse(store.opening.generated_at))?stored:store.opening;
  if(!opening)return null;return openingAccount({...store,opening});
 }
 const viewSession=s=>s?{id:s.id,route:s.route,actor:s.actor,device:s.device,date:s.service_date,status:s.status,sequence:s.sequence,products:JSON.parse(s.catalog).products,catalog_revision:JSON.parse(s.catalog).revision,opened_at:s.opened_at}:null;
