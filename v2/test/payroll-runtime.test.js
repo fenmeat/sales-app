@@ -1,0 +1,48 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {fileURLToPath} from 'node:url';
+import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+
+test('payroll real D1: admin isolation, monthly opening, reviewed rows, race guards, immutable approval, retry and payment',async t=>{
+ const origin='https://payroll.example',key='synthetic-payroll-test-key-'.repeat(3);
+ const mf=new Miniflare(convertV4MiniflareOptions({name:'payroll-test',modules:['worker','invoice-auth','invoice-api','invoice-domain','staff-api','payroll-api','payroll-domain','staff-domain','staff-import','staff-history','order-guy-api','order-guy','stocktake','register-corrections','production-api','production','domain','forecast','month-cycle','forecast-history','auth','schema','tasks-api','tasks-push','webpush-bundle','zoho','zoho-matching','zoho-reconcile'].map(n=>({type:'ESModule',path:fileURLToPath(new URL('../src/'+n+'.js',import.meta.url))})),compatibilityDate:'2026-09-30',d1Databases:{DB:'payroll-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key,alinda:key+'a',xavier:key+'x'})},outboundService:()=>{throw Error('No outbound calls');}}));t.after(()=>mf.dispose());
+ const call=async(path,{body,cookie='',originHeader=origin}={})=>{const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:originHeader,'Content-Type':'application/json',Cookie:cookie},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json(),headers:r.headers};};
+ const login=async(username,k)=>{const r=await call('/api/login',{body:{username,key:k}});assert.equal(r.status,200);return r.headers.get('set-cookie').split(';')[0];};
+ const admin=await login('alex',key),staff=await login('xavier',key+'x'),alinda=await login('alinda',key+'a');
+ assert.equal((await call('/api/staff/payroll')).status,401);assert.equal((await call('/api/staff/payroll',{cookie:staff})).status,403);assert.equal((await call('/api/staff/payroll',{cookie:'__Secure-fm_clock='+'a'.repeat(64)})).status,401);
+ const id=crypto.randomUUID();let r=await call('/api/staff',{cookie:admin,body:{request_id:crypto.randomUUID(),revision:0,action:'person',person:{id,name:'Synthetic Employee',code:'QA-01',team:'Test production',start_date:'2026-01-01',active:true}}});assert.equal(r.status,200);
+ const url='/api/staff/payroll?pay_date=2026-10-23';
+ const get=async()=>{const r=await call(url,{cookie:admin});assert.equal(r.status,200,JSON.stringify(r.data));return r.data;};
+ const body=async b=>{const s=await get();return {request_id:crypto.randomUUID(),revision:s.source.staff_revision,time_version:s.source.time_version,payroll_revision:s.revision,pay_date:'2026-10-23',...b};};
+ const save=async b=>call('/api/staff/payroll',{cookie:admin,body:await body(b)});
+ const company={name:'Synthetic Test Employer',address:'1 Test Street',first_pay_date:'2026-10-23'};
+ assert.equal((await save({action:'company',company})).status,200);
+ const profile={employee_id:id,from:'2026-01-01',basis:'Hourly',rate_cents:4000,fixed_cents:0,occupation:'Test worker',break_rule:'Recorded breaks',payment_method:'Bank',uif:'Liable',reason:'Synthetic confirmed rate'};
+ assert.equal((await save({action:'profile',profile})).status,200);
+ assert.equal((await save({action:'refresh'})).status,200);
+ assert.equal((await save({action:'approve',note:'Must reject unreviewed rows'})).status,400);
+ const row={employee_id:id,included:true,ordinary_seconds:45*3600,overtime_seconds:2*3600,leave_seconds:0,sunday_seconds:0,holiday_seconds:0,special_cents:0,bonus_cents:10000,commission_cents:20000,paye_cents:0,meat_cents:5000,other_deduction_cents:0,uif:'Liable',uif_reason:'',confirmed:true,note:'Auditor PAYE zero; verified synthetic attendance and authorised deductions'};
+ assert.equal((await save({action:'row',row:{...row,paye_cents:null}})).status,400);
+ assert.equal((await save({action:'row',row})).status,200);
+ assert.equal((await save({action:'approve',note:'Missing opening must block'})).status,400);
+ const opening={employee_id:id,gross_cents:100000,net_cents:99000,uif_base_cents:100000,uif_employee_cents:1000,uif_employer_cents:1000,reason:'Synthetic reconciled paid opening'};
+ assert.equal((await save({action:'opening',opening})).status,200);
+ assert.equal((await get()).stale,true);assert.equal((await save({action:'approve',note:'Stale draft must block'})).status,409);
+ assert.equal((await save({action:'refresh'})).status,200);assert.equal((await get()).run.rows[0].ordinary_seconds,row.ordinary_seconds,'manual inputs survive refresh');assert.equal((await get()).run.rows[0].reviewed,false);
+ const concurrentBody=await body({action:'row',row});const race=await Promise.all([0,1].map(n=>call('/api/staff/payroll',{cookie:admin,body:{...concurrentBody,request_id:crypto.randomUUID(),row:{...row,bonus_cents:n*10000}}})));assert.deepEqual(race.map(r=>r.status).sort(),[200,409]);
+ const replayBody=await body({action:'row',row});r=await call('/api/staff/payroll',{cookie:admin,body:replayBody});assert.equal(r.status,200);assert.equal((await call('/api/staff/payroll',{cookie:admin,body:replayBody})).data.replayed,true);assert.equal((await call('/api/staff/payroll',{cookie:admin,body:{...replayBody,row:{...row,bonus_cents:1}}})).status,409);
+ assert.equal((await call('/api/staff/payroll',{cookie:admin,originHeader:'https://evil.example',body:await body({action:'row',row})})).status,403);
+ const approve=await body({action:'approve',note:'Verified synthetic payroll'});const approved=await Promise.all([0,1].map(()=>call('/api/staff/payroll',{cookie:alinda,body:approve})));assert.deepEqual(approved.map(r=>r.status),[200,200]);assert.equal(approved.filter(r=>r.data.replayed).length,1);
+ const locked=(await get()).run;assert.equal(locked.status,'Approved');assert.equal(locked.rows[0].net_cents,214980);assert.equal(locked.rows[0].uif_employee_cents,2020);assert.equal(locked.company.name,company.name);
+ assert.equal((await save({action:'row',row})).status,400);assert.equal((await save({action:'opening',opening})).status,400);assert.equal((await save({action:'company',company:{...company,first_pay_date:'2026-10-16'}})).status,400);
+ assert.equal((await save({action:'profile',profile:{...profile,rate_cents:5000}})).status,200);assert.deepEqual((await get()).run,locked,'current rates never change approved snapshot');
+ assert.equal((await save({action:'paid',paid_on:'2026-10-22',note:'Wrong date'})).status,400);assert.equal((await save({action:'paid',paid_on:'2026-10-23',note:'Synthetic cash and bank payments completed'})).status,200);assert.equal((await save({action:'void',note:'Cannot void paid payroll'})).status,400);
+ const report=(await get()).month;assert.equal(report.totals.gross_cents,322000);assert.equal(report.rows[0].uif_total_cents,6040);assert.equal(report.rows[0].paid_net_cents,313980);assert.equal(report.drafts.length,0);
+ const db=await mf.getD1Database('DB');assert.equal((await db.prepare("SELECT COUNT(*) n FROM v2_staff_payroll WHERE action='approve'").first()).n,1);assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_staff_time').first()).n,0,'manual payroll review does not fabricate clock events');
+ // New week's snapshot is invalidated by a clock change, even if Staff revision is unchanged.
+ const future=await body({action:'refresh',pay_date:'2026-10-30'});assert.equal((await call('/api/staff/payroll',{cookie:admin,body:future})).status,200);
+ const futureState=(await call('/api/staff/payroll?pay_date=2026-10-30',{cookie:admin})).data;
+ const shift={id:crypto.randomUUID(),employee_id:id,punches:[{kind:'in',at:'2026-10-26T06:00:00Z'}]};await db.prepare('INSERT INTO v2_staff_time VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),id,shift.id,1,shift.punches[0].at,null,'in',JSON.stringify(shift),'test','test',shift.punches[0].at).run();
+ r=await call('/api/staff/payroll',{cookie:admin,body:{request_id:crypto.randomUUID(),revision:futureState.source.staff_revision,payroll_revision:futureState.revision,time_version:futureState.source.time_version,pay_date:'2026-10-30',action:'row',row}});assert.equal(r.status,409);
+ assert.equal((await call('/api/staff/payroll/history',{cookie:alinda})).status,200);
+});

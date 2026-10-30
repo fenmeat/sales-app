@@ -1,0 +1,30 @@
+{
+  "name": "fenmeat-sales-test",
+  "version": "0.26.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build-assets.mjs",
+    "predev": "npm run build",
+    "dev": "wrangler dev",
+    "pretest": "npm run build",
+    "test": "node --test",
+    "deploy": "npm run build && wrangler deploy",
+    "check:deploy": "npm run build && wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "1.0.13",
+    "esbuild": "0.28.1",
+    "linkedom": "0.18.14",
+    "miniflare": "5.20260926.1-alpha",
+    "wrangler": "4.144.0"
+  },
+  "dependencies": {
+    "@block65/webcrypto-web-push": "2.0.0",
+    "@cloudflare/workers-oauth-provider": "1.2.3",
+    "@modelcontextprotocol/sdk": "1.32.1",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.4.299",
+    "zod": "4.6.6"
+  }
+}

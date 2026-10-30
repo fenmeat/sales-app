@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Fen Meat · Staff access setup</title>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/staff-access.css">
+  <script type="module" src="/staff-access.js"></script>
+</head>
+<body>
+  <header><div class="brand"><em>F</em>FEN MEAT <span>Sales V2 · Test</span></div></header>
+  <main class="staff-access-shell">
+    <h1>Add Xavier &amp; Xalinda</h1>
+    <p>Each person gets a separate username and personal access key. They have the same shared Sales (including cash-up) and Production access as Alinda. Zoho administration remains Alex-only.</p>
+    <p class="alert"><strong>Leave APP_ACCESS_KEYS unchanged.</strong> This setup uses a separate Secret named <strong>APP_STAFF_ACCESS_KEYS</strong>. It does not replace Alex or Alinda's keys or change any business records.</p>
+    <section class="panel">
+      <h2>1. Create keys once</h2>
+      <p>Use this only for their first setup. If their keys are already activated, use the keys you saved; do not generate replacements. Nothing is activated by this page.</p>
+      <button id="create-staff-keys" class="primary" type="button">Create Xavier &amp; Xalinda keys</button>
+      <div id="staff-key-results" hidden>
+        <p>Save both keys in your password manager before leaving this page. Share only each person's own key with them, privately. Do not paste keys into chat or send screenshots of them.</p>
+        <div class="staff-key-row"><label>Xavier · username: xavier<input id="xavier-key" type="password" readonly autocomplete="off" spellcheck="false"></label><button type="button" data-copy-staff="xavier">Copy Xavier's key</button></div>
+        <div class="staff-key-row"><label>Xalinda · username: xalinda<input id="xalinda-key" type="password" readonly autocomplete="off" spellcheck="false"></label><button type="button" data-copy-staff="xalinda">Copy Xalinda's key</button></div>
+        <button id="show-staff-keys" type="button" aria-pressed="false">Show keys</button>
+        <label class="staff-key-check"><input id="keys-saved" type="checkbox">I have saved both personal keys privately.</label>
+      </div>
+      <p id="staff-access-status" role="status" aria-live="polite">No new keys have been created or activated.</p>
+    </section>
+    <section class="panel">
+      <h2>2. Copy the activation block</h2>
+      <p>This block contains both new keys. Keep it private and paste it only into the Secret below.</p>
+      <button id="copy-staff-setup" type="button" disabled>Copy setup for Cloudflare</button>
+      <div id="staff-manual-copy" hidden><label>Manual copy: select the whole block<textarea id="staff-key-json" readonly autocomplete="off" spellcheck="false"></textarea></label></div>
+    </section>
+    <section class="panel">
+      <h2>3. Activate in Cloudflare</h2>
+      <ol>
+        <li>Open <strong>Workers &amp; Pages → fenmeat-sales-test → Settings → Variables and Secrets</strong> (runtime / Production, not Build variables).</li>
+        <li>Select <strong>Add</strong>, type <strong>Secret</strong>, name <strong>APP_STAFF_ACCESS_KEYS</strong>.</li>
+        <li>Paste the entire copied block into Value, then <strong>Deploy</strong>.</li>
+        <li>Test a fresh sign-in with username <strong>xavier</strong> and Xavier's key, then <strong>xalinda</strong> and Xalinda's key.</li>
+      </ol>
+      <p><strong>If APP_STAFF_ACCESS_KEYS already exists, stop and check the previously saved keys before replacing it.</strong> Replacing it changes those staff keys and invalidates affected sessions. Do not edit APP_ACCESS_KEYS.</p>
+      <p>These keys stay only in this page's memory until you leave or reload. The page does not send or store them, and it cannot read existing keys or verify Cloudflare activation.</p>
+      <p><a href="/">Open the sales app</a> · <a href="https://developers.cloudflare.com/workers/configuration/secrets/" target="_blank" rel="noopener noreferrer">Cloudflare Secret instructions</a></p>
+    </section>
+  </main>
+</body>
+</html>
