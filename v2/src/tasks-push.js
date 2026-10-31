@@ -40,7 +40,7 @@ export async function flushTaskPush(env){
   const subscriptions=await env.DB.prepare('SELECT * FROM v2_task_push_subscriptions WHERE username=?').bind(n.username).all();let failed=false;
   for(const row of subscriptions.results){
    try{const subscription=JSON.parse(row.payload);if(!allowedPushEndpoint(subscription.endpoint))throw new UserError('Invalid push endpoint.');
-    const payload=await buildPushPayload({data:JSON.stringify({title:'FenMeat Tasks',body:n.kind==='due'?'Reminder: you have a task to attend to.':n.kind==='completed'?'A task you created is complete.':n.kind==='assigned'?'A task has been assigned to you.':'A task has an update.',tag:n.id,url:'/tasks?task='+encodeURIComponent(n.task_id)}),options:{ttl:86400}},subscription,{...vapid,subject:'https://fenmeat-sales-test.alexander-fenwick.workers.dev'});
+    const payload=await buildPushPayload({data:JSON.stringify({title:'FenMeat Tasks',body:n.kind==='update_requested'?'Please give a quick update on your task.':n.kind==='response'?'A task has new feedback.':n.kind==='due'?'Reminder: you have a task to attend to.':n.kind==='completed'?'A task you created is complete.':n.kind==='assigned'?'A task has been assigned to you.':'A task has an update.',tag:n.id,url:'/tasks?task='+encodeURIComponent(n.task_id)}),options:{ttl:86400}},subscription,{...vapid,subject:'https://fenmeat-sales-test.alexander-fenwick.workers.dev'});
     const response=await fetch(subscription.endpoint,{...payload,redirect:'manual'});
     if([404,410].includes(response.status))await env.DB.prepare('DELETE FROM v2_task_push_subscriptions WHERE endpoint_hash=?').bind(row.endpoint_hash).run();
     else if(!response.ok)failed=true;

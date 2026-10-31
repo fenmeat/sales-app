@@ -1,7 +1,9 @@
 import {check,UserError,dateKey,today} from './domain.js';
 import {isAdmin,keys,hash} from './auth.js';
+import {MAIL_SCHEMA,mailAction,readTaskMail} from './tasks-mail.js';
 
 export const TASK_SCHEMA=[
+ ...MAIL_SCHEMA,
  `CREATE TABLE IF NOT EXISTS v2_task_events (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(task_id,revision))`,
  `CREATE INDEX IF NOT EXISTS v2_tasks_latest ON v2_task_events(task_id,revision DESC)`,
  `CREATE TABLE IF NOT EXISTS v2_task_po_links (parent_cycle_id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE)`,
@@ -30,6 +32,7 @@ export async function getTask(db,id){check(ID.test(id),'Invalid task.');return d
 function canSee(user,task){return isAdmin(user.username)||task.assigned_to===user.username;}
 export function currentTaskNotification(task,n,now=new Date()){
  if(!task||!canSee({username:n.username},task))return false;
+ if(n.kind==='update_requested')return openTask(task)&&task.feedback_request?.status==='pending'&&task.feedback_request.to===n.username&&n.id===task.feedback_request.id+'-'+n.username;
  if(n.kind!=='due')return true;
  if(!openTask(task)||n.username!==task.assigned_to)return false;
  const mode=task.reminder_mode??'daily';
@@ -83,6 +86,7 @@ export async function saveTask(env,user,b){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
  check(b&&ID.test(b.request_id??'')&&ID.test(b.task_id??''),'Use a valid save identifier.');
  check(Number.isSafeInteger(b.revision)&&b.revision>=0,'Read the task before saving.');
+ if(['report_contacts','queue_email','email_status','cancel_email'].includes(b.action))return mailAction(env,user,b,()=>getTask(env.DB,b.task_id));
  const fingerprint=await hash(JSON.stringify({...b,actor:user.username}));
  const prior=await env.DB.prepare('SELECT fingerprint,task_id,revision FROM v2_task_events WHERE request_id=?').bind(b.request_id).first();
  if(prior){check(prior.fingerprint===fingerprint,'This save identifier belongs to a different action.',409);return {task:visible(user,await getTask(env.DB,prior.task_id)),replayed:true};}
@@ -140,12 +144,34 @@ export async function saveTask(env,user,b){
     completion.stocktake={request_id:event.request_id,revision:event.revision,date:task.due_date,supplier:task.supplier};
    }
    task.status='Complete';task.completion=completion;task.waiting_reason='';
+   if(task.feedback_request?.status==='pending')task.feedback_request={...task.feedback_request,status:'answered',answered_at:at,answer:'complete',note};
+  }else if(action==='request_update'){
+   check(admin&&old.assigned_to!==user.username,'An admin can request an update from another task owner.',403);
+   check(openTask(old),'This task is already closed.');
+   check(old.feedback_request?.status!=='pending','An update has already been requested. Wait for the reply.',409);
+   task.feedback_request={id:b.request_id,by:user.username,to:old.assigned_to,at,status:'pending',question:text(b.note,1000,true)};
+  }else if(action==='respond'||action==='note'){
+   check(openTask(old),'Reopen this task before adding an update.');
+   if(action==='respond'){
+    check(old.feedback_request?.status==='pending'&&old.feedback_request.to===user.username,'There is no current update request for you.',409);
+    check(['in_progress','blocked'].includes(b.response),'Choose a response.');
+    if(b.response==='blocked'){task.waiting_reason=text(b.note,2000,true);task.review_date=dateKey(b.review_date);task.status='Waiting';}
+    task.feedback_request={...old.feedback_request,status:'answered',answered_at:at,answer:b.response,note:optionalText(b.note,2000)};
+   }
+   task.last_update={by:user.username,at,kind:action==='respond'?b.response:'note',text:action==='respond'&&b.response==='in_progress'?(optionalText(b.note,2000)||'Work is in progress.'):text(b.note,2000,true)};
+  }else if(action==='undo_complete'){
+   check(old.kind==='general'&&old.status==='Complete'&&old.completion?.by===user.username,'Only your own recent general-task completion can be undone.',403);
+   const event=await env.DB.prepare('SELECT action,payload FROM v2_task_events WHERE task_id=? AND revision=?').bind(old.id,old.revision).first();
+   check(event?.action==='complete'&&Date.parse(at)-Date.parse(old.completion.at)<=300000,'This completion can no longer be undone. Ask an admin to reopen it.',409);
+   const before=await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? AND revision=?').bind(old.id,old.revision-1).first();
+   check(before,'The earlier task could not be found.',409);task=JSON.parse(before.payload);task.last_update={by:user.username,at,kind:'undo_complete',text:'Completion undone.'};
   }else if(action==='wait'){
    check(!['Complete','Cancelled'].includes(task.status),'Reopen this task first.');task.waiting_reason=text(b.note,2000,true);task.review_date=dateKey(b.review_date);task.status='Waiting';
   }else if(action==='reopen'||action==='cancel'){
    check(admin||managesOwnTask(user,old),'Only admins can reopen or cancel tasks assigned by someone else.',403);text(b.note,2000,true);task.status=action==='reopen'?'Pending':'Cancelled';task.last_reason=b.note;task.completion=null;
   }else throw new UserError('Unsupported task action.');
  }
+ if(old?.assigned_to!==task.assigned_to&&task.feedback_request?.status==='pending')task.feedback_request={...task.feedback_request,status:'cancelled',cancelled_at:at};
  check(statusSet.has(task.status),'Invalid task status.');
  if(task.reminder_mode==='once'&&(!old||old.reminder_mode!=='once'||old.reminder_at!==task.reminder_at))check(Date.parse(task.reminder_at)>Date.parse(at),'Choose a reminder time in the future.');
  for(const key of ['revision','updated_at','updated_by','pa_sync'])delete task[key];
@@ -154,7 +180,12 @@ export async function saveTask(env,user,b){
  if(action==='create'&&task.kind==='po_dispatch')statements.push(env.DB.prepare('INSERT INTO v2_task_po_links VALUES(?,?)').bind(task.parent_cycle_id,task.id));
  if(action==='create'||old?.assigned_to!==task.assigned_to)statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'assigned',at));
  else if(['complete','wait'].includes(action))statements.push(notification(env.DB,b.request_id,task.created_by,task,action==='complete'?'completed':'waiting',at));
- else if(['update','reopen','cancel'].includes(action))statements.push(notification(env.DB,b.request_id,task.assigned_to,task,action,at));
+ else if(['update','reopen','cancel','undo_complete'].includes(action))statements.push(notification(env.DB,b.request_id,task.assigned_to,task,action,at));
+ if(action==='request_update')statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'update_requested',at));
+ const recipients=new Set();
+ if(['respond','note'].includes(action))recipients.add(task.created_by);
+ if(['respond','note','complete','undo_complete'].includes(action)&&old?.feedback_request)recipients.add(old.feedback_request.by);
+ for(const recipient of recipients)if(recipient!==user.username&&!(action==='complete'&&recipient===task.created_by)&&canSee({username:recipient},task))statements.push(notification(env.DB,b.request_id,recipient,task,'response',at));
  try{await env.DB.batch(statements);}catch{throw new UserError('This task changed while saving. Reload; your previous work is safe.',409);}
  return {task:await getTask(env.DB,task.id),replayed:false};
 }
@@ -178,6 +209,7 @@ export async function completeCountTasks(env,user,count){
 export async function tasksApi({request,url,env,user,bodyOf}){
  const path=url.pathname;
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
+ if(path==='/api/tasks/emails'&&request.method==='GET')return readTaskMail(env,user);
  if(path==='/api/tasks'&&request.method==='GET')return listTasks(env,user,{offset:url.searchParams.get('offset')??0,mine:url.searchParams.get('mine')==='1'});
  if(path==='/api/tasks/file'&&request.method==='GET'){
   const id=url.searchParams.get('id');check(ID.test(id??''),'Invalid attachment.');
@@ -215,6 +247,7 @@ export async function tasksApi({request,url,env,user,bodyOf}){
 function openTask(task){return ['Pending','Waiting'].includes(task.status);}
 export async function readTasksForPa(env,user,query={}){
  await ensureTaskSchema(env.DB);check(isAdmin(user.username),'Only admins can read PA task integration.',403);
+ if(query.resource==='email_requests'||query.resource==='report_contacts')return readTaskMail(env,user,query);
  if(query.task_id){const task=await getTask(env.DB,query.task_id);check(task,'Task not found.',404);return {task};}
  return listTasks(env,user,{pending_sync:query.resource==='pending_sync',offset:query.offset??0});
 }

@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {parseHTML} from 'linkedom';
+import {renderReport} from '../public/tasks-report.js';
+import {reminderOptions} from '../public/task-report-model.js';
 
-async function screen(username,tasks=[]){
+async function screen(username,tasks=[],view=''){
  const {document}=parseHTML('<html><body><div id="app"></div><dialog id="dialog"></dialog><div id="message"></div></body></html>');
+ globalThis.document=document;
  const dialog=document.querySelector('dialog');dialog.showModal=()=>dialog.open=true;dialog.close=()=>dialog.open=false;
  const query=document.querySelector.bind(document);
  const prepare=form=>{
@@ -28,11 +31,12 @@ async function screen(username,tasks=[]){
    if(failNext){failNext=false;throw Error('Connection interrupted. Please retry.');}
    return {ok:true,json:async()=>({task:{...body.data,id:body.task_id,revision:1}})};
   }
+  if(path==='/api/tasks/emails')return {ok:true,json:async()=>({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
   return {ok:true,json:async()=>structuredClone(state)};
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout',source)(document,{}, {href:'https://ui-test.example/tasks'},{replaceState(){}},fetch,FormData,()=>0);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions',source)(document,{}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions);
  return {document,dialog,posts,failNext:()=>failNext=true};
 }
 
@@ -70,4 +74,25 @@ test('both admins keep Everyone, assignments and reminders while staff manage th
  }
  const own={id:'synthetic-own-task',revision:1,title:'My work',details:'',assigned_to:'xavier',created_by:'xavier',status:'Pending',kind:'general',priority:'Normal',review_date:'2099-11-02',pa_sync:{status:'pending'}};
  const {document,dialog}=await screen('xavier',[own]);document.querySelector('[data-task]').onclick();assert.ok(document.querySelector('#cancel-task'));document.querySelector('#edit').onclick();assert.equal(dialog.querySelector('form').elements.title.value,'My work');
+});
+
+const reportTask=(overrides={})=>({id:'synthetic-report-task',revision:2,title:'Example task',details:'Some detail',assigned_to:'xavier',created_by:'alex',status:'Pending',kind:'general',priority:'Normal',due_date:'2099-11-02',review_date:'',pa_sync:{status:'synced'},...overrides});
+test('report UI shows three contextual actions, asks without a second task and supports direct email review',async()=>{
+ const {document,dialog,posts}=await screen('alex',[reportTask()],'?view=report');
+ assert.equal(document.querySelector('h1').textContent,'Daily Report');assert.match(document.querySelector('#report-owner').textContent,/Everyone/);
+ assert.equal(document.querySelectorAll('[data-quick]').length,3);
+ await document.querySelector('[data-quick="ask"]').onclick();assert.equal(posts[0].action,'request_update');assert.equal(posts[0].task_id,'synthetic-report-task');
+ document.querySelector('[data-email]').onclick();const form=dialog.querySelector('form');assert.match(dialog.textContent,/xavier@example.com/);assert.match(dialog.textContent,/processes email requests hourly/);
+ await form.onsubmit({preventDefault(){}});assert.equal(posts[1].action,'queue_email');assert.equal(posts[1].confirm_send,true);assert.equal(posts[1].to_address,'xavier@example.com');assert.match(posts[1].body,/view=report&task=synthetic-report-task/);
+});
+test('staff report has only own work and quick feedback uses the existing request',async()=>{
+ const own=reportTask({feedback_request:{id:'synthetic-update-request',by:'alex',to:'xavier',status:'pending',question:'How is it going?'}});
+ const {document,posts}=await screen('xavier',[own,reportTask({id:'other-private-task',assigned_to:'xalinda',title:'Not for Xavier'})],'?view=report');
+ assert.equal(document.querySelector('#report-owner'),null);assert.doesNotMatch(document.querySelector('#app').textContent,/Not for Xavier/);assert.equal(document.querySelector('[data-email]'),null);
+ assert.match(document.querySelector('#app').textContent,/How is it going/);await document.querySelector('[data-quick="in_progress"]').onclick();assert.equal(posts[0].response,'in_progress');assert.equal(posts[0].action,'respond');
+});
+test('quick report actions keep an identical retry after a lost connection and block double taps',async()=>{
+ const {document,posts,failNext}=await screen('alex',[reportTask()],'?view=report');failNext();
+ await document.querySelector('[data-quick="ask"]').onclick();assert.match(document.querySelector('#message').textContent,/Connection interrupted/);
+ const button=document.querySelector('[data-quick="ask"]');await Promise.all([button.onclick(),button.onclick()]);assert.equal(posts.length,2);assert.deepEqual(posts[0],posts[1]);
 });

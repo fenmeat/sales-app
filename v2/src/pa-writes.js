@@ -86,7 +86,7 @@ export async function saveAppData(args,env,username,{fingerprintArgs=args,restor
     check(typeof args.reason==='string'&&args.reason.trim().length>=5,'Record the authorised instruction.');
     await ensureTaskSchema(env.DB);
     const b={...args.data,revision:args.revision,request_id:args.request_id};
-    return b.action==='acknowledge_sync'?acknowledgeTask(env,{username},b):saveTask(env,{username},b);
+    return b.action==='acknowledge_sync'?acknowledgeTask(env,{username},b):saveTask(env,{username,via:'pa'},b);
   }
   check(Object.hasOwn(paths,args.target),'Unsupported data target.');
   check(typeof args.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(args.request_id),'Use a unique save identifier.');
