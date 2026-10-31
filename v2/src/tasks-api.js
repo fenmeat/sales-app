@@ -32,6 +32,10 @@ export async function getTask(db,id){check(ID.test(id),'Invalid task.');return d
 function canSee(user,task){return isAdmin(user.username)||task.assigned_to===user.username;}
 export function currentTaskNotification(task,n,now=new Date()){
  if(!task||!canSee({username:n.username},task))return false;
+ if(n.kind==='follow_up'){
+  const when=task.followup_reminders?.[n.username];
+  return openTask(task)&&isAdmin(n.username)&&!!when&&n.id==='followup-'+task.id+'-'+n.username+'-'+Math.floor(Date.parse(when)/1000)&&Date.parse(when)<=now.getTime();
+ }
  if(n.kind==='update_requested')return openTask(task)&&task.feedback_request?.status==='pending'&&task.feedback_request.to===n.username&&n.id===task.feedback_request.id+'-'+n.username;
  if(n.kind!=='due')return true;
  if(!openTask(task)||n.username!==task.assigned_to)return false;
@@ -121,6 +125,14 @@ export async function saveTask(env,user,b){
    check(openTask(old),'Reopen this task before changing its reminder.');
    check(b.data&&Object.keys(b.data).length&&Object.keys(b.data).every(k=>reminderFields.includes(k)),'Only reminder fields can be changed here.');
    task=validateReminder({...old,...b.data});
+  }else if(action==='followup_reminder'){
+   check(admin,'Only admins can follow up another person’s task.',403);
+   check(openTask(old),'Reopen this task before setting a follow-up.');
+   check(b.data&&Object.keys(b.data).length===1&&Object.hasOwn(b.data,'reminder_at')&&typeof b.data.reminder_at==='string','Choose your follow-up time.');
+   const when=validateReminder({reminder_mode:b.data.reminder_at?'once':'off',reminder_at:b.data.reminder_at}).reminder_at;
+   check(!when||Date.parse(when)>Date.parse(at),'Choose a reminder time in the future.');
+   task.followup_reminders={...old.followup_reminders};
+   if(when)task.followup_reminders[user.username]=when;else delete task.followup_reminders[user.username];
   }else if(action==='complete'){
    check(old.status==='Pending'||old.status==='Waiting','This task is already closed.');
    const note=optionalText(b.note,2000),proof_url=safeURL(b.proof_url),attachments=Array.isArray(b.attachments)?b.attachments:[];

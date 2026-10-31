@@ -2,8 +2,9 @@ export const isOpen=t=>['Pending','Waiting'].includes(t.status);
 export const reviewDate=t=>t.status==='Waiting'?t.review_date:t.due_date||t.review_date;
 export const localDay=iso=>iso?new Date(Date.parse(iso)+7200000).toISOString().slice(0,10):'';
 export function reportGroups(tasks,{username,admin,today,owner='mine',search=''}){
- const pool=tasks.filter(t=>(admin&&owner==='all'||t.assigned_to===username)&&(!search||[t.title,t.details,t.assigned_to,t.supplier].join(' ').toLowerCase().includes(search.toLowerCase())));
- const score=t=>(t.feedback_request?.status==='pending'&&t.feedback_request.to===username?100:0)+({Critical:80,High:40,Normal:10,Low:0}[t.priority]??10)+(reviewDate(t)&&reviewDate(t)<=today?30:0)+(t.status==='Waiting'?5:0);
+ const pool=tasks.filter(t=>(admin&&owner==='all'||t.assigned_to===username||admin&&!!t.followup_reminders?.[username])&&(!search||[t.title,t.details,t.assigned_to,t.supplier].join(' ').toLowerCase().includes(search.toLowerCase())));
+ const followup=t=>localDay(t.followup_reminders?.[username]);
+ const score=t=>(followup(t)&&followup(t)<=today?30:0)+(t.feedback_request?.status==='pending'&&t.feedback_request.to===username?100:0)+({Critical:80,High:40,Normal:10,Low:0}[t.priority]??10)+(reviewDate(t)&&reviewDate(t)<=today?30:0)+(t.status==='Waiting'?5:0);
  const active=pool.filter(isOpen).sort((a,b)=>score(b)-score(a)||(reviewDate(a)||'9999').localeCompare(reviewDate(b)||'9999')||a.title.localeCompare(b.title));
  return {priorities:active.slice(0,3),other:active.slice(3),completed:pool.filter(t=>t.status==='Complete'&&localDay(t.completion?.at)===today),open:active.length,overdue:active.filter(t=>reviewDate(t)&&reviewDate(t)<today).length};
 }

@@ -40,7 +40,7 @@ export async function flushTaskPush(env){
   const subscriptions=await env.DB.prepare('SELECT * FROM v2_task_push_subscriptions WHERE username=?').bind(n.username).all();let failed=false;
   for(const row of subscriptions.results){
    try{const subscription=JSON.parse(row.payload);if(!allowedPushEndpoint(subscription.endpoint))throw new UserError('Invalid push endpoint.');
-    const payload=await buildPushPayload({data:JSON.stringify({title:'FenMeat Tasks',body:n.kind==='update_requested'?'Please give a quick update on your task.':n.kind==='response'?'A task has new feedback.':n.kind==='due'?'Reminder: you have a task to attend to.':n.kind==='completed'?'A task you created is complete.':n.kind==='assigned'?'A task has been assigned to you.':'A task has an update.',tag:n.id,url:'/tasks?task='+encodeURIComponent(n.task_id)}),options:{ttl:86400}},subscription,{...vapid,subject:'https://fenmeat-sales-test.alexander-fenwick.workers.dev'});
+    const payload=await buildPushPayload({data:JSON.stringify({title:'FenMeat Tasks',body:n.kind==='update_requested'?'Please give a quick update on your task.':n.kind==='response'?'A task has new feedback.':n.kind==='follow_up'?'Reminder: follow up this task.':n.kind==='due'?'Reminder: you have a task to attend to.':n.kind==='completed'?'A task you created is complete.':n.kind==='assigned'?'A task has been assigned to you.':'A task has an update.',tag:n.id,url:'/tasks?task='+encodeURIComponent(n.task_id)}),options:{ttl:86400}},subscription,{...vapid,subject:'https://fenmeat-sales-test.alexander-fenwick.workers.dev'});
     const response=await fetch(subscription.endpoint,{...payload,redirect:'manual'});
     if([404,410].includes(response.status))await env.DB.prepare('DELETE FROM v2_task_push_subscriptions WHERE endpoint_hash=?').bind(row.endpoint_hash).run();
     else if(!response.ok)failed=true;
@@ -62,5 +62,9 @@ export async function queueTaskReminders(env,now=new Date()){
  SELECT 'reminder-once-'||e.task_id||'-'||strftime('%s',json_extract(e.payload,'$.reminder_at')),json_extract(e.payload,'$.assigned_to'),e.task_id,'due',?
  FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision
  WHERE json_extract(e.payload,'$.status') IN ('Pending','Waiting') AND json_extract(e.payload,'$.reminder_mode')='once' AND json_extract(e.payload,'$.reminder_at')<=?`).bind(now.toISOString(),now.toISOString()));
+ statements.push(env.DB.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
+ SELECT 'followup-'||e.task_id||'-'||f.key||'-'||strftime('%s',f.value),f.key,e.task_id,'follow_up',?
+ FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision, json_each(e.payload,'$.followup_reminders') f
+ WHERE json_extract(e.payload,'$.status') IN ('Pending','Waiting') AND f.key IN ('alex','alinda') AND f.value<=?`).bind(now.toISOString(),now.toISOString()));
  await env.DB.batch(statements);
 }

@@ -16,7 +16,7 @@ function setupReminder(form){const select=form.elements.reminder_mode,input=form
 function reminderValues(form){const mode=form.elements.reminder_mode.value;return {reminder_mode:mode,reminder_at:mode==='once'?new Date(form.elements.reminder_at.value+':00+02:00').toISOString():''};}
 function dateLabel(t){const d=review(t);return d?(t.status==='Waiting'||!t.due_date?'Review ':'Due ')+d:'No date';}
 async function load(){
- try{const first=!data;data=await api('/api/tasks');if(first&&reportMode&&data.admin)owner='all';let offset=data.next_offset;while(offset!==null){const page=await api('/api/tasks?offset='+offset);data.tasks.push(...page.tasks);offset=page.next_offset;}if(reportMode&&data.username==='alex'){try{mail=await api('/api/tasks/emails');}catch{mail={requests:[],error:'Email status could not be loaded. Refresh to try again.'};}}render();const id=new URL(location.href).searchParams.get('task');if(id&&!deepLinkHandled){deepLinkHandled=true;const t=data.tasks.find(t=>t.id===id);if(t){if(reportMode)document.querySelector('[data-report-task="'+t.id+'"]')?.scrollIntoView?.({block:'center'});else details(t);}}
+ try{const first=!data;data=await api('/api/tasks');if(first&&reportMode&&data.admin)owner='all';let offset=data.next_offset;while(offset!==null){const page=await api('/api/tasks?offset='+offset);data.tasks.push(...page.tasks);offset=page.next_offset;}if(reportMode&&data.username==='alex'){try{mail=await api('/api/tasks/emails');let mailOffset=mail.next_offset;while(mailOffset!=null){const page=await api('/api/tasks/emails?offset='+mailOffset);mail.requests.push(...page.requests);mailOffset=page.next_offset;}}catch{mail={requests:[],error:'Email status could not be loaded. Refresh to try again.'};}}render();const id=new URL(location.href).searchParams.get('task');if(id&&!deepLinkHandled){deepLinkHandled=true;const t=data.tasks.find(t=>t.id===id);if(t){if(reportMode)document.querySelector('[data-report-task="'+t.id+'"]')?.scrollIntoView?.({block:'center'});else details(t);}}
  }catch(e){if(e.status===401||e.status===403)login(e);else{$('#app').innerHTML='<main class="shell"><h1>Tasks</h1><p>'+esc(e.message)+'</p><button id="retry-load">Retry</button></main>';$('#retry-load').onclick=load;}}
 }
 function login(error){$('#app').innerHTML=`<main class="login"><h1>FenMeat Tasks</h1><p>Sign in with your own app account.</p><form><label>Username<input name="username" autocomplete="username" required></label><label>App access key<input name="key" type="password" autocomplete="current-password" required></label><p class="error">${error.status===403?esc(error.message):''}</p><button class="primary">Sign in</button></form><p><a href="/">Back to Sales</a></p></main>`;$('.login form').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api('/api/login',{username:f.get('username'),key:f.get('key')});await load();}catch(err){$('.login .error').textContent=err.message;}};}
@@ -74,7 +74,7 @@ async function quick(t,action,fields={},undo=false){
  if(busy)return;busy=true;document.querySelectorAll('[data-quick]').forEach(b=>b.disabled=true);
  const body={task_id:t.id,revision:t.revision,action,...fields},signature=JSON.stringify(body);
  if(!quickRetry||quickRetry.signature!==signature)quickRetry={signature,request_id:crypto.randomUUID()};
- try{const result=await api('/api/tasks',{...body,request_id:quickRetry.request_id});quickRetry=null;await load();toast(action==='request_update'?'Update requested.':action==='reminder'?'Reminder saved.':'Saved in app. PA update pending.',undo?()=>quick(result.task,'undo_complete'):null);}
+ try{const result=await api('/api/tasks',{...body,request_id:quickRetry.request_id});quickRetry=null;await load();toast(action==='request_update'?'Update requested.':['reminder','followup_reminder'].includes(action)?'Reminder saved.':'Saved in app. PA update pending.',undo?()=>quick(result.task,'undo_complete'):null);}
  catch(e){render();toast(e.message);}finally{busy=false;}
 }
 function reportAction(t,action){
@@ -86,9 +86,16 @@ function reportAction(t,action){
  if(action==='wait')return reasonAction(t,'wait');
 }
 function quickReminder(t){
- const options=reminderOptions();show(`<h2>Remind me</h2><p>${esc(t.title)}</p><div class="actions">${options.map((o,i)=>`<button class="primary" data-reminder="${i}">${esc(o.label)}</button>`).join('')}<button id="custom-reminder">Choose date &amp; time</button><button data-close>Cancel</button></div><p class="help">South African time. This changes the reminder, not the task's deadline.</p>`);
- dialog.querySelectorAll('[data-reminder]').forEach(b=>b.onclick=async()=>{dialog.close();await quick(t,'reminder',{data:{reminder_mode:'once',reminder_at:options[Number(b.dataset.reminder)].at}});});
- $('#custom-reminder').onclick=()=>editReminder({...t,reminder_mode:'once',reminder_at:options[0].at});
+ const options=reminderOptions(),personal=t.assigned_to!==data.username;
+ const save=at=>{dialog.close();return quick(t,personal?'followup_reminder':'reminder',{data:personal?{reminder_at:at}:{reminder_mode:'once',reminder_at:at}});};
+ show(`<h2>Remind me</h2><p>${esc(t.title)}</p><div class="actions">${options.map((o,i)=>`<button class="primary" data-reminder="${i}">${esc(o.label)}</button>`).join('')}<button id="custom-reminder">Choose date &amp; time</button>${personal&&t.followup_reminders?.[data.username]?'<button id="remove-followup">Remove my reminder</button>':''}<button data-close>Cancel</button></div><p class="help">${personal?'This reminds you to follow up. '+esc(name(t.assigned_to))+"’s task reminder stays as set.":'This changes your reminder, not the task deadline.'} South African time. Enable notifications in Tasks to receive reminders while the app is closed.</p>`);
+ dialog.querySelectorAll('[data-reminder]').forEach(b=>b.onclick=()=>save(options[Number(b.dataset.reminder)].at));
+ if($('#remove-followup'))$('#remove-followup').onclick=()=>save('');
+ $('#custom-reminder').onclick=()=>{
+  if(!personal)return editReminder({...t,reminder_mode:'once',reminder_at:options[0].at});
+  show(base('My follow-up reminder',`<p>${esc(t.title)}</p><label>Remind me at (South Africa)<input name="reminder_at" type="datetime-local" required value="${new Date(Date.parse(t.followup_reminders?.[data.username]||options[0].at)+7200000).toISOString().slice(0,16)}"></label>`));
+  const form=dialog.querySelector('form');form.onsubmit=e=>{e.preventDefault();return submit(form,{task_id:t.id,revision:t.revision,action:'followup_reminder',data:{reminder_at:new Date(form.elements.reminder_at.value+':00+02:00').toISOString()}});};
+ };
 }
 function noteForm(t,action='note'){
  const blocked=action==='respond';show(base(blocked?'What help do you need?':'Add note',`${blocked?'<label>Reason<select name="reason"><option>Materials unavailable</option><option>Waiting for a supplier</option><option>Need assistance</option><option>Other</option></select></label>':''}<label>${blocked?'Details (optional)':'Note'}<textarea name="note" maxlength="2000" ${blocked?'':'required'}></textarea></label>${blocked?`<label>Follow-up date<input name="review_date" type="date" required value="${data.today}"></label>`:''}`,blocked?'Send update':'Save note'));

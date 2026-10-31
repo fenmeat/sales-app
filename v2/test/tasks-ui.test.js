@@ -5,7 +5,7 @@ import {parseHTML} from 'linkedom';
 import {renderReport} from '../public/tasks-report.js';
 import {reminderOptions} from '../public/task-report-model.js';
 
-async function screen(username,tasks=[],view=''){
+async function screen(username,tasks=[],view='',mailPages=null){
  const {document}=parseHTML('<html><body><div id="app"></div><dialog id="dialog"></dialog><div id="message"></div></body></html>');
  globalThis.document=document;
  const dialog=document.querySelector('dialog');dialog.showModal=()=>dialog.open=true;dialog.close=()=>dialog.open=false;
@@ -31,7 +31,7 @@ async function screen(username,tasks=[],view=''){
    if(failNext){failNext=false;throw Error('Connection interrupted. Please retry.');}
    return {ok:true,json:async()=>({task:{...body.data,id:body.task_id,revision:1}})};
   }
-  if(path==='/api/tasks/emails')return {ok:true,json:async()=>({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
+  if(path.startsWith('/api/tasks/emails'))return {ok:true,json:async()=>mailPages?structuredClone(mailPages[path]):({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
   return {ok:true,json:async()=>structuredClone(state)};
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
@@ -95,4 +95,22 @@ test('quick report actions keep an identical retry after a lost connection and b
  const {document,posts,failNext}=await screen('alex',[reportTask()],'?view=report');failNext();
  await document.querySelector('[data-quick="ask"]').onclick();assert.match(document.querySelector('#message').textContent,/Connection interrupted/);
  const button=document.querySelector('[data-quick="ask"]');await Promise.all([button.onclick(),button.onclick()]);assert.equal(posts.length,2);assert.deepEqual(posts[0],posts[1]);
+});
+test('Remind me on someone else’s task saves a personal follow-up while own tasks keep their normal reminder',async()=>{
+ let ui=await screen('alex',[reportTask()],'?view=report');
+ ui.document.querySelector('[data-quick="remind"]').onclick();assert.match(ui.dialog.textContent,/This reminds you to follow up/);
+ await ui.dialog.querySelector('[data-reminder="0"]').onclick();
+ assert.equal(ui.posts[0].action,'followup_reminder');assert.deepEqual(Object.keys(ui.posts[0].data),['reminder_at']);
+ ui=await screen('alex',[reportTask()],'?view=report');ui.document.querySelector('[data-quick="remind"]').onclick();ui.document.querySelector('#custom-reminder').onclick();
+ const form=ui.dialog.querySelector('form');form.elements.reminder_at.value='2099-11-02T09:45';await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.posts[0].action,'followup_reminder');assert.equal(ui.posts[0].data.reminder_at,'2099-11-02T07:45:00.000Z');
+ ui=await screen('xavier',[reportTask()],'?view=report');ui.document.querySelector('[data-quick="remind"]').onclick();await ui.dialog.querySelector('[data-reminder="0"]').onclick();
+ assert.equal(ui.posts[0].action,'reminder');assert.equal(ui.posts[0].data.reminder_mode,'once');
+});
+test('report reads every email-status page before offering another send',async()=>{
+ const {document}=await screen('alex',[reportTask()],'?view=report',{
+  '/api/tasks/emails':{requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com'}},next_offset:100},
+  '/api/tasks/emails?offset=100':{requests:[{id:'synthetic-email-request',task_id:'synthetic-report-task',status:'pending'}],next_offset:null}
+ });
+ assert.match(document.querySelector('#app').textContent,/Email queued/);assert.ok(document.querySelector('[data-cancel-email]'));assert.equal(document.querySelector('[data-email]'),null);
 });

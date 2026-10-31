@@ -3,6 +3,39 @@ import assert from 'node:assert/strict';
 import {fixture} from './helpers/report-fixture.js';
 import {getTask,saveTask,readTasksForPa,currentTaskNotification} from '../src/tasks-api.js';
 import {reportGroups,reportActions,reminderOptions} from '../public/task-report-model.js';
+import {queueTaskReminders} from '../src/tasks-push.js';
+
+test('admin follow-up reminders target their requester, preserve the assignee reminder and withdraw stale alerts',async t=>{
+ const {call,task,db}=await fixture(t),b=task({assigned_to:'xavier',reminder_mode:'once',reminder_at:'2099-11-02T06:00:00.000Z'});await call('alex','/api/tasks',b);
+ const when='2099-11-03T07:30:00.000Z',later='2099-11-04T07:30:00.000Z';
+ const follow={task_id:b.task_id,revision:1,request_id:crypto.randomUUID(),action:'followup_reminder',data:{reminder_at:when}};
+ assert.equal((await call('xavier','/api/tasks',follow)).status,403);
+ assert.equal((await call('xalinda','/api/tasks',follow)).status,404);
+ assert.equal((await call('alex','/api/tasks',{...follow,data:{reminder_at:when,username:'alinda'}})).status,400);
+ let r=await call('alex','/api/tasks',follow);assert.equal(r.status,200);assert.equal(r.data.task.followup_reminders.alex,when);
+ assert.equal(r.data.task.reminder_at,b.data.reminder_at);assert.equal(r.data.task.status,'Pending');
+ assert.equal((await call('alex','/api/tasks',follow)).data.replayed,true);
+ r=await call('alinda','/api/tasks',{...follow,revision:2,request_id:crypto.randomUUID(),data:{reminder_at:later}});
+ assert.deepEqual(r.data.task.followup_reminders,{alex:when,alinda:later});
+ const env={DB:db},queued=()=>db.prepare("SELECT * FROM v2_task_notifications WHERE kind='follow_up'").all();
+ await queueTaskReminders(env,new Date('2099-11-03T07:29:00.000Z'));assert.equal((await queued()).results.length,0);
+ await queueTaskReminders(env,new Date(when));await queueTaskReminders(env,new Date(when));
+ const alerts=(await queued()).results;assert.equal(alerts.length,1);assert.equal(alerts[0].username,'alex');assert.equal(currentTaskNotification(r.data.task,alerts[0],new Date(when)),true);
+ r=await call('alex','/api/tasks',{...follow,revision:3,request_id:crypto.randomUUID(),data:{reminder_at:later}});
+ assert.equal(currentTaskNotification(r.data.task,alerts[0],new Date(later)),false);
+ r=await call('alex','/api/tasks',{...follow,revision:4,request_id:crypto.randomUUID(),data:{reminder_at:''}});
+ assert.deepEqual(r.data.task.followup_reminders,{alinda:later});assert.equal(r.data.task.reminder_at,b.data.reminder_at);
+ await queueTaskReminders(env,new Date(later));const alinda=(await queued()).results.find(n=>n.username==='alinda');assert.ok(alinda);
+ r=await call('xavier','/api/tasks',{task_id:b.task_id,revision:5,request_id:crypto.randomUUID(),action:'complete'});
+ assert.equal(currentTaskNotification(r.data.task,alinda,new Date(later)),false);
+});
+
+test('My report includes an admin’s personal follow-up without exposing other staff tasks',()=>{
+ const task={id:'follow-up',title:'Xavier task',assigned_to:'xavier',status:'Pending',priority:'Normal',review_date:'2099-11-04',followup_reminders:{alex:'2099-11-03T07:30:00.000Z'}};
+ assert.equal(reportGroups([task],{username:'alex',admin:true,owner:'mine',today:'2099-11-03'}).open,1);
+ assert.equal(reportGroups([task],{username:'alinda',admin:true,owner:'mine',today:'2099-11-03'}).open,0);
+ assert.equal(reportGroups([task],{username:'xalinda',admin:false,owner:'all',today:'2099-11-03'}).open,0);
+});
 
 test('daily report asks on the same task, replies notify the requester and revisions prevent duplicate asks',async t=>{
  const {call,task,db}=await fixture(t),b=task({assigned_to:'xavier'});
