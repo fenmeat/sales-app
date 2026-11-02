@@ -14,10 +14,10 @@ const session={id:1,actor:'tapiz',device:phone,date,status:'active',sequence:0,p
 const data=()=>({username:'tapiz',display_name:'Tapiz',admin:false,rep_phone_id:phone,rep_session_expires:Date.now()+86400000,date,route:'R03',route_name:'SYNTHETIC ROUTE',available_routes:[{code:'R03',name:'SYNTHETIC ROUTE'}],stores:[store],accounts:{[id]:openingAccount(store)},products,session:structuredClone(session)});
 const saved=()=>({localVersion:1,device:phone,data:data(),selected:id,queue:[],drafts:{},sequence:0});
 class FormDataForDOM{constructor(form){this.values=[];for(const e of form.querySelectorAll('[name]'))if(e.type!=='checkbox'||e.checked)this.values.push([e.name,e.value??e.querySelector('option')?.value??'']);}get(name){return this.values.find(([n])=>n===name)?.[1]??null;}getAll(name){return this.values.filter(([n])=>n===name).map(([,v])=>v);}has(name){return this.values.some(([n])=>n===name);}}
-async function page(initial,respond,{hash='',online=true}={}){
+async function page(initial,respond,{hash='',online=true,search='?v=0.24.1'}={}){
  const {document}=parseHTML(html),events=new Map(),calls=[],writes=[],replaced=[];let version=initial?.localVersion??0;
  document.addEventListener=(event,handler)=>events.set(event,handler);const modal=document.querySelector('#modal');modal.close=()=>{modal.open=false;};modal.showModal=()=>{modal.open=true;};
- const location={hash,pathname:'/invoicing/',search:'?v=0.24.1',origin:'https://example.test'};
+ const location={hash,pathname:'/invoicing/',search,origin:'https://example.test'};
  const context={document,window:{addEventListener(){},print(){}},location,history:{replaceState:(...args)=>replaced.push(args)},navigator:{onLine:online},URL,URLSearchParams,crypto,TextEncoder,structuredClone,Date,Intl,setTimeout,clearTimeout,setInterval(){},FormData:FormDataForDOM,installInputSelection(){},signInMarkup,pinExpired,hasDraftWork,applyInvoiceCommand,accountSummary,parseAmount,parseQuantity,
  load:async()=>structuredClone(initial),save:async(value,expected)=>{assert.equal(expected,version);writes.push(structuredClone(value));return ++version;},
  fetch:async(path,options={})=>{const body=options.body?JSON.parse(options.body):null;calls.push({path,body});const r=await respond(path,body);return {ok:r.status===undefined||r.status===200,status:r.status??200,json:async()=>r.data??r};}};
@@ -92,6 +92,22 @@ test('an unfinished route owned by this phone still requires finishing before sw
  assert.equal(p.document.querySelector('#routeChoice'),null);
  assert.ok(p.document.querySelector('[data-action=finish]'));
  assert.match(p.document.querySelector('#app').textContent,/Finish the previous route/);
+});
+test('Factory Sales uses factory labels and does not expose admin controls to Xavier',async()=>{
+ const initial=saved();Object.assign(initial.data,{username:'xavier',display_name:'Xavier',factory_sales:true,admin:false,rep_phone_id:null,route:'R12',route_name:'Factory Sales',available_routes:[{code:'R12',name:'Factory Sales'}],session:null});
+ const p=await page(initial,async()=>initial.data);
+ assert.equal(p.document.querySelector('#routeTitle').textContent,'Factory Sales');assert.equal(p.document.querySelector('[data-action=prepare]').textContent,'Start factory sales');
+ assert.equal(p.document.querySelector('#routeChoice'),null);
+ await p.ui.action('prepare');assert.match(p.document.querySelector('#startRoute').textContent,/these factory sales/);
+ await p.ui.action('routeOptions');assert.ok(!p.document.querySelector('a[href*=phones]'));assert.ok(!p.document.querySelector('[data-action=balances]'));
+ p.ui.state.data.session={...session,actor:'xavier',device:phone};p.ui.render();
+ assert.equal(p.document.querySelector('[data-action=overview]').textContent,'Factory totals');
+ assert.ok(!p.document.querySelector('[data-action=terms]'));assert.ok(p.document.querySelector('[data-action=complete]'));
+});
+test('denied factory bootstrap hides cached customer data and never falls back to it online',async()=>{
+ const initial=saved();initial.data.route='R12';initial.data.factory_sales=true;
+ const p=await page(initial,async path=>path.includes('/bootstrap')?{status:403,data:{error:'Not allowed'}}:{registered:true,username:'mosa',name:'Musa'});
+ assert.equal(p.ui.state.needsAuth,true);assert.ok(p.document.querySelector('#repLogin'));assert.ok(!p.document.querySelector('#app').textContent.includes(store.name));
 });
 test('owner can sign in and create a phone invitation directly on the setup page without choosing the rep PIN',async()=>{
  const {document,window}=parseHTML(await readFile(new URL('../public/invoicing/phones.html',import.meta.url),'utf8'));

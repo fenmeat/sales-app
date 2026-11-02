@@ -6,7 +6,8 @@ export const addDays = (date,n) => new Date(Date.parse(date+'T12:00:00Z')+n*8640
 export const weekday = date => new Date(date+'T12:00:00Z').getUTCDay();
 // A dated cycle belongs to the route catalogue, not to an individual sales run.
 export function routeCycle(route,date){const s=route?.schedule;if(!s)return 0;const weeks=Math.floor((Date.parse(date+'T12:00:00Z')-Date.parse(s.anchor_date+'T12:00:00Z'))/604800000);return ((weeks%s.weeks)+s.weeks)%s.weeks;}
-export function routeScheduled(route,date){return !!route&&route.weekday===weekday(date)&&(!route.schedule||route.schedule.active_weeks.includes(routeCycle(route,date)));}
+export const FACTORY_ROUTE='R12';
+export function routeScheduled(route,date){return !!route&&route.code!==FACTORY_ROUTE&&route.weekday===weekday(date)&&(!route.schedule||route.schedule.active_weeks.includes(routeCycle(route,date)));}
 export function routeName(route,date){return route?.schedule?.names?.[routeCycle(route,date)]??route?.name??'';}
 export function comparableRouteVisit(route,target,date){return routeScheduled(route,target)&&routeScheduled(route,date)&&(!route.schedule?.names||routeName(route,target)===routeName(route,date));}
 export function previousRouteVisit(route,date,asOf=today()){
@@ -54,6 +55,7 @@ export function validateCatalog(c) {
   const invoiceCustomers=new Set();
   for(const r of c.routes){
     if(r.invoice_stores!==undefined){check(Array.isArray(r.invoice_stores)&&r.invoice_stores.length<=250,'Invalid invoice store list.');const ids=new Set();for(const s of r.invoice_stores){check(typeof s.id==='string'&&/^[0-9]{1,40}$/.test(s.id)&&!ids.has(s.id),'Invalid or duplicate customer ID.');ids.add(s.id);check(!invoiceCustomers.has(s.id),'A customer can belong to only one invoice route.');invoiceCustomers.add(s.id);cleanText(s.name,160);check(Number.isInteger(s.stop)&&s.stop>0,'Invalid stop number.');check(s.terms==null||s.terms===0||s.terms===7,'Choose cash only or 7-day credit.');}}
+    if(r.code===FACTORY_ROUTE){check(r.weekday==null&&r.schedule==null,'Factory Sales has no delivery-route schedule.');continue;}
     check(Number.isInteger(r.weekday) && r.weekday>=0 && r.weekday<=6,'Invalid route weekday.');
     if(r.schedule!=null){const s=r.schedule;check(s&&typeof s==='object'&&!Array.isArray(s),'Invalid route schedule.');dateKey(s.anchor_date);check(weekday(s.anchor_date)===r.weekday,'Route cycle anchor must match its weekday.');check(Number.isInteger(s.weeks)&&s.weeks>=1&&s.weeks<=4,'Route cycles support one to four weeks.');check(Array.isArray(s.active_weeks)&&s.active_weeks.length>0&&new Set(s.active_weeks).size===s.active_weeks.length&&s.active_weeks.every(n=>Number.isInteger(n)&&n>=0&&n<s.weeks),'Choose valid active weeks in the route cycle.');if(s.names!=null){check(Array.isArray(s.names)&&s.names.length===s.weeks,'Name every week in the route cycle.');for(const name of s.names)check(cleanText(name,120).length>0,'Route cycle names cannot be empty.');}if(s.source!=null)cleanText(s.source,500);}
   }

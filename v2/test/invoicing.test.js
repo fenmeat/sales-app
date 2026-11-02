@@ -4,13 +4,21 @@ import {build} from 'esbuild';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {fileURLToPath} from 'node:url';
 import {applyInvoiceCommand,openingAccount,accountSummary,parseAmount,parseQuantity} from '../src/invoice-domain.js';
-import {today} from '../src/domain.js';
+import {today,routeScheduled,validateCatalog} from '../src/domain.js';
+import {productionContext} from '../src/production.js';
 import {verifyInvoiceReconciliation,readInvoicePilot} from '../src/invoice-api.js';
 const date=today(),products=[{code:'P1',name:'Product',unit:'bag',active:true,available:true,price_cents:10000}],id='9001001';
 const store={id,name:'SYNTHETIC TEST SHOP',stop:1,route:'R03',terms:7,opening:{customer_id:id,complete:true,balance_cents:10000,invoices:[{id:'old1',customer_id:id,number:'SYNTHETIC-OLD',date:'2020-01-01',due_date:'2020-01-08',total:15000,balance:10000}],generated_at:new Date().toISOString(),drafts:[]}};
 const ctx={date,actor:'alex',admin:true,session:1,products,invoiceId:'FM-1-1',invoiceNumber:'SYNTHETIC-NEW'};
 const command=(a,action,extra={})=>({action,customer_id:id,request_id:crypto.randomUUID(),revision:a.revision,captured_at:new Date().toISOString(),...extra});
 const paid=()=>{const a=openingAccount(store);return applyInvoiceCommand(a,command(a,'collect',{cash:10000,shop2shop:0,received:true}),ctx);};
+test('Factory Sales is never scheduled as a delivery or production route',()=>{
+ const factory={code:'R12',name:'Factory Sales',invoice_stores:[]};
+ validateCatalog({products,routes:[factory]});
+ for(let n=1;n<=7;n++)assert.equal(routeScheduled(factory,'2026-11-0'+n),false);
+ assert.throws(()=>validateCatalog({products,routes:[{...factory,weekday:1}]}),/no delivery/);
+ assert.throws(()=>productionContext({date:'2026-11-01',target_date:'2026-11-02',routes:['R12']},{routes:[factory]}),/Unknown/);
+});
 test('exact money and quantity entry accepts decimal commas and rejects ambiguous values',()=>{
  assert.equal(parseAmount('12,34'),1234);assert.equal(parseAmount('0'),0);for(const s of ['', '-1','NaN','1e2','1.234','1,234.50'])assert.equal(parseAmount(s),null);assert.equal(parseQuantity('1,25'),1250);assert.equal(parseQuantity('0.001'),1);
 });
@@ -37,10 +45,10 @@ test('cash-only Shop2Shop and partial-payment edits preserve history and reject 
 const compiled=await build({entryPoints:[fileURLToPath(new URL('../src/worker.js',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',external:['cloudflare:workers'],target:'es2022'});
 async function fixture(t){
  const key='SYNTHETIC-only-key-012345678901234567890123456789';
- const mf=new Miniflare(convertV4MiniflareOptions({name:'invoice-isolated-tests',modules:true,script:compiled.outputFiles[0].text,compatibilityDate:'2026-09-30',d1Databases:{DB:'invoices-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key,mosa:key+'m',xavier:key+'x'})},outboundService:()=>{throw Error('No external traffic in financial tests.');}}));t.after(()=>mf.dispose());
+ const mf=new Miniflare(convertV4MiniflareOptions({name:'invoice-isolated-tests',modules:true,script:compiled.outputFiles[0].text,compatibilityDate:'2026-09-30',d1Databases:{DB:'invoices-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key,alinda:key+'a',mosa:key+'m',musa:key+'u',tapiz:key+'t',xavier:key+'x',xalinda:key+'l',other:key+'o'})},outboundService:()=>{throw Error('No external traffic in financial tests.');}}));t.after(()=>mf.dispose());
  const origin='https://fenmeat-sales-test.alexander-fenwick.workers.dev';
  async function req(path,body,cookie=''){const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json(),headers:r.headers};}
- async function login(user='alex'){const r=await req('/api/login',{username:user,key:key+({alex:'',mosa:'m',xavier:'x'}[user])});assert.equal(r.status,200);return r.headers.get('set-cookie').split(';')[0];}
+ async function login(user='alex'){const r=await req('/api/login',{username:user,key:key+({alex:'',alinda:'a',mosa:'m',musa:'u',tapiz:'t',xavier:'x',xalinda:'l',other:'o'}[user])});assert.equal(r.status,200);return r.headers.get('set-cookie').split(';')[0];}
  const cookie=await login(),cat={products,routes:[{code:'R03',name:'RIVERSDALE',weekday:2,invoice_stores:[store]}]};assert.equal((await req('/api/catalog',{revision:0,catalog:cat},cookie)).status,200);
  const device='synthetic-phone-0000000000001';
  const start=await req('/api/invoicing/start',{route:'R03',date,device,cutover_ack:true},cookie);assert.equal(start.status,200,JSON.stringify(start.data));const session=start.data.session;
@@ -52,7 +60,7 @@ async function fixture(t){
 test('real workerd/D1 persists atomically, protects replay and concurrent route access, rejects unauthorised reads',async t=>{
  const f=await fixture(t);
  assert.equal((await f.req('/api/invoicing/bootstrap')).status,401);
- assert.equal((await f.req('/api/invoicing/bootstrap',undefined,await f.login('xavier'))).status,403);
+ const factoryOnly=await f.req('/api/invoicing/bootstrap',undefined,await f.login('xavier'));assert.equal(factoryOnly.status,200);assert.equal(factoryOnly.data.route,'R12');assert.equal(factoryOnly.data.admin,false);assert.equal(factoryOnly.data.stores.length,0);
  const boot=await f.req('/api/bootstrap',undefined,await f.login('xavier'));assert.equal(boot.status,200);assert.equal(boot.data.catalog.routes[0].invoice_stores,undefined);
  const other=await f.req('/api/invoicing/start',{route:'R03',date,device:'synthetic-phone-0000000000002',cutover_ack:true},f.cookie);assert.equal(other.status,409);
  const b=f.body('collect',{cash:10000,shop2shop:0,received:true});let r=await f.send(b);assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(accountSummary(r.data.account).balance,0);
@@ -65,6 +73,46 @@ test('real workerd/D1 persists atomically, protects replay and concurrent route 
  const closed=await f.req('/api/invoicing/finish',{route:'R03',device:f.device,session_id:f.session.id,sequence:2},f.cookie);assert.equal(closed.status,200);
  const after=f.body('name',{name:'After close'});r=await f.send(after);assert.equal(r.status,409);
  const exported=await f.req('/api/invoicing/export?from='+date+'&to='+date,undefined,f.cookie);assert.equal(exported.data.events.length,2);
+});
+test('Factory Sales permits the four named staff, denies reps at every invoice boundary and preserves the shared ledger',async t=>{
+ const f=await fixture(t),fid='9001002',factoryStore={...store,id:fid,name:'SYNTHETIC FACTORY ACCOUNT',terms:null,opening:{...store.opening,customer_id:fid,balance_cents:0,invoices:[]}};
+ const c={products,routes:[{code:'R03',name:'RIVERSDALE',weekday:2,invoice_stores:[store]},{code:'R12',name:'Factory Sales',invoice_stores:[factoryStore]}]};
+ assert.equal((await f.req('/api/catalog',{revision:1,catalog:c},f.cookie)).status,200);
+ const cookies={alex:f.cookie};for(const name of ['alinda','xavier','xalinda','tapiz','mosa','musa','other'])cookies[name]=await f.login(name);
+ for(const name of ['alex','alinda','xavier','xalinda']){
+  const b=await f.req('/api/invoicing/bootstrap?route=R12',undefined,cookies[name]);assert.equal(b.status,200,name);assert.equal(b.data.factory_sales,true);assert.equal(b.data.route_name,'Factory Sales');assert.equal(b.data.accounts[fid].customer_id,fid);
+  assert.equal(b.data.admin,['alex','alinda'].includes(name));
+  assert.deepEqual(b.data.available_routes.map(r=>r.code),['alex','alinda'].includes(name)?['R03','R12']:['R12']);
+ }
+ for(const name of ['tapiz','mosa','musa']){
+  const b=await f.req('/api/invoicing/bootstrap',undefined,cookies[name]);assert.equal(b.status,200);assert.deepEqual(b.data.available_routes.map(r=>r.code),['R03']);assert.equal(b.data.accounts[fid],undefined);
+  for(const path of ['/api/invoicing/bootstrap?route=R12','/api/invoicing/reconciliation?route=R12&date='+date])assert.equal((await f.req(path,undefined,cookies[name])).status,403,path+' '+name);
+  for(const action of ['start','command','finish','balance'])assert.equal((await f.req('/api/invoicing/'+action,{route:'R12'},cookies[name])).status,403,action+' '+name);
+ }
+ for(const name of ['xavier','xalinda']){
+  assert.equal((await f.req('/api/invoicing/bootstrap?route=R03',undefined,cookies[name])).status,403);
+  for(const path of ['/api/invoicing/export','/api/invoicing/phones'])assert.equal((await f.req(path,undefined,cookies[name])).status,403);
+  assert.equal((await f.req('/api/invoicing/balance',{route:'R12',customer_id:fid},cookies[name])).status,403);
+ }
+ assert.equal((await f.req('/api/invoicing/bootstrap?route=R12',undefined,cookies.other)).status,403);
+ const device='synthetic-factory-phone-00000001',started=await f.req('/api/invoicing/start',{route:'R12',date,device,cutover_ack:true},cookies.xavier);assert.equal(started.status,200,JSON.stringify(started.data));
+ const envelope={route:'R12',device,session_id:started.data.session.id,sequence:1};
+ const cmd={customer_id:fid,request_id:crypto.randomUUID(),revision:0,captured_at:new Date().toISOString(),action:'issue',lines:[{code:'P1',qty:1000,checked:true}],cash:10000,shop2shop:0,received:true};
+ assert.equal((await f.req('/api/invoicing/command',{...envelope,command:{...cmd,action:'terms',terms:7}},cookies.xavier)).status,403,'factory permission cannot approve credit');
+ assert.equal((await f.req('/api/invoicing/command',{...envelope,command:{...cmd,cash:0}},cookies.xavier)).status,400,'unknown terms cannot grant credit');
+ const saved=await f.req('/api/invoicing/command',{...envelope,command:cmd},cookies.xavier);assert.equal(saved.status,200,JSON.stringify(saved.data));assert.equal(saved.data.account.invoices[0].actor,'xavier');assert.equal(saved.data.account.receipts.length,1);
+ assert.equal((await f.req('/api/invoicing/command',{...envelope,command:cmd},cookies.xavier)).data.replayed,true);
+ assert.equal((await f.req('/api/invoicing/start',{route:'R12',date,device:'synthetic-factory-phone-00000002',cutover_ack:true},cookies.xalinda)).status,409,'no simultaneous offline writers to the factory account');
+ assert.equal((await f.req('/api/invoicing/finish',{...envelope},cookies.xalinda)).status,403);
+ assert.equal((await f.req('/api/invoicing/finish',{...envelope},cookies.xavier)).status,200);
+ const next=await f.req('/api/invoicing/start',{route:'R12',date,device:'synthetic-factory-phone-00000002',cutover_ack:true},cookies.xalinda);assert.equal(next.status,200);
+ const read=await f.req('/api/invoicing/bootstrap?route=R12',undefined,cookies.xalinda);assert.equal(read.data.accounts[fid].invoices.length,1);assert.equal(accountSummary(read.data.accounts[fid]).balance,0);
+ const road=await f.req('/api/invoicing/bootstrap?route=R03',undefined,cookies.alex);assert.equal(road.data.accounts[id].revision,0);assert.equal(accountSummary(road.data.accounts[id]).balance,10000);
+ const standard=await f.req('/api/bootstrap',undefined,cookies.xavier);assert.ok(standard.data.catalog.routes.every(r=>r.code!=='R12'));
+ assert.equal((await f.req('/api/run?route=R12&date='+date,undefined,cookies.alex)).status,400);
+ // An older general-catalogue screen must not discard the hidden factory row.
+ assert.equal((await f.req('/api/catalog',{revision:2,catalog:{products,routes:[c.routes[0]]}},cookies.alex)).status,200);
+ assert.equal((await f.req('/api/invoicing/bootstrap?route=R12',undefined,cookies.alex)).data.accounts[fid].invoices.length,1);
 });
 test('offline sequence can be replayed in order after reconnection without losing receipts or final balance',async t=>{
  const f=await fixture(t);let a=openingAccount(store),sequence=0;const queue=[];

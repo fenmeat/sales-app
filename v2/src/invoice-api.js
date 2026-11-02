@@ -1,5 +1,5 @@
-import {check,UserError,today,dateKey,addDays} from './domain.js';
-import {isAdmin,hash} from './auth.js';
+import {check,UserError,today,dateKey,addDays,FACTORY_ROUTE} from './domain.js';
+import {isAdmin,hash,canUseFactorySales} from './auth.js';
 import {isInvoiceRep,invoicePhoneGuard,repName} from './invoice-auth.js';
 import {readCustomerBalance} from './zoho.js';
 import {openingAccount,accountSummary,applyInvoiceCommand} from './invoice-domain.js';
@@ -10,7 +10,10 @@ export const INVOICE_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_invoice_events(request_id TEXT PRIMARY KEY, request_hash TEXT NOT NULL, session_id INTEGER NOT NULL, sequence INTEGER NOT NULL, customer_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, captured_at TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(customer_id,revision), UNIQUE(session_id,sequence))`,
  `CREATE INDEX IF NOT EXISTS v2_invoice_customer_events ON v2_invoice_events(customer_id,revision)`
 ];
-export function invoiceAccess(user){check(isAdmin(user.username)||isInvoiceRep(user.username),'This app is available to Alex, Alinda, Tapiz and Musa.',403);}
+export function invoiceAccess(user){check(canUseFactorySales(user.username)||isInvoiceRep(user.username),'Your account does not have invoice access.',403);}
+function mayUseRoute(user,route){return route===FACTORY_ROUTE?canUseFactorySales(user.username):isAdmin(user.username)||isInvoiceRep(user.username);}
+function routeAccess(user,route){check(mayUseRoute(user,route),'Your account does not have access to this sales section.',403);}
+function invoiceRoutes(c){return c.routes.some(r=>r.code===FACTORY_ROUTE)?c.routes:[...c.routes,{code:FACTORY_ROUTE,name:'Factory Sales',invoice_stores:[]}];}
 // Store imports may run while the other phone is working. Keep an active
 // route's account list/openings fixed, and never move or remove a used account.
 export function invoiceCatalogGuard(previous,next){
@@ -22,7 +25,7 @@ export function invoiceCatalogGuard(previous,next){
  if(removed.length){clauses.push('NOT EXISTS(SELECT 1 FROM v2_invoice_events WHERE customer_id IN (SELECT value FROM json_each(?)))');args.push(JSON.stringify(removed));}
  return {sql:clauses.join(' AND ')||'1=1',args};
 }
-function routeStores(c,route){const r=c.routes.find(r=>r.code===route);check(r&&Array.isArray(r.invoice_stores)&&r.invoice_stores.length>0,'This route has not been prepared for invoicing.',409);check(r.invoice_stores.length<=250,'Route is too large.');return r.invoice_stores.map(s=>({...s,route:r.code}));}
+function routeStores(c,route){const r=invoiceRoutes(c).find(r=>r.code===route);check(r&&Array.isArray(r.invoice_stores)&&(r.invoice_stores.length>0||route===FACTORY_ROUTE),'This route has not been prepared for invoicing.',409);check(r.invoice_stores.length<=250,'Route is too large.');return r.invoice_stores.map(s=>({...s,route:r.code}));}
 async function current(db,store){
  const e=await db.prepare('SELECT payload FROM v2_invoice_events WHERE customer_id=? ORDER BY revision DESC LIMIT 1').bind(store.id).first();if(e)return JSON.parse(e.payload);
  const cached=await db.prepare('SELECT payload FROM v2_invoice_balances WHERE customer_id=?').bind(store.id).first(),stored=cached?JSON.parse(cached.payload):null;
@@ -33,20 +36,21 @@ const viewSession=s=>s?{id:s.id,route:s.route,actor:s.actor,device:s.device,date
 export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
  invoiceAccess(user);const db=env.DB,path=url.pathname,guard=invoicePhoneGuard(user);
  if(path==='/api/invoicing/bootstrap'&&request.method==='GET'){
-  const available_routes=catalog.routes.filter(r=>r.invoice_stores?.length).map(r=>({code:r.code,name:r.name}));
+  const available_routes=invoiceRoutes(catalog).filter(r=>mayUseRoute(user,r.code)&&(r.invoice_stores?.length||r.code===FACTORY_ROUTE)).map(r=>({code:r.code,name:r.code===FACTORY_ROUTE?'Factory Sales':r.name}));
+  const requested=url.searchParams.get('route');if(requested)routeAccess(user,requested);
   const own=user.phone_id?await db.prepare("SELECT route FROM v2_invoice_sessions WHERE device=? AND actor=? AND status='active'").bind(user.phone_id,user.username).first():null;
-  const route=own?.route??url.searchParams.get('route')??available_routes[0]?.code??'R03',stores=routeStores(catalog,route),accounts={};
+  const route=own?.route??requested??available_routes[0]?.code??'R03';routeAccess(user,route);const stores=routeStores(catalog,route),accounts={};
   for(const s of stores)accounts[s.id]=await current(db,s);
   const session=await db.prepare("SELECT * FROM v2_invoice_sessions WHERE route=? AND status='active'").bind(route).first();
-  return {username:user.username,display_name:repName(user.username),admin:isAdmin(user.username),rep_phone_id:user.phone_id??null,rep_session_expires:user.phone_id?user.expires:null,date:today(),route,route_name:catalog.routes.find(r=>r.code===route).name,available_routes,stores:stores.map(({opening,...s})=>s),accounts,products:catalog.products.filter(p=>p.active),catalog_revision:catalog.revision,session:viewSession(session),zoho_write:false};
+  return {username:user.username,display_name:repName(user.username),admin:isAdmin(user.username),factory_sales:route===FACTORY_ROUTE,rep_phone_id:user.phone_id??null,rep_session_expires:user.phone_id?user.expires:null,date:today(),route,route_name:available_routes.find(r=>r.code===route).name,available_routes,stores:stores.map(({opening,...s})=>s),accounts,products:catalog.products.filter(p=>p.active),catalog_revision:catalog.revision,session:viewSession(session),zoho_write:false};
  }
- if(path==='/api/invoicing/reconciliation'&&request.method==='GET')return invoiceReconciliation(db,url.searchParams.get('date'),url.searchParams.get('route'));
+ if(path==='/api/invoicing/reconciliation'&&request.method==='GET'){routeAccess(user,url.searchParams.get('route'));return invoiceReconciliation(db,url.searchParams.get('date'),url.searchParams.get('route'));}
  if(path==='/api/invoicing/export'&&request.method==='GET'){
   check(isAdmin(user.username),'Only Alex or Alinda exports the invoice ledger.',403);const from=dateKey(url.searchParams.get('from')??today()),to=dateKey(url.searchParams.get('to')??today());check(from<=to&&to<=addDays(from,31),'Export up to 31 days.');
   const rows=await db.prepare('SELECT e.* FROM v2_invoice_events e JOIN v2_invoice_sessions s ON e.session_id=s.id WHERE s.service_date BETWEEN ? AND ? ORDER BY e.session_id,e.sequence').bind(from,to).all();
   return {generated_at:new Date().toISOString(),from,to,events:rows.results.map(({payload,...e})=>({...e,account:JSON.parse(payload)}))};
  }
- check(request.method==='POST','Method not allowed.',405);const b=await bodyOf(request),route=b.route??'R03',stores=routeStores(catalog,route);
+ check(request.method==='POST','Method not allowed.',405);const b=await bodyOf(request),route=b.route??'R03';routeAccess(user,route);const stores=routeStores(catalog,route);
  if(path==='/api/invoicing/balance'){
   check(isAdmin(user.username),'Alex or Alinda refreshes the Zoho opening balances.',403);const s=stores.find(s=>s.id===b.customer_id);check(s,'Unknown customer.');
   const existing=await db.prepare('SELECT 1 AS found FROM v2_invoice_events WHERE customer_id=? LIMIT 1').bind(s.id).first();check(!existing,'This account has started in the app. Its opening balance is locked; use its app ledger.',409);
@@ -57,6 +61,7 @@ export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
  check(typeof b.device==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(b.device),'Missing phone identifier.');
  if(user.phone_id)check(b.device===user.phone_id,'Use the phone registered to this rep.',403);
  if(path==='/api/invoicing/start'){
+  check(stores.length>0,'Factory customers and verified opening balances still need to be prepared.',409);
   const date=dateKey(b.date);check(date===today(),'Prepare today’s route while online.');
   const old=await db.prepare("SELECT * FROM v2_invoice_sessions WHERE route=? AND status='active'").bind(route).first();
   if(old){check(old.actor===user.username&&old.device===b.device,'This route is open on another phone. Sync and finish that route first.',409);check(old.service_date===date,'Sync and finish the earlier route before starting today.',409);return {session:viewSession(old)};}

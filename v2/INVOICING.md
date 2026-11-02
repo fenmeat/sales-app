@@ -77,3 +77,14 @@ Route/store imports are private catalogue changes, separate from deployment. The
 For unused accounts, the newer verified opening is used whether it came from the import or an owner refresh. An existing app ledger always takes priority. The catalogue save atomically rejects changes to a route's stores/openings while that route is active, and rejects removing or moving an account with app history. Preparing another route remains allowed.
 
 Verification covers route selection when another rep is working, the owner's/phone's unfinished route, two registered phones issuing on separate routes, isolation of customers and receipts, old-cache/new-import precedence, active-route import rejection, and preservation of existing ledger history. Automated checks use isolated synthetic data. The real import must be read back by exact customer ID, count, balance total and source timestamp; app tests do not prove that Zoho's recorded receipts match physical money.
+
+
+## 0.28.0 — Factory Sales
+
+**Invoices → Sales section → Factory Sales** records purchases collected directly at the factory. Alex and Alinda keep their existing delivery-route access. Xavier and Xalinda can enter Invoices for Factory Sales only; they do not acquire credit approval, opening-balance refresh, phone administration or ledger-export privileges. Tapiz, Mosa/Musa and every other account cannot read or write Factory Sales through bootstrap, direct invoice commands, session actions or reconciliation.
+
+Factory Sales uses reserved channel `R12` without a delivery weekday or cycle. It stays out of the Sales route selector, route load sheets, scheduled production and supplier demand. An older general catalogue edit preserves the factory entry. Factory customers/openings are imported privately with the existing audited catalogue API; no customer data or amounts belong in this repository. The section remains visible with an explicit preparation message if its customer list is empty.
+
+The existing invoice controls apply: verified dated opening balances, old-debt checks, explicit Cash/Shop2Shop receipts, owner-approved credit terms, exact retry identifiers and shared account history. A historic pooled factory account remains that same account; deployment never resets its debt, allocates it to invented customers or marks invoices paid. A cash sale does not bypass outstanding prior debt under the current business rule.
+
+One named person/device operates the factory sales session at a time, using the existing offline ledger protection. **More → Finish factory sales** syncs and releases the session before another person/device starts. The four authorised people share the same saved factory history. Their physical-device acceptance is separate from the isolated automated checks.

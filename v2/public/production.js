@@ -1,4 +1,4 @@
-import {check,dateKey,addDays,routeScheduled,isQty,roundQty,cleanText,today,availableForLoad} from './domain.js';
+import {check,dateKey,addDays,routeScheduled,isQty,roundQty,cleanText,today,availableForLoad,FACTORY_ROUTE} from './domain.js';
 // Legacy references are provisional. Approved register yields take precedence
 // for new days; saved dated plans retain their recorded decisions.
 const yields={W01:13,W02:26,W03:24,W04:55,W05:50,W06:16,W07:29,W08:31,R05:22,R06:24,R07:23,V01:32,V02:36};
@@ -61,7 +61,7 @@ export function nextProductionTarget(date,routes){for(let n=1;n<=28;n++){const d
 export function productionContext(plan,catalog){
  dateKey(plan.date);dateKey(plan.target_date);check(plan.target_date>plan.date&&plan.target_date<=addDays(plan.date,14),'Choose a route date after production, within 14 days.');
  check(Array.isArray(plan.routes)&&plan.routes.length>0&&plan.routes.length<=50,'Choose at least one route.');
- check(new Set(plan.routes).size===plan.routes.length&&plan.routes.every(code=>catalog.routes.some(r=>r.code===code)),'Unknown or repeated route.');
+ check(new Set(plan.routes).size===plan.routes.length&&plan.routes.every(code=>catalog.routes.some(r=>r.code===code&&r.code!==FACTORY_ROUTE)),'Unknown or repeated route.');
 }
 export function aggregateProductionDemand(products,sources){return products.map(p=>{
  const breakdown=sources.map(s=>{const i=s.run?.items.find(x=>x.code===p.code);const manual=i?.planned;

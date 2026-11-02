@@ -694,3 +694,8 @@ Alex authorised the existing `xavier` and `xalinda` accounts to use the **Produc
 This permission does not make either staff account an administrator. Full catalogue replacement is restricted to Alex and Alinda. The availability response uses the same catalogue projection as bootstrap, so route `invoice_stores` stay private while the stored data is retained. Existing credentials, sessions, stocktake access and invoice-only rep restrictions are retained. Deployment does not change any product availability or business records; staff choose and save the actual availability in the app. No schema or dependency change is required.
 
 Validation: all 274 Node/workerd tests and the Worker deployment dry-run pass. Synthetic account/D1 tests cover both staff identities, ON/OFF persistence and audit, stale edits, inactive/unknown products, origin checks, manager boundaries, invoice-only reps and retained private route data. DOM tests cover enabled switches, save feedback, duplicate-click prevention and read-only fallback. Actual staff-device login was not used for testing.
+
+
+### 0.28.0 — Factory Sales, 2 November 2026
+
+Adds Factory Sales within Invoices for Alex, Alinda, Xavier and Xalinda, with server-enforced exclusion of reps. Factory-only staff do not gain road-route or admin permissions. The separate invoice channel is excluded from delivery scheduling and production demand. Existing receipt, credit, revision, offline queue and single-device session controls are retained. Customer data is prepared privately, independently of the source deployment. See [INVOICING.md](INVOICING.md).
