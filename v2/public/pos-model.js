@@ -1,3 +1,4 @@
+import {cashierName,receiptPaymentRows} from './pos-receipt.js';
 import {parseAmount,parseQuantity} from './invoice-domain.js';
 export const escapeHTML=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const money=value=>new Intl.NumberFormat('en-ZA',{style:'currency',currency:'ZAR'}).format(value/100);
@@ -10,7 +11,7 @@ export function paymentAmounts(fields,total){
   const cash=total-card-shop2shop,short=Math.max(0,cash-cash_tendered),change=Math.max(0,cash_tendered-cash);
   return {cash_tendered,card,shop2shop,cash,short,change,received:fields.received===true,card_approved:fields.card_approved===true,card_reference:fields.card_reference??'',shop2shop_reference:fields.shop2shop_reference??''};
 }
-export function receiptMessage(sale){return ['FenMeat · '+sale.number,sale.customer.name,'Date: '+sale.date,...sale.lines.map(l=>`${l.name}: ${l.qty/1000} × ${money(l.price)} = ${money(l.total)}`),'Total: '+money(sale.total),'Paid in full','Cash: '+money(sale.payment.cash),'Card (Capitec): '+money(sale.payment.card),'Shop2Shop: '+money(sale.payment.shop2shop),'Served by: '+sale.actor].join('\n');}
+export function receiptMessage(sale){return ['FenMeat · '+sale.number,sale.customer.name,'Date: '+sale.date,...sale.lines.map(l=>`${l.name}: ${l.qty/1000} × ${money(l.price)} = ${money(l.total)}`),'Total: '+money(sale.total),'Paid in full',...receiptPaymentRows(sale.payment).map(row=>row.label+': '+money(row.amount)),'Served by: '+cashierName(sale.actor)].join('\n');}
 // A separate storage key per sale avoids overwriting another tab's basket.
 export function draftStore(storage,username){
   const prefix='fm-pos:draft:'+username+':';

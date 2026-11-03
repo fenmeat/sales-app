@@ -1,3 +1,4 @@
+import {cashierName,receiptPaymentRows} from '../public/pos-receipt.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -14,7 +15,7 @@ async function page({local=new Storage(),session=new Storage(),backend={sales:ne
   const {document}=parseHTML(html),events=new Map();document.addEventListener=(event,fn)=>events.set(event,fn);
   const dialog=document.querySelector('#modal');dialog.showModal=()=>{dialog.open=true;};dialog.close=()=>{dialog.open=false;};
   const context={document,window:{addEventListener(){}},localStorage:local,sessionStorage:session,crypto,URLSearchParams,Date,Intl,AbortSignal,confirm:()=>true,
-    parseQuantity,esc:escapeHTML,money,newDraft,cartLines,paymentAmounts,receiptMessage,draftStore,
+    cashierName,receiptPaymentRows,parseQuantity,esc:escapeHTML,money,newDraft,cartLines,paymentAmounts,receiptMessage,draftStore,
     fetch:async(path,options={})=>{
       const body=options.body?JSON.parse(options.body):null;backend.calls.push({path,body});let data,status=200;
       if(unauthorized){status=403;data={error:'Not allowed'};}

@@ -1,4 +1,10 @@
-# Factory POS — 0.29.0
+# Factory POS — 0.29.1
+
+## Receipt presentation — 3 November 2026
+
+Receipts use the original logo extracted without modification from the approved `FenMeat_Official_Letterhead_PDF_Master.pdf`, together with its black header/footer, royal-blue rule, navy panels, legal name and margins. The source and PNG hashes are retained in `src/fenmeat-receipt-brand.js`. A4 output keeps product rows together and repeats the table headings and receipt number on continuation pages. The document is labelled **Sales receipt**; no new VAT calculation or tax-invoice claim is introduced.
+
+The PDF, on-screen receipt and WhatsApp handoff show only payment methods with a positive saved amount. Cash tendered and change appear when cash was handed over. Split payments retain every used method. Cashier names display as Alex, Alinda, Xavier and Xalinda; saved account identities remain unchanged. Reopening an existing receipt uses the current presentation without changing the original sale or its stock/payment records. Daily totals continue showing every payment channel, including zeroes.
 
 Factory POS is a counter-sales module at `/pos`, separate from delivery routes. Alex approved this workflow on 3 November 2026: Alex, Alinda, Xavier and Xalinda serve customers concurrently; every sale is paid immediately with Cash, Card on the existing Capitec terminal, Shop2Shop, or a split. Server access is limited to those exact four accounts. Reps and other accounts cannot read or write the POS, customers, reports or receipts.
 
