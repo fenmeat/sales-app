@@ -62,6 +62,7 @@ test('Old read grants never gain writes; only explicit owner write consent grant
  for(const name of ['save_app_data','restore_app_change','test_app_write_access']){const denied=await f.rpc(old.tokens,'tools/call',{name,arguments:{}});assert.equal(denied.response.status,403);assert.match(denied.response.headers.get('www-authenticate'),/fenmeat:write/);}
  const refreshed=await f.req('/oauth/token',{form:{grant_type:'refresh_token',client_id:old.client.client_id,refresh_token:old.tokens.refresh_token,resource:origin+'/mcp'}});assert.equal(refreshed.status,200);const readTokens=await refreshed.json();assert.ok(!readTokens.scope.includes('fenmeat:write'));
  const status=await ok(f,readTokens,'get_access_status');assert.equal(status.write_access,false);
+ const pos=await ok(f,readTokens,'get_access_status',{pos:{}});assert.equal(pos.invoice_access.factory_sales.mode,'pos');assert.deepEqual(pos.invoice_access.factory_sales.payment_methods,['cash','card','shop2shop']);assert.equal(pos.pos.totals.sales,0);
  const write=await f.connect(true);assert.ok(write.tokens.scope.includes('fenmeat:write'));assert.equal((await ok(f,write.tokens,'get_access_status')).write_access,true);
  const testResult=await ok(f,write.tokens,'test_app_write_access');assert.equal(testResult.write_access_verified,true);assert.equal(testResult.business_data_changed,false);assert.equal((await f.db.prepare('SELECT count(*) n FROM v2_pa_write_probes').first()).n,0);
  assert.deepEqual(await businessSnapshot(f.db),before);

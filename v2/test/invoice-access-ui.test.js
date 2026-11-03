@@ -93,16 +93,15 @@ test('an unfinished route owned by this phone still requires finishing before sw
  assert.ok(p.document.querySelector('[data-action=finish]'));
  assert.match(p.document.querySelector('#app').textContent,/Finish the previous route/);
 });
-test('Factory Sales uses factory labels and does not expose admin controls to Xavier',async()=>{
+test('Factory Sales opens the separate POS and retains previous records without exposing admin controls',async()=>{
  const initial=saved();Object.assign(initial.data,{username:'xavier',display_name:'Xavier',factory_sales:true,admin:false,rep_phone_id:null,route:'R12',route_name:'Factory Sales',available_routes:[{code:'R12',name:'Factory Sales'}],session:null});
  const p=await page(initial,async()=>initial.data);
- assert.equal(p.document.querySelector('#routeTitle').textContent,'Factory Sales');assert.equal(p.document.querySelector('[data-action=prepare]').textContent,'Start factory sales');
- assert.equal(p.document.querySelector('#routeChoice'),null);
- await p.ui.action('prepare');assert.match(p.document.querySelector('#startRoute').textContent,/these factory sales/);
+ assert.ok(p.document.querySelector('a[href="/pos"]'));assert.ok(p.document.querySelector('a[href="/"]'));assert.equal(p.document.querySelector('[data-action=prepare]'),null);
+ assert.match(p.document.querySelector('#app').textContent,/Previous Factory records/);
  await p.ui.action('routeOptions');assert.ok(!p.document.querySelector('a[href*=phones]'));assert.ok(!p.document.querySelector('[data-action=balances]'));
  p.ui.state.data.session={...session,actor:'xavier',device:phone};p.ui.render();
- assert.equal(p.document.querySelector('[data-action=overview]').textContent,'Factory totals');
- assert.ok(!p.document.querySelector('[data-action=terms]'));assert.ok(p.document.querySelector('[data-action=complete]'));
+ assert.ok(!p.document.querySelector('[data-action=complete]'));assert.ok(!p.document.querySelector('[data-action=terms]'));
+ await p.ui.action('routeOptions');assert.ok(p.document.querySelector('[data-action=finish]'),'legacy pending session can still sync and finish');
 });
 test('denied factory bootstrap hides cached customer data and never falls back to it online',async()=>{
  const initial=saved();initial.data.route='R12';initial.data.factory_sales=true;

@@ -1,3 +1,5 @@
+> **Current Factory workflow:** Factory counter sales now use [Factory POS](POS.md), not a delivery route. The 0.28.0 Factory section below describes the preserved legacy workflow.
+
 # Route invoicing — 0.24.1
 
 Open **Invoices** in the existing app or `/invoicing/`. Alex and Alinda use their existing personal username/key. Tapiz and Musa use a six-digit PIN on their registered road phone. Deployment creates no actual PINs or invitations and does not change access secrets. All new UI text is English. Musa retains the existing internal username `mosa` so his audit history stays consistent.

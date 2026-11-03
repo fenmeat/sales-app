@@ -699,3 +699,8 @@ Validation: all 274 Node/workerd tests and the Worker deployment dry-run pass. S
 ### 0.28.0 — Factory Sales, 2 November 2026
 
 Adds Factory Sales within Invoices for Alex, Alinda, Xavier and Xalinda, with server-enforced exclusion of reps. Factory-only staff do not gain road-route or admin permissions. The separate invoice channel is excluded from delivery scheduling and production demand. Existing receipt, credit, revision, offline queue and single-device session controls are retained. Customer data is prepared privately, independently of the source deployment. See [INVOICING.md](INVOICING.md).
+
+
+## 0.29.0 — Factory POS
+
+[Factory POS](POS.md) adds independent concurrent counter sales for Alex, Alinda, Xavier and Xalinda, with fully paid Cash, Capitec card and Shop2Shop transactions, saved drafts, customers, receipts, daily totals and atomic stock issues. The existing R12 ledger and road workflows remain intact. Open **Factory POS** from Home.

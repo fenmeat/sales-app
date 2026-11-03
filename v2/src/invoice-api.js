@@ -65,6 +65,7 @@ export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
   const date=dateKey(b.date);check(date===today(),'Prepare today’s route while online.');
   const old=await db.prepare("SELECT * FROM v2_invoice_sessions WHERE route=? AND status='active'").bind(route).first();
   if(old){check(old.actor===user.username&&old.device===b.device,'This route is open on another phone. Sync and finish that route first.',409);check(old.service_date===date,'Sync and finish the earlier route before starting today.',409);return {session:viewSession(old)};}
+  check(route!==FACTORY_ROUTE,'Open Factory POS from Home for new factory sales.',409);
   check(b.cutover_ack===true,'Confirm that this route’s invoices and collections will now be recorded in this app.');
   for(const s of stores){const a=await current(db,s);check(a,'A shop has no verified opening balance: '+s.name,409);if(a.revision===0)check(Date.parse(a.opening.generated_at)>=Date.now()-36*3600000,'Refresh the opening balance for '+s.name,409);}
   const snapshot={products:catalog.products,revision:catalog.revision};let row;

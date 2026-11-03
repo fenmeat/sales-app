@@ -95,6 +95,8 @@ test('Factory Sales permits the four named staff, denies reps at every invoice b
   assert.equal((await f.req('/api/invoicing/balance',{route:'R12',customer_id:fid},cookies[name])).status,403);
  }
  assert.equal((await f.req('/api/invoicing/bootstrap?route=R12',undefined,cookies.other)).status,403);
+ const db=await f.mf.getD1Database('DB');
+ await db.prepare("INSERT INTO v2_invoice_sessions(route,actor,device,service_date,status,sequence,catalog,opened_at) VALUES('R12','xavier','synthetic-factory-phone-00000001',?,'active',0,?,?)").bind(date,JSON.stringify({products,revision:2}),new Date().toISOString()).run();
  const device='synthetic-factory-phone-00000001',started=await f.req('/api/invoicing/start',{route:'R12',date,device,cutover_ack:true},cookies.xavier);assert.equal(started.status,200,JSON.stringify(started.data));
  const envelope={route:'R12',device,session_id:started.data.session.id,sequence:1};
  const cmd={customer_id:fid,request_id:crypto.randomUUID(),revision:0,captured_at:new Date().toISOString(),action:'issue',lines:[{code:'P1',qty:1000,checked:true}],cash:10000,shop2shop:0,received:true};
@@ -105,7 +107,7 @@ test('Factory Sales permits the four named staff, denies reps at every invoice b
  assert.equal((await f.req('/api/invoicing/start',{route:'R12',date,device:'synthetic-factory-phone-00000002',cutover_ack:true},cookies.xalinda)).status,409,'no simultaneous offline writers to the factory account');
  assert.equal((await f.req('/api/invoicing/finish',{...envelope},cookies.xalinda)).status,403);
  assert.equal((await f.req('/api/invoicing/finish',{...envelope},cookies.xavier)).status,200);
- const next=await f.req('/api/invoicing/start',{route:'R12',date,device:'synthetic-factory-phone-00000002',cutover_ack:true},cookies.xalinda);assert.equal(next.status,200);
+ const next=await f.req('/api/invoicing/start',{route:'R12',date,device:'synthetic-factory-phone-00000002',cutover_ack:true},cookies.xalinda);assert.equal(next.status,409,'new factory work uses POS; legacy history remains readable');
  const read=await f.req('/api/invoicing/bootstrap?route=R12',undefined,cookies.xalinda);assert.equal(read.data.accounts[fid].invoices.length,1);assert.equal(accountSummary(read.data.accounts[fid]).balance,0);
  const road=await f.req('/api/invoicing/bootstrap?route=R03',undefined,cookies.alex);assert.equal(road.data.accounts[id].revision,0);assert.equal(accountSummary(road.data.accounts[id]).balance,10000);
  const standard=await f.req('/api/bootstrap',undefined,cookies.xavier);assert.ok(standard.data.catalog.routes.every(r=>r.code!=='R12'));
