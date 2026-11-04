@@ -36,7 +36,10 @@ const viewSession=s=>s?{id:s.id,route:s.route,actor:s.actor,device:s.device,date
 export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
  invoiceAccess(user);const db=env.DB,path=url.pathname,guard=invoicePhoneGuard(user);
  if(['/api/invoicing/shop-list','/api/invoicing/shop-list/pdf'].includes(path)&&request.method==='GET'){
-  const route=url.searchParams.get('route'),date=dateKey(url.searchParams.get('date'));routeAccess(user,route);check(route!==FACTORY_ROUTE,'Factory POS does not have a delivery shop list.');
+  const route=url.searchParams.get('route'),date=dateKey(url.searchParams.get('date'));
+  // These staff may print the blank route sheet without gaining road invoice access.
+  const staffPrint=path==='/api/invoicing/shop-list/pdf'&&['xavier','xalinda'].includes(user.username);
+  if(!staffPrint)routeAccess(user,route);check(route!==FACTORY_ROUTE,'Factory POS does not have a delivery shop list.');
   const stores=routeStores(catalog,route),definition=catalog.routes.find(r=>r.code===route);
   const saved=await db.prepare('SELECT payload,revision FROM v2_events WHERE run_id=? ORDER BY revision DESC LIMIT 1').bind(date+'|'+route).first();
   const previous=saved?JSON.parse(saved.payload):null,rows=shopDeliveryRows(previous?.shop_deliveries??stores);

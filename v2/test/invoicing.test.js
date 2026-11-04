@@ -71,6 +71,23 @@ test('Shop List uses stable route identity, persists separate manual counts and 
  const response=await f.mf.dispatchFetch('https://fenmeat-sales-test.alexander-fenwick.workers.dev/api/invoicing/shop-list/pdf?route=R03&date='+date,{headers:{Cookie:f.cookie}});assert.equal(response.status,200);assert.equal(response.headers.get('Content-Type'),'application/pdf');
  const {PDFDocument}=await import('pdf-lib');assert.equal((await PDFDocument.load(await response.arrayBuffer())).getPageCount(),1);
 });
+test('Xavier and Xalinda can print Shop Lists without road invoice or reconciliation access',async t=>{
+ const f=await fixture(t),origin='https://fenmeat-sales-test.alexander-fenwick.workers.dev',pdfPath='/api/invoicing/shop-list/pdf?route=R03&date='+date;
+ const before=await f.req('/api/invoicing/bootstrap?route=R03',undefined,f.cookie),runBefore=await f.req('/api/run?route=R03&date='+date,undefined,f.cookie);
+ const {PDFDocument}=await import('pdf-lib');
+ for(const name of ['xavier','xalinda']){
+  const cookie=await f.login(name),boot=await f.req('/api/bootstrap',undefined,cookie);
+  assert.equal(boot.status,200);assert.equal(boot.data.catalog.routes.find(r=>r.code==='R03').invoice_enabled,true,'Print Shop List is available in Sales');
+  const pdf=await f.mf.dispatchFetch(origin+pdfPath,{headers:{Cookie:cookie}});
+  assert.equal(pdf.status,200,name+' can print');assert.equal(pdf.headers.get('Content-Type'),'application/pdf');assert.equal((await PDFDocument.load(await pdf.arrayBuffer())).getPageCount(),1);
+  for(const path of ['/api/invoicing/shop-list?route=R03&date='+date,'/api/invoicing/bootstrap?route=R03','/api/invoicing/reconciliation?route=R03&date='+date,'/api/invoicing/export'])assert.equal((await f.req(path,undefined,cookie)).status,403,path+' '+name);
+  for(const path of ['/api/invoicing/start','/api/invoicing/balance','/api/invoicing/command','/api/invoicing/shop-list/pdf'])assert.equal((await f.req(path,{route:'R03'},cookie)).status,403,path+' '+name);
+  assert.equal((await f.req('/api/invoicing/shop-list/pdf?route=R12&date='+date,undefined,cookie)).status,400,'Factory POS is not a delivery route');
+ }
+ assert.equal((await f.req(pdfPath)).status,401);assert.equal((await f.req(pdfPath,undefined,await f.login('other'))).status,403);
+ const after=await f.req('/api/invoicing/bootstrap?route=R03',undefined,f.cookie),runAfter=await f.req('/api/run?route=R03&date='+date,undefined,f.cookie);
+ assert.deepEqual(after.data.accounts,before.data.accounts);assert.deepEqual(after.data.session,before.data.session);assert.deepEqual(runAfter.data.run,runBefore.data.run);assert.equal(runAfter.data.revision,runBefore.data.revision);
+});
 test('real workerd/D1 persists atomically, protects replay and concurrent route access, rejects unauthorised reads',async t=>{
  const f=await fixture(t);
  assert.equal((await f.req('/api/invoicing/bootstrap')).status,401);
