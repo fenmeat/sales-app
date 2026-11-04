@@ -13,7 +13,7 @@ async function fixture(t){
  const cookies={};async function call(user,path,body,headers={}){const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookies[user]??'',...headers},body:body?JSON.stringify(body):undefined});const data=await r.json();return {status:r.status,data,headers:r.headers};}
  for(const username of Object.keys(keys)){const r=await call(username,'/api/login',{username,key:keys[username]});assert.equal(r.status,200);cookies[username]=r.headers.get('set-cookie').split(';')[0];}
  const task=(data={})=>({task_id:crypto.randomUUID(),request_id:crypto.randomUUID(),revision:0,action:'create',data:{title:'Synthetic review',assigned_to:'xalinda',review_date:today(),...data}});
- return {mf,call,task,db:await mf.getD1Database('DB')};
+ return {mf,call,task,readFile:(user,id)=>mf.dispatchFetch(origin+'/api/tasks/file?id='+id,{headers:{Cookie:cookies[user]??''}}),db:await mf.getD1Database('DB')};
 }
 test('tasks enforce owner privacy, admin assignment, revisions, idempotency, evidence and notifications',async t=>{
  const {call,task,db}=await fixture(t),b=task({requires_evidence:true});
@@ -154,4 +154,32 @@ test('reassignment removes old-owner task, notification, audit and attachment ac
  assert.equal((await db.prepare("SELECT COUNT(*) n FROM v2_task_notifications WHERE username='xalinda'").first()).n,0);
  assert.equal((await call('xavier','/api/tasks')).data.tasks.length,1);
  for(const admin of ['alex','alinda'])assert.equal((await call(admin,'/api/tasks')).data.tasks.length,1);
+});
+
+
+test('twelve evidence files persist, reopen independently and retain task access and legacy single-file support',async t=>{
+ const {call,task,db,readFile}=await fixture(t),b=task({requires_evidence:true});
+ assert.equal((await call('alinda','/api/tasks',b)).status,200);
+ const bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=','base64');
+ const uploads=Array.from({length:12},(_,i)=>({task_id:b.task_id,id:crypto.randomUUID(),filename:`photo-${i+1}.png`,mime_type:'image/png',base64:bytes.toString('base64')}));
+ for(const u of uploads)assert.equal((await call('xalinda','/api/tasks/file',u)).status,200);
+ assert.equal((await call('xalinda','/api/tasks/file',uploads[0])).status,200,'lost upload response can retry at the limit');
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_task_attachments WHERE task_id=?').bind(b.task_id).first()).n,12);
+ assert.equal((await call('xalinda','/api/tasks/file',{...uploads[0],id:crypto.randomUUID()})).status,400);
+ const completion={task_id:b.task_id,request_id:crypto.randomUUID(),revision:1,action:'complete',attachments:uploads.map(u=>u.id)};
+ assert.equal((await call('xalinda','/api/tasks',{...completion,attachments:[uploads[0].id,uploads[0].id]})).status,400);
+ assert.equal((await call('xalinda','/api/tasks',{...completion,attachments:[...completion.attachments,crypto.randomUUID()]})).status,400);
+ const other=task();assert.equal((await call('alex','/api/tasks',other)).status,200);
+ assert.equal((await call('xalinda','/api/tasks',{...completion,task_id:other.task_id})).status,400,'files from another task cannot be linked');
+ assert.equal((await call('xalinda','/api/tasks',completion)).status,200);
+ assert.equal((await call('xalinda','/api/tasks',completion)).data.replayed,true);
+ const reloaded=(await call('alinda','/api/tasks')).data.tasks.find(x=>x.id===b.task_id);
+ assert.deepEqual(reloaded.completion.attachments,completion.attachments);
+ for(const u of uploads){const file=await readFile('xalinda',u.id);assert.equal(file.status,200);assert.deepEqual(Buffer.from(await file.arrayBuffer()),bytes);assert.match(file.headers.get('Cache-Control'),/no-store/);}
+ for(const user of ['xavier','tapiz',''])assert.notEqual((await readFile(user,uploads[0].id)).status,200,'evidence remains private');
+ for(const user of ['alex','alinda'])assert.equal((await readFile(user,uploads[0].id)).status,200);
+ const legacy={...uploads[0],task_id:other.task_id,id:crypto.randomUUID()};
+ assert.equal((await call('xalinda','/api/tasks/file',legacy)).status,200);
+ assert.equal((await call('xalinda','/api/tasks',{...completion,task_id:other.task_id,request_id:crypto.randomUUID(),attachments:[legacy.id]})).status,200);
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_events').first()).n,0);
 });

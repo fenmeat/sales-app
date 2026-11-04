@@ -136,7 +136,7 @@ export async function saveTask(env,user,b){
   }else if(action==='complete'){
    check(old.status==='Pending'||old.status==='Waiting','This task is already closed.');
    const note=optionalText(b.note,2000),proof_url=safeURL(b.proof_url),attachments=Array.isArray(b.attachments)?b.attachments:[];
-   check(attachments.length<=4&&attachments.every(x=>ID.test(x)),'Invalid attachments.');
+   check(attachments.length<=12&&new Set(attachments).size===attachments.length&&attachments.every(x=>typeof x==='string'&&ID.test(x)),'Choose up to 12 different attachments.');
    for(const id of attachments){const file=await env.DB.prepare('SELECT task_id FROM v2_task_attachments WHERE id=?').bind(id).first();check(file?.task_id===task.id,'An attachment belongs to another task.');}
    check(!task.requires_evidence||proof_url||attachments.length,'Attach the required completion evidence.');
    const completion={by:user.username,at,note,proof_url,attachments};
@@ -226,7 +226,7 @@ export async function tasksApi({request,url,env,user,bodyOf}){
  if(path==='/api/tasks/file'&&request.method==='GET'){
   const id=url.searchParams.get('id');check(ID.test(id??''),'Invalid attachment.');
   const file=await env.DB.prepare('SELECT * FROM v2_task_attachments WHERE id=?').bind(id).first();check(file,'Attachment not found.',404);visible(user,await getTask(env.DB,file.task_id));
-  return new Response(file.bytes,{headers:{'Content-Type':file.mime_type,'Content-Disposition':'inline; filename="'+file.filename+'"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
+  return new Response(new Uint8Array(file.bytes),{headers:{'Content-Type':file.mime_type,'Content-Disposition':'inline; filename="'+file.filename+'"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
  }
  if(path==='/api/tasks/audit'&&request.method==='GET'){
   const task=visible(user,await getTask(env.DB,url.searchParams.get('id')??''));

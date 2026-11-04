@@ -4,6 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {parseHTML} from 'linkedom';
 import {renderReport} from '../public/tasks-report.js';
 import {reminderOptions} from '../public/task-report-model.js';
+import {attachmentPicker,MAX_TASK_ATTACHMENTS} from '../public/task-attachments.js';
 
 async function screen(username,tasks=[],view='',mailPages=null){
  const {document}=parseHTML('<html><body><div id="app"></div><dialog id="dialog"></dialog><div id="message"></div></body></html>');
@@ -19,16 +20,16 @@ async function screen(username,tasks=[],view='',mailPages=null){
  const dq=dialog.querySelector.bind(dialog);dialog.querySelector=s=>prepare(dq(s));
  document.querySelector=s=>prepare(query(s));
  class FormData{
-  constructor(form){this.values=[...form.querySelectorAll('[name]')].filter(c=>c.type!=='checkbox'||c.checked).map(c=>[c.name,c.type==='checkbox'?'on':c.value]);}
+  constructor(form){this.values=(form.querySelector('fieldset')?.disabled?[]:[...form.querySelectorAll('[name]')]).filter(c=>c.type!=='checkbox'||c.checked).map(c=>[c.name,c.type==='checkbox'?'on':c.value]);}
   has(name){return this.values.some(([key])=>key===name);}
   [Symbol.iterator](){return this.values[Symbol.iterator]();}
  }
  const state={username,admin:['alex','alinda'].includes(username),today:'2099-11-02',users:['alex','alinda'].includes(username)?['alex','alinda','xalinda','xavier']:[username],suppliers:['crown'],tasks,notifications:[],next_offset:null};
- const posts=[];let failNext=false;
+ const posts=[],postPaths=[];let failNext=false,failAt=-1;
  const fetch=async(path,options={})=>{
   if(options.method==='POST'){
-   const body=JSON.parse(options.body);posts.push(body);
-   if(failNext){failNext=false;throw Error('Connection interrupted. Please retry.');}
+   const body=JSON.parse(options.body);posts.push(body);postPaths.push(path);
+   if(failNext||posts.length===failAt){failNext=false;throw Error('Connection interrupted. Please retry.');}
    return {ok:true,json:async()=>({task:{...body.data,id:body.task_id,revision:1}})};
   }
   if(path.startsWith('/api/tasks/emails'))return {ok:true,json:async()=>mailPages?structuredClone(mailPages[path]):({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
@@ -36,8 +37,8 @@ async function screen(username,tasks=[],view='',mailPages=null){
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions',source)(document,{}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions);
- return {document,dialog,posts,failNext:()=>failNext=true};
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS',source)(document,{}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS);
+ return {document,dialog,posts,postPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 
 test('staff creation UI offers self-assigned tasks, SAST reminders and stable retry identifiers',async()=>{
@@ -113,4 +114,55 @@ test('report reads every email-status page before offering another send',async()
   '/api/tasks/emails?offset=100':{requests:[{id:'synthetic-email-request',task_id:'synthetic-report-task',status:'pending'}],next_offset:null}
  });
  assert.match(document.querySelector('#app').textContent,/Email queued/);assert.ok(document.querySelector('[data-cancel-email]'));assert.equal(document.querySelector('[data-email]'),null);
+});
+
+const pdf=name=>new File(['%PDF-1.4 synthetic test evidence'],name,{type:'application/pdf',lastModified:1});
+function selectFiles(ui,files){const input=ui.dialog.querySelector('#attachment');Object.defineProperty(input,'files',{configurable:true,value:files});input.onchange();}
+
+test('completion accepts multiple selections, adds more, ignores duplicate choices and removes one file',async()=>{
+ const ui=await screen('xavier',[reportTask({requires_evidence:true})]);
+ ui.document.querySelector('[data-complete]').onclick();
+ assert.equal(ui.dialog.querySelector('#attachment').hasAttribute('multiple'),true);
+ const a=pdf('first.pdf'),b=pdf('second.pdf'),c=pdf('third.pdf');
+ selectFiles(ui,[a,b]);selectFiles(ui,[a,c]);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,3);
+ ui.dialog.querySelector('[aria-label="Remove second.pdf"]').onclick();
+ assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,2);
+ const form=ui.dialog.querySelector('form');form.elements.note.value='Two evidence files';
+ await Promise.all([form.onsubmit({preventDefault(){}}),form.onsubmit({preventDefault(){}})]);
+ assert.deepEqual(ui.postPaths,['/api/tasks/file','/api/tasks/file','/api/tasks']);
+ assert.deepEqual(ui.posts.slice(0,2).map(p=>p.filename),['first.pdf','third.pdf']);
+ assert.deepEqual(ui.posts[2].attachments,ui.posts.slice(0,2).map(p=>p.id));
+ assert.equal(ui.posts[2].note,'Two evidence files');assert.equal(ui.dialog.open,false);
+});
+
+test('partial upload and lost completion responses retry the same IDs without duplicating successful files',async()=>{
+ const ui=await screen('xalinda',[reportTask({assigned_to:'xalinda',requires_evidence:true})]);
+ ui.document.querySelector('[data-complete]').onclick();selectFiles(ui,[pdf('a.pdf'),pdf('b.pdf'),pdf('c.pdf')]);
+ const form=ui.dialog.querySelector('form');ui.failOnPost(2);await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.dialog.open,true);assert.equal(ui.posts.some(p=>p.action==='complete'),false);
+ assert.match(form.querySelector('.error').textContent,/b.pdf.*Connection interrupted/);
+ assert.equal(form.querySelector('fieldset').disabled,false);
+ ui.failOnPost(5);await form.onsubmit({preventDefault(){}});
+ assert.deepEqual(ui.posts[1],ui.posts[2],'retry the uncertain upload with the same ID and bytes');
+ assert.equal(ui.posts[4].attachments.length,3);assert.equal(ui.dialog.open,true);
+ await form.onsubmit({preventDefault(){}});
+ assert.deepEqual(ui.postPaths,['/api/tasks/file','/api/tasks/file','/api/tasks/file','/api/tasks/file','/api/tasks','/api/tasks']);
+ assert.deepEqual(ui.posts[4],ui.posts[5],'completion retries exactly once with its original request ID');
+ assert.equal(ui.dialog.open,false);
+});
+
+test('selection limits and invalid files keep earlier choices and completed tasks display every attachment',async()=>{
+ const ui=await screen('xavier',[reportTask()]);ui.document.querySelector('[data-complete]').onclick();
+ selectFiles(ui,Array.from({length:12},(_,i)=>pdf(`file-${i}.pdf`)));
+ assert.match(ui.dialog.querySelector('#attachment-status').textContent,/12 of 12/);
+ selectFiles(ui,[pdf('extra.pdf')]);assert.match(ui.dialog.querySelector('.error').textContent,/up to 12/);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,12);
+ selectFiles(ui,[new File(['bad'],'unsupported.txt',{type:'text/plain'})]);assert.match(ui.dialog.querySelector('.error').textContent,/JPG, PNG or PDF/);
+ assert.equal(ui.posts.length,0);
+ const ids=['first-file-id','second-file-id','third-file-id'];
+ const closed=await screen('xavier',[reportTask({status:'Complete',completion:{by:'xavier',at:'2099-11-02T08:00:00Z',attachments:ids}})]);
+ closed.document.querySelector('#filter').onchange({target:{value:'closed'}});
+ closed.document.querySelector('[data-task]').onclick();
+ const links=[...closed.dialog.querySelectorAll('a[href^="/api/tasks/file"]')];
+ assert.deepEqual(links.map(a=>a.getAttribute('href')),ids.map(id=>'/api/tasks/file?id='+id));
+ assert.deepEqual(links.map(a=>a.textContent),['Open attachment 1 of 3','Open attachment 2 of 3','Open attachment 3 of 3']);
 });
