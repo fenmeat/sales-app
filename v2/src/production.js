@@ -11,6 +11,13 @@ const whole=n=>Math.ceil(Math.max(0,n-1e-9));
 const sumKnown=values=>values.some(v=>v==null)?null:values.reduce((a,v)=>a+v,0);
 const equivalent=(qty,yieldQty)=>qty==null?null:qty===0?0:yieldQty>0?qty/yieldQty:null;
 const has=(object,key)=>Object.prototype.hasOwnProperty.call(object,key);
+// A packing estimate from already-cooked stock only. Shared recipe sizes are
+// alternatives using the same stock, never quantities to add together.
+const coldroomSalesUnits=(stock,yieldQty)=>{
+ if(typeof stock!=='number'||!Number.isFinite(stock)||stock<0||stock>100000)return null;
+ if(stock===0)return 0;
+ return typeof yieldQty==='number'&&Number.isFinite(yieldQty)&&yieldQty>0&&yieldQty<=100000?roundQty(stock*yieldQty):null;
+};
 // Physical packed stock after production, before any later stock movements.
 // Route demand and planned packing never substitute for measured output.
 export function productionStockBalance(item){
@@ -93,6 +100,7 @@ export function productionSummary(input){
  const items=plan.items.map(i=>{const shortage=i.demand==null||i.stock==null?null:roundQty(Math.max(0,i.demand-i.stock));return {...i,shortage,packing_qty:i.pack_plan??shortage};});
  const groups=plan.groups.map(g=>{
   const rows=items.filter(i=>i.group===g.id),cooked=['shared','cooked'].includes(g.mode),packing=cooked||g.mode==='casings';
+  if(packing)for(const i of rows)i.coldroom_sales_units=cooked?coldroomSalesUnits(g.coldroom_batches,i.yield_qty):coldroomSalesUnits(i.coldroom_casings,i.casing_yield_qty);
   const warnings=[];
   if(rows.some(i=>i.stock===null))warnings.push('Packed stock not counted');
   if(rows.some(i=>i.demand===null))warnings.push('Route need is incomplete');

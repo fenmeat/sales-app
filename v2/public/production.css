@@ -70,3 +70,6 @@ body.preparing-staff-print #production-staff-print{display:block;position:absolu
 
 .production-header .print-link{font-size:inherit;font-weight:650;padding:11px 17px;text-align:center;line-height:1.3}
 @media(max-width:760px){.production-header .print-link{font-size:14px;min-height:48px;padding:9px 6px;white-space:normal}}
+
+/* Recipe-based packing capacity stays separate from measured packed stock. */
+.coldroom-packing{background:#e4f2fc;border-left:4px solid #3476a3;border-radius:10px;padding:12px 14px;margin:12px 0 16px;color:#142c40}.coldroom-packing>span{display:block;font-size:16px;font-weight:750;line-height:1.3}.coldroom-packing output{display:block;font-size:28px;font-weight:800;line-height:1.2;margin:5px 0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.coldroom-packing p{font-size:15px;line-height:1.4;margin:5px 0 0;color:#284b63}.coldroom-packing .coldroom-shared{font-weight:650}

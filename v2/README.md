@@ -704,3 +704,12 @@ Adds Factory Sales within Invoices for Alex, Alinda, Xavier and Xalinda, with se
 ## 0.29.0 — Factory POS
 
 [Factory POS](POS.md) adds independent concurrent counter sales for Alex, Alinda, Xavier and Xalinda, with fully paid Cash, Capitec card and Shop2Shop transactions, saved drafts, customers, receipts, daily totals and atomic stock issues. The existing R12 ledger and road workflows remain intact. Open **Factory POS** from Home.
+
+
+## Coldroom packing capacity — 0.29.2
+
+Production → Products & stock shows **Can pack from Coldroom** before each cooked product's packing plan. Existing cooked batches are multiplied by that dated plan's recipe yield; for example, 2.5 Russian batches at 24 bags per batch show 60 bags. Polony uses each size's cooked casings and its existing units-per-casing conversion. Values refresh while counts or yields are edited and are labelled as estimates, preserving fractional results. Blank/invalid counts or missing yields remain unknown; an explicit zero count displays zero.
+
+Shared Russian sizes are alternative uses of the same stock. Each size is labelled as using all shared stock; their capacities must not be added together. New planned batches, opening packed stock, packing decisions and actual output are excluded from this estimate. No new stock writes, schema migration, recipe changes or automatic plan acceptance.
+
+Validation: 339 automated tests pass, including five new calculation/DOM cases covering shared sizes, casings, decimal input, unknowns and preservation of existing plans. Worker deployment dry run passes. The synthetic browser preview verifies immediate recalculation and layout; physical iPhone/iPad acceptance remains a device check.
