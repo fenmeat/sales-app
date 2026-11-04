@@ -30,7 +30,7 @@ export function assembleZohoReconciliation(job,catalog){
    const product=zohoMatch(catalog,'product',line.item_id);
    if(!product){issue('product',invoice,'Match this Zoho item to its app sales unit.',{zoho_id:line.item_id,name:line.name,unit:line.unit});continue;}
    if(!isQty(line.quantity)||seen.has(line.id)){issue('invoice',invoice,'Invalid quantity or duplicate invoice line.');continue;}
-   seen.add(line.id);invoice_lines.push({id:invoice.id+':'+line.id,invoice_id:invoice.id,invoice_number:invoice.number,product:product.code,qty:line.quantity,status:invoice.status});
+   seen.add(line.id);invoice_lines.push({id:invoice.id+':'+line.id,invoice_id:invoice.id,invoice_number:invoice.number,...(invoice.customer_id?{customer_id:invoice.customer_id,customer_name:invoice.customer??invoice.customer_name??''}:{}),product:product.code,qty:line.quantity,status:invoice.status});
   }
  }
  for(const header of job.payment_headers){

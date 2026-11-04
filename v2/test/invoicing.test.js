@@ -57,6 +57,20 @@ async function fixture(t){
  async function send(b){const r=await req('/api/invoicing/command',b,cookie);if(r.status===200)a=r.data.account;return r;}
  return {mf,req,login,cookie,device,session,body,send,get a(){return a;}};
 }
+test('Shop List uses stable route identity, persists separate manual counts and protects conflicting saves',async t=>{
+ const f=await fixture(t),url='/api/invoicing/shop-list?route=R03&date='+date;
+ assert.equal((await f.req(url)).status,401);assert.equal((await f.req(url,undefined,await f.login('xavier'))).status,403);
+ const list=await f.req(url,undefined,f.cookie);assert.equal(list.status,200);assert.equal(list.data.rows[0].customer_id,id);assert.equal(list.data.rows[0].delivered,null);
+ const saved=await f.req('/api/run?route=R03&date='+date,undefined,f.cookie),run=saved.data.run;run.shop_deliveries=list.data.rows;run.shop_deliveries[0].delivered=6;
+ const payload={run,revision:saved.data.revision,action:'save',request_id:crypto.randomUUID()};const first=await f.req('/api/run',payload,f.cookie);assert.equal(first.status,200,JSON.stringify(first.data));
+ assert.equal((await f.req('/api/run',payload,f.cookie)).data.replayed,true);
+ assert.equal((await f.req('/api/run',{...payload,request_id:crypto.randomUUID()},f.cookie)).status,409);
+ const read=await f.req(url,undefined,f.cookie);assert.equal(read.data.rows[0].delivered,6);
+ const next=structuredClone(first.data.run);delete next.shop_deliveries;const kept=await f.req('/api/run',{run:next,revision:first.data.revision,action:'save',request_id:crypto.randomUUID()},f.cookie);assert.equal(kept.status,200);assert.equal(kept.data.run.shop_deliveries[0].delivered,6);
+ const originalInvoice=await f.req('/api/invoicing/bootstrap?route=R03',undefined,f.cookie);assert.equal(originalInvoice.data.accounts[id].revision,0,'counts never change invoices');
+ const response=await f.mf.dispatchFetch('https://fenmeat-sales-test.alexander-fenwick.workers.dev/api/invoicing/shop-list/pdf?route=R03&date='+date,{headers:{Cookie:f.cookie}});assert.equal(response.status,200);assert.equal(response.headers.get('Content-Type'),'application/pdf');
+ const {PDFDocument}=await import('pdf-lib');assert.equal((await PDFDocument.load(await response.arrayBuffer())).getPageCount(),1);
+});
 test('real workerd/D1 persists atomically, protects replay and concurrent route access, rejects unauthorised reads',async t=>{
  const f=await fixture(t);
  assert.equal((await f.req('/api/invoicing/bootstrap')).status,401);

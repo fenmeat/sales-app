@@ -6,6 +6,10 @@ const validSupplierKey=value=>typeof value==='string'&&value.length<=150&&value=
 const supplierFilename=value=>value.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'unassigned';
 export function printPageOptions(search){
  const p=new URLSearchParams(search),kind=p.get('document'),date=p.get('date'),route=p.get('route'),supplier=p.get('supplier'),revision=p.get('revision');
+ if(kind==='shops'){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(date??'')||!/^R\d{2}$/.test(route??'')||route==='R12')throw Error('Choose a delivery route and date for the Shop List.');
+  return {url:'/api/invoicing/shop-list/pdf?'+new URLSearchParams({date,route}),title:'Shop List',filename:'FenMeat-Shop-List-'+date+'-'+route+'.pdf',unsaved:false,fitPage:true,returnPath:p.get('from')==='invoicing'?'/invoicing/':'/'};
+ }
  if(kind==='pos'){const id=p.get('id');if(!/^[a-zA-Z0-9-]{16,80}$/.test(id??''))throw Error('Choose a saved Factory POS receipt.');return {url:'/api/pos/receipt?id='+encodeURIComponent(id),title:'Factory POS receipt',filename:'FenMeat-POS-'+id+'.pdf',unsaved:false,fitPage:false,returnPath:'/pos'};}
  if(!['production','stock','stocktake'].includes(kind)||!/^\d{4}-\d{2}-\d{2}$/.test(date??''))throw Error('Choose a saved document in FenMeat first.');
  if(kind==='stock'&&!/^[A-Z0-9_-]{1,20}$/.test(route??''))throw Error('Choose a saved route in FenMeat first.');
@@ -19,6 +23,9 @@ export function printPageOptions(search){
 
 export function browserPrintURL(pdfURL,{revision,unsaved=false}={}){
  const source=new URL(pdfURL,'https://fenmeat.invalid');
+ if(source.origin==='https://fenmeat.invalid'&&source.pathname==='/api/invoicing/shop-list/pdf'){
+  const p=new URLSearchParams({document:'shops',date:source.searchParams.get('date')??'',route:source.searchParams.get('route')??''});printPageOptions(p);return '/print-page?'+p;
+ }
  if(source.origin!=='https://fenmeat.invalid'||!/^\/api\/print\/(production|stock|stocktake)$/.test(source.pathname))throw Error('This document has no browser print page.');
  const kind=source.pathname.split('/').at(-1),p=new URLSearchParams({document:kind,date:source.searchParams.get('date')??''});
  if(kind==='stock')p.set('route',source.searchParams.get('route')??'');

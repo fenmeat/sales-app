@@ -102,9 +102,37 @@ export function validateRecon(recon,run) {
   check(recon.date===run.date && recon.route===run.route,'The reconciliation date and route must match the run.');
   check(Array.isArray(recon.invoice_lines)&&Array.isArray(recon.payments)&&recon.invoice_lines.length<=2000&&recon.payments.length<=2000,'Invalid reconciliation rows.');
   cleanText(recon.source,200);check(recon.source.length>0,'Record the report/source reference.');
-  let seen=new Set();for(const i of recon.invoice_lines){check(typeof i.id==='string'&&i.id.length>0&&!seen.has(i.id),'Invoice line IDs must be unique.');seen.add(i.id);check(typeof i.product==='string'&&isQty(i.qty)&&['sent','paid','overdue','partially_paid','unpaid','draft','void'].includes(i.status),'Invalid invoice line.');}
+  let seen=new Set();for(const i of recon.invoice_lines){check(typeof i.id==='string'&&i.id.length>0&&!seen.has(i.id),'Invoice line IDs must be unique.');seen.add(i.id);check(typeof i.product==='string'&&isQty(i.qty)&&['sent','paid','overdue','partially_paid','unpaid','draft','void'].includes(i.status),'Invalid invoice line.');if(i.customer_id!=null)check(typeof i.customer_id==='string'&&/^[0-9]{1,40}$/.test(i.customer_id),'Invalid invoice shop identity.');if(i.customer_name!=null)cleanText(i.customer_name,160);}
   seen=new Set();for(const p of recon.payments){check(typeof p.id==='string'&&p.id.length>0&&!seen.has(p.id),'Payment allocation IDs must be unique.');seen.add(p.id);check(p.date===run.date&&['cash','shop2shop','card','eft'].includes(p.method)&&isMoney(p.cents),'Payment date, method or amount is invalid.');if(p.invoice_date){dateKey(p.invoice_date);check(p.invoice_date<=run.date,'Invoice date cannot follow payment date.');}}
   return recon;
+}
+// Physical delivery counts are a separate observation, never derived from invoices.
+export function shopDeliveryRows(stores=[]) {
+  return stores.map(s=>({customer_id:s.customer_id??s.id,name:s.name,stop:s.stop,delivered:s.delivered??null})).sort((a,b)=>a.stop-b.stop);
+}
+export function validateShopDeliveries(run,previous,stores) {
+  if(run.shop_deliveries===undefined&&previous?.shop_deliveries)run.shop_deliveries=structuredClone(previous.shop_deliveries);
+  if(run.shop_deliveries===undefined)return;
+  const rows=run.shop_deliveries;
+  check(Array.isArray(rows)&&rows.length>0&&rows.length<=250,'Invalid shop delivery list.');
+  const expected=previous?.shop_deliveries??(stores?shopDeliveryRows(stores):null);
+  if(expected)check(rows.length===expected.length&&expected.every((s,n)=>rows[n]?.customer_id===s.customer_id&&rows[n]?.name===s.name&&rows[n]?.stop===s.stop),'The shop list changed. Reload the saved list; keep its shop identities and order.',409);
+  const ids=new Set();for(const s of rows){
+    check(typeof s.customer_id==='string'&&/^[0-9]{1,40}$/.test(s.customer_id)&&!ids.has(s.customer_id),'Invalid or duplicate delivery shop.');ids.add(s.customer_id);
+    check(Number.isSafeInteger(s.stop)&&s.stop>0&&cleanText(s.name,160).length>0,'Invalid delivery shop.');
+    check(s.delivered===null||(Number.isSafeInteger(s.delivered)&&s.delivered>=0&&s.delivered<=100000),'Items delivered must be a non-negative whole number, or blank.');
+  }
+}
+export function compareShopDeliveries(run) {
+  const lines=(run.recon?.invoice_lines??[]).filter(l=>!['draft','void'].includes(l.status));
+  const ready=run.recon?.complete===true&&run.recon.date===run.date&&run.recon.route===run.route;
+  const unidentified=lines.filter(l=>!l.customer_id);
+  const identified=ready&&unidentified.length===0,totals=new Map(),invoices=new Map();
+  for(const l of lines)if(l.customer_id){totals.set(l.customer_id,roundQty((totals.get(l.customer_id)??0)+l.qty));const list=invoices.get(l.customer_id)??new Map();const key=l.invoice_id??l.id;list.set(key,l.invoice_number??key);invoices.set(l.customer_id,list);}
+  const saved=run.shop_deliveries??[],known=new Set(saved.map(s=>s.customer_id));
+  const extra=[...totals.keys()].filter(id=>!known.has(id)).map(id=>({customer_id:id,name:lines.find(l=>l.customer_id===id)?.customer_name||'Shop '+id,stop:null,delivered:null,not_on_list:true}));
+  const rows=[...saved,...extra].map(s=>{const invoiced=identified?(totals.get(s.customer_id)??0):null;return {...s,invoiced,invoices:[...(invoices.get(s.customer_id)?.values()??[])],difference:s.delivered===null||invoiced===null?null:roundQty(s.delivered-invoiced)};});
+  return {rows,identified,unidentified:unidentified.length,counted:saved.filter(s=>s.delivered!==null).length,entered_total:saved.reduce((n,s)=>n+(s.delivered??0),0),invoiced_total:ready?roundQty(lines.reduce((n,l)=>n+l.qty,0)):null,differences:rows.filter(s=>s.difference!==null&&s.difference!==0).length};
 }
 export function validateRun(run, previous, action) {
   check(run && ['save','load','returns','close','reopen','reconcile'].includes(action),'Invalid save action.');dateKey(run.date);check(/^[A-Z0-9_-]{1,25}$/.test(run.route),'Invalid route.');check(run.trip===1,'One combined route run per day is supported in this pilot.');
@@ -122,11 +150,12 @@ export function validateRun(run, previous, action) {
   // Hidden, never-loaded products must not block confirmation or imply unknown sales.
   for(const i of run.items){if(!i.available&&i.loaded===null)i.loaded=0;if(i.loaded===0&&i.returned===null)i.returned=0;}
   if(run.recon)validateRecon(run.recon,run);
+  validateShopDeliveries(run,previous);
   if(previous){check(previous.date===run.date&&previous.route===run.route,'A saved run cannot change its date or route.');if(previous.phase==='closed')check(action==='reopen','Reopen this run before changing it.');if(previous.phase!=='closed')check(action!=='reopen','Only a closed run can be reopened.');}
   else check(['save','load'].includes(action),'Save a morning plan first.');
   if(action==='load'){check(run.rep.length>0,'Enter the salesperson.');check(run.items.every(i=>i.loaded!==null),'Capture all actual load quantities, including zero.');run.phase='loaded';}
   else if(action==='returns'){check(previous&&['loaded','returned'].includes(previous.phase),'Confirm the morning load first.');check(run.items.every(i=>i.loaded!==null&&i.returned!==null),'Capture every evening return, including zero.');run.phase='returned';}
-  else if(action==='close'){const s=summarise(run);check(previous?.phase==='returned','Confirm evening returns first.');check(s.stock_matches&&s.cash_matches,'Resolve stock and payment differences before closing.');check(!s.unallocatedCash,'Allocate the unallocated cash before closing.');run.phase='closed';}
+  else if(action==='close'){const s=summarise(run),delivery=compareShopDeliveries(run);check(!delivery.counted||delivery.identified,'Load invoices with shop identities before closing the delivery check.');check(delivery.differences===0,'Resolve the shop delivery differences before closing.');check(previous?.phase==='returned','Confirm evening returns first.');check(s.stock_matches&&s.cash_matches,'Resolve stock and payment differences before closing.');check(!s.unallocatedCash,'Allocate the unallocated cash before closing.');run.phase='closed';}
   else if(action==='reopen'){check(cleanText(run.notes).length>=5,'Record the reason for reopening.');run.phase='returned';}
   else run.phase=previous?.phase??'plan';
   if(previous?.phase==='loaded'||previous?.phase==='returned'){check(run.items.every(i=>i.loaded!==null),'Confirmed loads cannot become blank.');if(previous.phase==='returned')check(run.items.every(i=>i.returned!==null),'Confirmed returns cannot become blank.');}

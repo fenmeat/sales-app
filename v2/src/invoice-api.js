@@ -1,4 +1,4 @@
-import {check,UserError,today,dateKey,addDays,FACTORY_ROUTE} from './domain.js';
+import {check,UserError,today,dateKey,addDays,FACTORY_ROUTE,shopDeliveryRows,routeName} from './domain.js';
 import {isAdmin,hash,canUseFactorySales} from './auth.js';
 import {isInvoiceRep,invoicePhoneGuard,repName} from './invoice-auth.js';
 import {readCustomerBalance} from './zoho.js';
@@ -35,6 +35,15 @@ async function current(db,store){
 const viewSession=s=>s?{id:s.id,route:s.route,actor:s.actor,device:s.device,date:s.service_date,status:s.status,sequence:s.sequence,products:JSON.parse(s.catalog).products,catalog_revision:JSON.parse(s.catalog).revision,opened_at:s.opened_at}:null;
 export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
  invoiceAccess(user);const db=env.DB,path=url.pathname,guard=invoicePhoneGuard(user);
+ if(['/api/invoicing/shop-list','/api/invoicing/shop-list/pdf'].includes(path)&&request.method==='GET'){
+  const route=url.searchParams.get('route'),date=dateKey(url.searchParams.get('date'));routeAccess(user,route);check(route!==FACTORY_ROUTE,'Factory POS does not have a delivery shop list.');
+  const stores=routeStores(catalog,route),definition=catalog.routes.find(r=>r.code===route);
+  const saved=await db.prepare('SELECT payload,revision FROM v2_events WHERE run_id=? ORDER BY revision DESC LIMIT 1').bind(date+'|'+route).first();
+  const previous=saved?JSON.parse(saved.payload):null,rows=shopDeliveryRows(previous?.shop_deliveries??stores);
+  const result={date,route,route_name:routeName(definition,date),catalog_revision:catalog.revision,run_revision:saved?.revision??0,rows};
+  if(path.endsWith('/pdf')){const {shopListPDF}=await import('./shop-list-pdf.js');return new Response(await shopListPDF(result),{headers:{'Content-Type':'application/pdf','Cache-Control':'no-store','Content-Disposition':`inline; filename="FenMeat-Shop-List-${date}-${route}.pdf"`}});}
+  return result;
+ }
  if(path==='/api/invoicing/bootstrap'&&request.method==='GET'){
   const available_routes=invoiceRoutes(catalog).filter(r=>mayUseRoute(user,r.code)&&(r.invoice_stores?.length||r.code===FACTORY_ROUTE)).map(r=>({code:r.code,name:r.code===FACTORY_ROUTE?'Factory Sales':r.name}));
   const requested=url.searchParams.get('route');if(requested)routeAccess(user,requested);
@@ -105,7 +114,7 @@ export async function invoiceReconciliation(db,date,route){
  const rows=(await db.prepare(`SELECT e.payload FROM v2_invoice_events e JOIN (SELECT customer_id,MAX(revision) revision FROM v2_invoice_events GROUP BY customer_id) latest ON latest.customer_id=e.customer_id AND latest.revision=e.revision WHERE e.customer_id IN (SELECT e2.customer_id FROM v2_invoice_events e2 JOIN v2_invoice_sessions s ON s.id=e2.session_id WHERE s.route=?) ORDER BY e.customer_id`).bind(route).all()).results;
  const invoice_lines=[],payments=[];
  for(const row of rows){const a=JSON.parse(row.payload),summary=accountSummary(a);
-  for(const i of summary.invoices.filter(i=>i.kind==='app'&&i.date===date))for(const l of i.lines)invoice_lines.push({id:i.id+':'+l.code,invoice_id:i.id,product:l.code,qty:l.qty/1000,status:i.status==='cancelled'?'void':i.balance===0?'paid':i.received?'partially_paid':'sent'});
+  for(const i of summary.invoices.filter(i=>i.kind==='app'&&i.date===date))for(const l of i.lines)invoice_lines.push({id:i.id+':'+l.code,invoice_id:i.id,invoice_number:i.number,customer_id:a.customer_id,customer_name:a.name,product:l.code,qty:l.qty/1000,status:i.status==='cancelled'?'void':i.balance===0?'paid':i.received?'partially_paid':'sent'});
   for(const r of a.receipts.filter(r=>r.date===date)){let cash=r.cash;for(const allocation of r.allocations){const i=a.invoices.find(i=>i.id===allocation.invoice_id);check(i,'Missing invoice allocation.',500);const cashPart=Math.min(cash,allocation.amount);cash-=cashPart;const shopPart=allocation.amount-cashPart;for(const [method,cents] of [['cash',cashPart],['shop2shop',shopPart]])if(cents)payments.push({id:r.id+':'+i.id+':'+method,date,invoice_date:i.date,method,cents});}}
  }
  const base={complete:true,date,route,source:'FenMeat invoice ledger',invoice_lines,payments,invoice_sessions:sessions.map(s=>({id:s.id,sequence:s.sequence}))};
@@ -114,7 +123,10 @@ export async function invoiceReconciliation(db,date,route){
 export async function verifyInvoiceReconciliation(db,recon){
  if(!recon?.native_ledger_hash)return;
  const fresh=await invoiceReconciliation(db,recon.date,recon.route),{native_ledger_hash,imported_at,...base}=recon;
- check(native_ledger_hash===fresh.native_ledger_hash&&await hash(JSON.stringify(base))===fresh.native_ledger_hash,'The invoice ledger changed or this comparison was edited. Load app invoices again.',409);
+ // A previously saved comparison remains verifiable until explicitly reloaded.
+ let expected=fresh.native_ledger_hash;
+ if(recon.invoice_lines.every(l=>!Object.hasOwn(l,'customer_id'))){const {native_ledger_hash:ignored,imported_at:stamp,...legacy}=fresh;legacy.invoice_lines=legacy.invoice_lines.map(({invoice_number,customer_id,customer_name,...l})=>l);expected=await hash(JSON.stringify(legacy));}
+ check(native_ledger_hash===expected&&await hash(JSON.stringify(base))===expected,'The invoice ledger changed or this comparison was edited. Load app invoices again.',409);
 }
 
 export async function readInvoicePilot(db,catalog,route='R03'){
