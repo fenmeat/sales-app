@@ -33,20 +33,20 @@ const escape=s=>String(s??'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').repla
 function viewHarness(supplier='margot swiss',extraMaterials=[]){
  const root=new Surface(),draft={supplier},h={root,draft,result:fixture(),calls:0,working:false,dirty:false};
  h.result.register.materials.push(...extraMaterials);
- h.render=()=>stocktakeView({root,draft,result:h.result,esc:escape,notice:()=>{},onWorking:v=>h.working=v,onDirty:v=>h.dirty=v,onOrders:date=>h.orderDate=date,
+ h.render=()=>stocktakeView({root,draft,result:h.result,esc:escape,notice:()=>{},onWorking:v=>h.working=v,onDirty:v=>h.dirty=v,
   api:async(path,body)=>{h.calls++;h.lastRequest=structuredClone(body);if(h.saveError)throw h.saveError;const counted=applySupplierCount(h.result.register,body,'alex');return {...h.result,revision:h.result.revision+1,request_id:body.request_id,register:counted.register};},
   onSaved:async saved=>{h.result=saved;draft.rows={};draft.metaDirty=false;draft.request=null;h.dirty=false;h.render();},
   onReload:async()=>{if(h.reloadError)throw h.reloadError;reconcileCountDraft(h.result,draft);h.render();}
  });h.render();return h;
 }
-test('saved packs remain visible after save and reload; unchanged fields are not resubmitted; Order Guy receives their date',async()=>{
+test('saved packs remain visible after save and reload; unchanged fields are not resubmitted; no ordering navigation is shown',async()=>{
  const h=viewHarness(),field=n=>h.root.querySelector('[data-stock-field="'+n+'"][data-material="BAGS"]');
  assert.equal(field('packs').value,'2');assert.equal(h.root.querySelectorAll('[data-stock-field="loose"]').length,0);
  await h.root.querySelector('#save-stock').onclick();assert.equal(h.calls,0);
  field('packs').input('4');assert(h.dirty);await h.root.querySelector('#save-stock').onclick();
  assert.equal(h.result.register.materials[0].stock.qty,100);assert.equal(field('packs').value,'4');assert.equal(h.root.querySelectorAll('[data-stock-field="loose"]').length,0);assert.equal(h.working,false);
  await h.root.querySelector('#reload-stock').onclick();assert.equal(field('packs').value,'4');assert.equal(h.root.querySelectorAll('[data-stock-field="loose"]').length,0);
- h.root.querySelector('#stock-orders').onclick();assert.equal(h.orderDate,addDays(today(),3));
+ assert.equal(h.root.querySelectorAll('#stock-orders').length,0);
 });
 test('new counts replace legacy totals; no loose or reserve quantity input is rendered',async()=>{
  const h=viewHarness(),m=h.result.register.materials[0];m.pack_qty=3;m.stock.qty=9;delete m.stock.count;h.render();
@@ -111,10 +111,9 @@ test('Brito view shows all requested products, clear box/bale labels and saves o
 
 test('staff stock screen saves normally and has no Order Guy action',async()=>{
  const h=viewHarness();h.result.stocktake_only=true;h.render();
- assert.equal(h.root.querySelector('#stock-orders').hidden,true);
- h.root.querySelector('#stock-orders').onclick();assert.equal(h.orderDate,undefined);
+ assert.equal(h.root.querySelectorAll('#stock-orders').length,0);
  h.root.querySelector('[data-stock-field="packs"][data-material="BAGS"]').input('5');
  await h.root.querySelector('#save-stock').onclick();assert.equal(h.result.register.materials[0].stock.qty,125);
  await h.root.querySelector('#reload-stock').onclick();assert.equal(h.root.querySelector('[data-stock-field="packs"][data-material="BAGS"]').value,'5');
- assert.equal(h.root.querySelector('#stock-orders').hidden,true);
+ assert.equal(h.root.querySelectorAll('#stock-orders').length,0);
 });

@@ -125,7 +125,7 @@ test('Stocktake fits the page initially and can zoom without printing, changing 
 });
 
 test('both app shells load the print-only overlay styles and renderer remains self-hosted',async()=>{
- for(const name of ['index.html','production.html'])assert.match(await readFile(new URL('../public/'+name,import.meta.url),'utf8'),/print-preview.css/);
+ for(const name of ['sales.html','production.html'])assert.match(await readFile(new URL('../public/'+name,import.meta.url),'utf8'),/print-preview.css/);
  const css=await readFile(new URL('../public/print-preview.css',import.meta.url),'utf8');
  assert.match(css,/@page file-preview\{size:A4;margin:0\}/);assert.match(css,/printing-file-preview>:not\(#file-print-preview\)\{display:none!important\}/);
  const source=await readFile(new URL('../public/pdf-pages.js',import.meta.url),'utf8');assert.doesNotMatch(source,/https?:\/\//);assert.match(source,/pdf\.worker\.min\.mjs/);

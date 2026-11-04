@@ -9,7 +9,7 @@ const origin='https://invoice-access.example',pin='704862';
 const compiled=await build({entryPoints:[fileURLToPath(new URL('../src/worker.js',import.meta.url))],bundle:true,write:false,format:'esm',platform:'browser',external:['cloudflare:workers'],target:'es2022'});
 function cookies(r){return (r.headers.getSetCookie?.()??r.headers.get('set-cookie').split(/, (?=[a-zA-Z_-]+=)/)).map(s=>s.split(';')[0]).filter(s=>!s.endsWith('=')).join('; ');}
 async function fixture(t){
- const keys=Object.fromEntries(['alex','alinda','tapiz','mosa','musa','xavier'].map(n=>[n,'SYNTHETIC-invoice-auth-key-012345678901234567890-'+n]));
+ const keys=Object.fromEntries(['alex','alinda','tapiz','mosa','musa','xavier','xalinda'].map(n=>[n,'SYNTHETIC-invoice-auth-key-012345678901234567890-'+n]));
  const mf=new Miniflare(convertV4MiniflareOptions({name:'invoice-auth-test',modules:true,script:compiled.outputFiles[0].text,compatibilityDate:'2026-09-30',assets:{directory:fileURLToPath(new URL('../public/',import.meta.url)),binding:'ASSETS',run_worker_first:true,routerConfig:{has_user_worker:true}},d1Databases:{DB:'invoice-auth-test'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify(keys)},outboundService:()=>{throw Error('No external traffic in access tests');}}));t.after(()=>mf.dispose());
  async function req(path,body,cookie='',headers={}){const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie,...headers},body:body?JSON.stringify(body):undefined,redirect:'manual'});const text=await r.text();return {status:r.status,data:r.headers.get('content-type')?.includes('application/json')?JSON.parse(text):text,headers:r.headers};}
  const login=async name=>{const r=await req('/api/login',{username:name,key:keys[name]});assert.equal(r.status,200,JSON.stringify(r.data));return cookies(r);};
@@ -52,7 +52,9 @@ test('PIN and legacy rep identities cannot reach other APIs, direct pages, owner
   for(const path of ['/api/invoicing/phones','/api/invoicing/export'])assert.equal((await f.req(path,null,cookie)).status,403,path);
   assert.equal((await f.req('/api/invoicing/phones',{action:'create',rep:'mosa'},cookie)).status,403);
   assert.equal((await f.req('/api/invoicing/balance',{route:'R03',customer_id:'9001001'},cookie)).status,403);
-  for(const path of ['/','/production','/production.html','/recipes/','/staff','/staff-clock','/access-setup','/print-page']){const r=await f.req(path,null,cookie);assert.equal(r.status,302,path);assert.equal(r.headers.get('location'),'/invoicing/');}
+  const home=await f.req('/api/navigation',null,cookie);assert.equal(home.status,200);assert.deepEqual(home.data.sections.map(x=>x.id),['invoices']);
+  assert.equal((await f.req('/',null,cookie)).status,200,'rep Home is a limited menu, not a new business permission');
+  for(const path of ['/sales','/sales.html','/production','/production.html','/recipes/','/staff','/staff-clock','/access-setup','/print-page']){const r=await f.req(path,null,cookie);assert.equal(r.status,302,path);assert.equal(r.headers.get('location'),'/invoicing/');}
  }
  assert.equal((await f.req('/api/invoicing/bootstrap',null,legacy)).status,401,'old long key cannot bypass registered-phone access');
  assert.equal((await f.req('/api/import/history',{rows:[]},'',{Authorization:'Bearer '+f.keys.mosa})).status,403);
@@ -173,4 +175,20 @@ test('concurrent activation consumes one code once; a blocked registration can b
  const next=await f.enroll(await f.create(),original);assert.notEqual(next.phone_id,first.data.phone_id);
  assert.equal((await f.req('/api/invoicing/bootstrap',null,original)).status,401);
  assert.equal((await f.req('/api/invoicing/bootstrap',null,next.cookie)).status,200);
+});
+
+test('Home navigation follows existing account permissions and cannot mutate business records',async t=>{
+ const f=await fixture(t);
+ assert.equal((await f.req('/api/navigation')).status,401);
+ const before=await f.db.prepare('SELECT payload,revision FROM v2_catalog WHERE id=1').first();
+ for(const username of ['alex','alinda','xavier','xalinda']){
+  const cookie=await f.login(username),menu=await f.req('/api/navigation',null,cookie);
+  assert.equal(menu.status,200);assert.equal(menu.data.username,username);
+  const ids=menu.data.sections.map(x=>x.id);
+  for(const id of ['sales','pos','invoices','production','stocktake','tasks','report','products'])assert.ok(ids.includes(id),username+' can open '+id);
+  for(const id of ['recipes','staff','setup'])assert.equal(ids.includes(id),['alex','alinda'].includes(username));
+  assert.ok(!ids.includes('orders'));assert.equal(menu.data.sections.find(x=>x.id==='sales').href,'/sales');
+  assert.equal((await f.req('/api/navigation',{},cookie)).status,405);
+ }
+ assert.deepEqual(await f.db.prepare('SELECT payload,revision FROM v2_catalog WHERE id=1').first(),before);
 });

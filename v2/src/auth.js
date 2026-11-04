@@ -48,3 +48,22 @@ export async function login(request,env,body){
  const token=randomToken();await env.DB.batch([env.DB.prepare('INSERT INTO v2_sessions VALUES(?,?,?,?)').bind(await hash(token),username,await hash(accounts[username]),Date.now()+43200000),env.DB.prepare('DELETE FROM v2_sessions WHERE expires<?').bind(Date.now()),env.DB.prepare('DELETE FROM v2_auth_limits WHERE expires<?').bind(Date.now())]);
  return {username,cookie:`fm_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=43200`};
 }
+
+// Home exposes destinations only. Each destination still enforces its own API permissions.
+export function appNavigation(username){
+ const admin=isAdmin(username),factory=canUseFactorySales(username),rep=['tapiz','mosa','musa'].includes(username);
+ const sections=[
+  ['sales','Sales','Loads, returns & cash-up','/sales',!rep],
+  ['pos','Factory POS','Counter sales & receipts','/pos',factory],
+  ['invoices','Invoices','Customers & payments','/invoicing/',factory||rep],
+  ['production','Production','Production & packing plans','/production',!rep],
+  ['stocktake','Stocktake','Supplier stock counts','/recipes?view=stock',factory],
+  ['staff','Staff','Attendance & payroll','/staff',admin],
+  ['tasks','Tasks','Your tasks & reminders','/tasks',!rep],
+  ['report','Daily Report','Priorities & follow-ups','/tasks?view=report',!rep],
+  ['recipes','Recipes','Recipes, materials & costs','/recipes',admin],
+  ['products','Products','Available products','',!rep],
+  ['setup','Setup & Zoho','Settings & connection','/sales#setup',admin]
+ ];
+ return sections.filter(x=>x[4]).map(([id,title,description,href])=>({id,title,description,href}));
+}

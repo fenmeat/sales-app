@@ -7,7 +7,7 @@ test('browser print links retain the document date, route and saved revision wit
   const pdf='/api/print/'+kind+'?date=2026-10-28'+(kind==='stock'?'&route=R03':'');
   const link=browserPrintURL(pdf,{revision:'7',unsaved:true}),options=printPageOptions(link.split('?')[1]);
   assert.equal(options.url,pdf+'&revision=7');assert.equal(options.unsaved,true);
-  assert.equal(options.returnPath,kind==='production'?'/production':'/');
+  assert.equal(options.returnPath,kind==='production'?'/production':'/sales');
   assert.equal(options.fitPage,false);
   assert.match(options.filename,/2026-10-28/);assert.match(link,/^\/print-page\?/);
  }

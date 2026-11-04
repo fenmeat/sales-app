@@ -8,7 +8,7 @@ export function printPageOptions(search){
  const p=new URLSearchParams(search),kind=p.get('document'),date=p.get('date'),route=p.get('route'),supplier=p.get('supplier'),revision=p.get('revision');
  if(kind==='shops'){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date??'')||!/^R\d{2}$/.test(route??'')||route==='R12')throw Error('Choose a delivery route and date for the Shop List.');
-  return {url:'/api/invoicing/shop-list/pdf?'+new URLSearchParams({date,route}),title:'Shop List',filename:'FenMeat-Shop-List-'+date+'-'+route+'.pdf',unsaved:false,fitPage:true,returnPath:p.get('from')==='invoicing'?'/invoicing/':'/'};
+  return {url:'/api/invoicing/shop-list/pdf?'+new URLSearchParams({date,route}),title:'Shop List',filename:'FenMeat-Shop-List-'+date+'-'+route+'.pdf',unsaved:false,fitPage:true,returnPath:p.get('from')==='invoicing'?'/invoicing/':'/sales'};
  }
  if(kind==='pos'){const id=p.get('id');if(!/^[a-zA-Z0-9-]{16,80}$/.test(id??''))throw Error('Choose a saved Factory POS receipt.');return {url:'/api/pos/receipt?id='+encodeURIComponent(id),title:'Factory POS receipt',filename:'FenMeat-POS-'+id+'.pdf',unsaved:false,fitPage:false,returnPath:'/pos'};}
  if(!['production','stock','stocktake'].includes(kind)||!/^\d{4}-\d{2}-\d{2}$/.test(date??''))throw Error('Choose a saved document in FenMeat first.');
@@ -18,7 +18,7 @@ export function printPageOptions(search){
  const query=new URLSearchParams({date});if(kind==='stock')query.set('route',route);if(kind==='stocktake')query.set('supplier',supplier);if(revision!==null)query.set('revision',revision);
  const title=kind==='production'?'Production staff sheet':kind==='stocktake'?'Stocktake Summary':'Stock Load & Return';
  const filename=kind==='stocktake'?'FenMeat-Stocktake-'+supplierFilename(supplier)+'-'+date+'.pdf':'FenMeat-'+(kind==='production'?'Production-':'Stock-')+date+(kind==='stock'?'-'+route:'')+'.pdf';
- return {url:'/api/print/'+kind+'?'+query,title,filename,unsaved:p.get('unsaved')==='1',fitPage:kind==='stocktake',returnPath:kind==='production'?'/production':kind==='stocktake'?'/recipes?view=stock':'/'};
+ return {url:'/api/print/'+kind+'?'+query,title,filename,unsaved:p.get('unsaved')==='1',fitPage:kind==='stocktake',returnPath:kind==='production'?'/production':kind==='stocktake'?'/recipes?view=stock':'/sales'};
 }
 
 export function browserPrintURL(pdfURL,{revision,unsaved=false}={}){

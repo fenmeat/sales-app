@@ -25,7 +25,7 @@ async function screen(user='alex'){
 test('PDF Summary opens the selected saved supplier and count date, unaffected by search, without saving or changing the screen',async()=>{
  const h=await screen(),button=h.document.getElementById('stock-pdf-summary');
  assert.equal(button.textContent,'PDF Summary');assert.equal(button.previousElementSibling.textContent,'Stocktake');
- assert.equal(button.nextElementSibling.textContent,'Order Guy');
+ assert.equal(button.nextElementSibling,null);assert.equal(h.document.querySelector('[data-view=orders]'),null);
  const search=h.document.getElementById('stock-search');search.value='does not match';search.oninput({target:search});
  assert.equal(h.document.querySelector('[data-stock-card]').hidden,true);
  h.click();assert.equal(h.previews.length,1);
