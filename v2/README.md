@@ -713,3 +713,12 @@ Production → Products & stock shows **Can pack from Coldroom** before each coo
 Shared Russian sizes are alternative uses of the same stock. Each size is labelled as using all shared stock; their capacities must not be added together. New planned batches, opening packed stock, packing decisions and actual output are excluded from this estimate. No new stock writes, schema migration, recipe changes or automatic plan acceptance.
 
 Validation: 339 automated tests pass, including five new calculation/DOM cases covering shared sizes, casings, decimal input, unknowns and preservation of existing plans. Worker deployment dry run passes. The synthetic browser preview verifies immediate recalculation and layout; physical iPhone/iPad acceptance remains a device check.
+
+
+## Shared Coldroom allocation — 0.29.3
+
+**Can pack from Coldroom** now accounts for the other sizes’ entered packing plans within the same recipe. Each reservation is its packing quantity divided by its dated recipe yield; remaining Coldroom batches are converted to the current size’s sales units. For 2.5 Russian batches, entering 60 Russian 6 bags (24 per batch) leaves zero for Russian 5/4/3. Entering 24 Russian 6 bags leaves 43.5 Russian 5 bags when no other sizes are allocated. Reducing or clearing a plan releases its reservation immediately.
+
+The displayed capacity includes the current size’s own plan and excludes new production. Blank plans reserve nothing; route shortages remain suggestions. Other sizes’ positive allocations with invalid quantities/yields produce an unknown estimate, never extra available stock. Over-allocation clamps the capacity to zero. Batch equivalents stay unrounded until the final sales-unit conversion. Separate cooked recipes and size-specific polony casings retain their existing calculation. This supersedes the 0.29.2 all-stock alternative display. Saved plans, counts, yields, actual output and trolley choices are not rewritten.
+
+Validation: nine focused calculation/DOM cases cover all four shared sizes, mixed allocations, decimal input, clearing/reducing plans, invalid inputs, yield changes, reopened plans and no implicit saves. All 343 automated tests and the Worker deployment dry run pass. A synthetic browser check confirms immediate allocation updates, including the 60-bag example and the 390-pixel layout. Physical iPhone/iPad acceptance remains a device check.
