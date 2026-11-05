@@ -42,7 +42,7 @@ async function forecastResult(db,date,route,c){
  const snapshot=await hash(JSON.stringify({version:'1.4-recent-sales-floor',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
  return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline with measured month phase and latest comparable sales safety minimum',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.31.0',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.32.0',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null,ctx=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
@@ -67,6 +67,19 @@ async function handle(request,env,paUser=null,ctx=null){
  if(path==='/api/tasks'||path.startsWith('/api/tasks/')){const result=await tasksApi({request,url,env,user,bodyOf});if(ctx&&method==='POST')ctx.waitUntil(flushTaskPush(env));return result instanceof Response?result:json(result);}
  if(path==='/api/invoicing/phones')return json(await invoicePhonesApi({request,env,user,bodyOf}));
  if(path.startsWith('/api/pos/')){const result=await posApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),bodyOf});return result instanceof Response?new Response(result.body,{status:result.status,headers:{...headers,...Object.fromEntries(result.headers)}}):json(result);}
+ if(path==='/api/print/recipe'){
+  check(['alex','alinda'].includes(user.username),'Recipes are available to Alex and Alinda.',403);
+  check(method==='GET','Method not allowed.',405);
+  const group=url.searchParams.get('group'),version=url.searchParams.get('version'),revision=printRevision(url);
+  check(/^[A-Z0-9_-]{1,40}$/.test(group??''),'Choose a saved recipe.');
+  check(/^[1-9]\d*$/.test(version??'')&&Number.isSafeInteger(Number(version)),'Choose a saved recipe version.');
+  check(revision!==null,'Choose a saved register revision.');
+  const row=await env.DB.prepare('SELECT * FROM v2_recipe_events WHERE revision=?').bind(revision).first();
+  check(row,'This saved register revision could not be found. Reload Recipes and try again.',404);
+  const {recipeStaffPDF}=await import('./recipe-print-pdf.js');
+  const pdf=await recipeStaffPDF({register:JSON.parse(row.payload),revision:row.revision,saved_at:row.saved_at},{group,version:Number(version)});
+  return new Response(pdf,{headers:{...headers,'Content-Type':'application/pdf','X-FenMeat-Print-Revision':String(row.revision),'Content-Disposition':`inline; filename="FenMeat-Recipe-${group}-v${version}-r${revision}.pdf"`}});
+ }
  if(path==='/api/print/stocktake'){
   check(['alex','alinda','xavier','xalinda'].includes(user.username),'Your account does not have Stocktake access.',403);
   check(method==='GET','Method not allowed.',405);

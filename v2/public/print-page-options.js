@@ -6,6 +6,13 @@ const validSupplierKey=value=>typeof value==='string'&&value.length<=150&&value=
 const supplierFilename=value=>value.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'unassigned';
 export function printPageOptions(search){
  const p=new URLSearchParams(search),kind=p.get('document'),date=p.get('date'),route=p.get('route'),supplier=p.get('supplier'),revision=p.get('revision');
+ if(kind==='recipe'){
+  const group=p.get('group'),version=p.get('version');
+  if(!/^[A-Z0-9_-]{1,40}$/.test(group??''))throw Error('Choose a saved recipe in FenMeat first.');
+  if(!/^[1-9]\d*$/.test(version??'')||!Number.isSafeInteger(Number(version)))throw Error('Choose a saved recipe version.');
+  if(!/^[1-9]\d*$/.test(revision??'')||!Number.isSafeInteger(Number(revision)))throw Error('Choose a saved register revision.');
+  return {url:'/api/print/recipe?'+new URLSearchParams({group,version,revision}),title:'Staff recipe sheet',filename:'FenMeat-Recipe-'+group+'-v'+version+'-r'+revision+'.pdf',unsaved:false,fitPage:true,returnPath:'/recipes'};
+ }
  if(kind==='shops'){
   if(!/^\d{4}-\d{2}-\d{2}$/.test(date??'')||!/^R\d{2}$/.test(route??'')||route==='R12')throw Error('Choose a delivery route and date for the Shop List.');
   return {url:'/api/invoicing/shop-list/pdf?'+new URLSearchParams({date,route}),title:'Shop List',filename:'FenMeat-Shop-List-'+date+'-'+route+'.pdf',unsaved:false,fitPage:true,returnPath:p.get('from')==='invoicing'?'/invoicing/':'/sales'};
@@ -23,6 +30,10 @@ export function printPageOptions(search){
 
 export function browserPrintURL(pdfURL,{revision,unsaved=false}={}){
  const source=new URL(pdfURL,'https://fenmeat.invalid');
+ if(source.origin==='https://fenmeat.invalid'&&source.pathname==='/api/print/recipe'){
+  const p=new URLSearchParams({document:'recipe',group:source.searchParams.get('group')??'',version:source.searchParams.get('version')??'',revision:String(revision??source.searchParams.get('revision')??'')});
+  printPageOptions(p);return '/print-page?'+p;
+ }
  if(source.origin==='https://fenmeat.invalid'&&source.pathname==='/api/invoicing/shop-list/pdf'){
   const p=new URLSearchParams({document:'shops',date:source.searchParams.get('date')??'',route:source.searchParams.get('route')??''});printPageOptions(p);return '/print-page?'+p;
  }
