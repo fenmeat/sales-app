@@ -60,6 +60,7 @@ export function appNavigation(username){
   ['invoices','Invoices','Customers & payments',admin?'/invoicing/?view=routes':'/invoicing/',factory||rep],
   ['production','Production','Production & packing plans','/production',!rep],
   ['stocktake','Stocktake','Supplier stock counts','/recipes?view=stock',factory],
+  ['financial','Financial','Accounts, payments & follow-ups','/financial',admin],
   ['staff','Staff','Attendance & payroll','/staff',admin],
   ['tasks','Tasks','Your tasks & reminders','/tasks',!rep],
   ['report','Daily Report','Priorities & follow-ups','/tasks?view=report',!rep],

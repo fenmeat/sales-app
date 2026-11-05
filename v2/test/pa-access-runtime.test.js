@@ -40,6 +40,17 @@ async function fixture(t) {
 }
 async function businessSnapshot(db) {const result={};for(const table of ['v2_catalog','v2_events','v2_production_events','v2_recipe_events','v2_history','v2_sync','v2_zoho_connection'])result[table]=(await db.prepare('SELECT * FROM '+table).all()).results;return result;}
 const change=(target,revision,data,extra={})=>({target,revision,data,request_id:crypto.randomUUID(),reason:'Synthetic owner instruction for isolated test',...extra});
+test('Financial connector uses owner write scope, audited records and explicit readback',async t=>{
+ const f=await fixture(t),read=await f.connect(),write=await f.connect(true),before=await businessSnapshot(f.db);
+ const args=change('financial',0,{record:{id:'synthetic-finance-weekly',type:'weekly',data:{supplier:'Synthetic',reference:'SYN-FIN-1',amount:10000,opening_paid:0,status:'To Pay'}}});
+ const denied=await f.rpc(read.tokens,'tools/call',{name:'save_app_data',arguments:args});assert.equal(denied.response.status,403);
+ assert.equal((await ok(f,read.tokens,'get_access_status',{financial:{resource:'summary'}})).financial.records.length,0);
+ const saved=await ok(f,write.tokens,'save_app_data',args);assert.equal(saved.record.revision,1);
+ assert.equal((await ok(f,write.tokens,'save_app_data',args)).replayed,true);
+ const current=await ok(f,write.tokens,'get_app_edit_context',{target:'financial',query:{resource:'record',id:args.data.record.id}});assert.equal(current.record.data.amount,10000);assert.equal(current.summary.outstanding,10000);
+ const history=await ok(f,read.tokens,'get_access_status',{financial:{resource:'audit',id:args.data.record.id}});assert.equal(history.financial.history.length,1);assert.equal(history.financial.history[0].actor,'alex');
+ assert.deepEqual(await businessSnapshot(f.db),before);
+});
 async function seedStaff(f,session){
  const bundle=sourceFixture();for(let n=3;n<=65;n++)bundle.sheets.at(-1).rows.push({number:n,cells:[{formattedValue:'Synthetic source line '+n}]});
  const raw=JSON.stringify(bundle),id=await hash(raw),headers={Cookie:session};

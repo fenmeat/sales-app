@@ -9,6 +9,7 @@ const paths={
   invoices:'M6 3h12v18l-3-2-3 2-3-2-3 2z M9 7h6 M9 11h6 M9 15h3',
   production:'M3 21V9l6 4V9l6 4V3h4l2 18z M6 17h1 M11 17h1 M16 17h1',
   stocktake:'M9 3h6v4H9z M9 5H5v16h14V5h-4 M8 13l3 3 5-6',
+  financial:'M3 5h18v14H3z M3 9h18 M7 14h3 M16 13v3',
   staff:'M16 21v-3a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v3 M9 10a4 4 0 1 0 0-8 4 4 0 0 0 0 8 M16 3a4 4 0 0 1 0 8 M22 21v-3a4 4 0 0 0-4-4',
   tasks:'M9 5h12 M9 12h12 M9 19h12 M2 5l2 2 3-4 M2 12l2 2 3-4 M2 19l2 2 3-4',
   report:'M5 3h10l4 4v14H5z M14 3v5h5 M8 17v-3 M12 17v-6 M16 17v-4',

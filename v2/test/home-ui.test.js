@@ -27,7 +27,7 @@ async function page({username='alex',status=200,search='',hash='',failProducts=f
 test('Home opens real section destinations, keeps Sales separate, and offers Products without loading sales',async()=>{
   const p=await page();
   assert.equal(p.document.querySelector('h1').textContent,'Home');
-  assert.equal(p.document.querySelectorAll('.home-tile').length,11);
+  assert.equal(p.document.querySelectorAll('.home-tile').length,12);
   assert.equal(p.document.querySelector('a[href="/sales"]').textContent.includes('Sales'),true);
   assert.ok(p.document.querySelector('a[href="/recipes"]'));assert.ok(p.document.querySelector('a[href="/recipes?view=stock"]'));
   assert.ok(p.document.querySelector('a[href="/invoicing/?view=routes"]'));
