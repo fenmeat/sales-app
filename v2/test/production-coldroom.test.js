@@ -90,9 +90,9 @@ async function screen(){
  const source=(await readFile(new URL('../public/production-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'');
  const {document,window}=parseHTML('<html><body><div id="app"></div><div id="notice"></div></body></html>');
  window.HTMLElement.prototype.getBoundingClientRect=()=>({height:100});
- const initial={plan:plan(),revision:7,saved_at:'2026-11-04T06:00:00Z'},requests=[];
+ const initial={plan:plan(),revision:7,saved_at:'2026-11-04T06:00:00Z'},requests=[],redirects=[];
  const catalog={products:initial.plan.items,routes:[{code:'MB',name:'Mossel Bay',weekday:4}]};
- const deps={document,window:{addEventListener(){}},location:{assign(){}},ResizeObserver:class{observe(){}disconnect(){}},today,routeName,routeScheduled,
+ const deps={document,window:{addEventListener(){}},location:{assign:path=>redirects.push(path)},ResizeObserver:class{observe(){}disconnect(){}},today,routeName,routeScheduled,
   calculateSummary:productionSummary,productionStockBalance,productionPlanningView,babalasRecipeUpdateNeeded,applyProductionSuggestion,createProductionTrolley,
   trolleyPlanHTML,updateTrolleyPlan(){},readNumericInput:el=>parseDecimal(el.value),
   fetch:async(path,options)=>{requests.push({path,...options});assert.equal(options.method,'GET');return {ok:true,json:async()=>structuredClone(path==='/api/bootstrap'?{catalog,username:'alex'}:initial)};}};
@@ -101,8 +101,19 @@ async function screen(){
  assert.ok(document.querySelector('[data-coldroom-units="R01"]'),document.body.textContent);
  const edit=(selector,value)=>{const el=document.querySelector(selector);el.value=value;el.oninput();};
  const text=selector=>document.querySelector(selector).textContent;
- return {document,state,initial,requests,edit,text};
+ return {document,state,initial,requests,redirects,edit,text};
 }
+
+test('production keeps its print and history actions while Home protects unsaved work',async()=>{
+ const h=await screen(),header=h.document.querySelector('.head-actions');
+ assert.deepEqual([...header.querySelectorAll('button')].map(b=>b.textContent),['Home','Print staff sheet','Detailed print','Reload saved','Saved history','Download draft']);
+ h.edit('[data-code="R01"][data-field="pack_plan"]','12');
+ const draft=structuredClone(h.state.result.plan);
+ h.document.querySelector('#open-home').onclick();
+ assert.deepEqual(h.redirects,[]);assert.match(h.text('#notice'),/Save your production draft/);
+ assert.deepEqual(h.state.result.plan,draft);
+ h.state.dirty=false;h.document.querySelector('#open-home').onclick();assert.deepEqual(h.redirects,['/']);
+});
 
 test('production screen shows Coldroom capacity and allocation basis, with no controls for unrelated modes',async()=>{
  const h=await screen();

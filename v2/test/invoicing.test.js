@@ -113,7 +113,7 @@ test('Factory Sales permits the four named staff, denies reps at every invoice b
  for(const name of ['alex','alinda','xavier','xalinda']){
   const b=await f.req('/api/invoicing/bootstrap?route=R12',undefined,cookies[name]);assert.equal(b.status,200,name);assert.equal(b.data.factory_sales,true);assert.equal(b.data.route_name,'Factory Sales');assert.equal(b.data.accounts[fid].customer_id,fid);
   assert.equal(b.data.admin,['alex','alinda'].includes(name));
-  assert.deepEqual(b.data.available_routes.map(r=>r.code),['alex','alinda'].includes(name)?['R03','R12']:['R12']);
+  assert.deepEqual(b.data.available_routes.map(r=>r.code),['alex','alinda'].includes(name)?['R03']:[]);
  }
  for(const name of ['tapiz','mosa','musa']){
   const b=await f.req('/api/invoicing/bootstrap',undefined,cookies[name]);assert.equal(b.status,200);assert.deepEqual(b.data.available_routes.map(r=>r.code),['R03']);assert.equal(b.data.accounts[fid],undefined);

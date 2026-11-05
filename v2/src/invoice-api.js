@@ -48,13 +48,13 @@ export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
   return result;
  }
  if(path==='/api/invoicing/bootstrap'&&request.method==='GET'){
-  const available_routes=invoiceRoutes(catalog).filter(r=>mayUseRoute(user,r.code)&&(r.invoice_stores?.length||r.code===FACTORY_ROUTE)).map(r=>({code:r.code,name:r.code===FACTORY_ROUTE?'Factory Sales':r.name}));
+  const available_routes=invoiceRoutes(catalog).filter(r=>r.code!==FACTORY_ROUTE&&mayUseRoute(user,r.code)&&r.invoice_stores?.length).map(r=>({code:r.code,name:r.name}));
   const requested=url.searchParams.get('route');if(requested)routeAccess(user,requested);
   const own=user.phone_id?await db.prepare("SELECT route FROM v2_invoice_sessions WHERE device=? AND actor=? AND status='active'").bind(user.phone_id,user.username).first():null;
-  const route=own?.route??requested??available_routes[0]?.code??'R03';routeAccess(user,route);const stores=routeStores(catalog,route),accounts={};
+  const route=own?.route??requested??available_routes[0]?.code??(canUseFactorySales(user.username)?FACTORY_ROUTE:'R03');routeAccess(user,route);const stores=routeStores(catalog,route),accounts={};
   for(const s of stores)accounts[s.id]=await current(db,s);
   const session=await db.prepare("SELECT * FROM v2_invoice_sessions WHERE route=? AND status='active'").bind(route).first();
-  return {username:user.username,display_name:repName(user.username),admin:isAdmin(user.username),factory_sales:route===FACTORY_ROUTE,rep_phone_id:user.phone_id??null,rep_session_expires:user.phone_id?user.expires:null,date:today(),route,route_name:available_routes.find(r=>r.code===route).name,available_routes,stores:stores.map(({opening,...s})=>s),accounts,products:catalog.products.filter(p=>p.active),catalog_revision:catalog.revision,session:viewSession(session),zoho_write:false};
+  return {username:user.username,display_name:repName(user.username),admin:isAdmin(user.username),factory_sales:route===FACTORY_ROUTE,rep_phone_id:user.phone_id??null,rep_session_expires:user.phone_id?user.expires:null,date:today(),route,route_name:route===FACTORY_ROUTE?'Factory Sales':available_routes.find(r=>r.code===route)?.name??route,available_routes,stores:stores.map(({opening,...s})=>s),accounts,products:catalog.products.filter(p=>p.active),catalog_revision:catalog.revision,session:viewSession(session),zoho_write:false};
  }
  if(path==='/api/invoicing/reconciliation'&&request.method==='GET'){routeAccess(user,url.searchParams.get('route'));return invoiceReconciliation(db,url.searchParams.get('date'),url.searchParams.get('route'));}
  if(path==='/api/invoicing/export'&&request.method==='GET'){

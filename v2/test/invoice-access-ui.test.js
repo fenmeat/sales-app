@@ -85,6 +85,18 @@ test('another rep occupying the initial route does not hide the other prepared r
  assert.equal(p.ui.state.device,phone);assert.equal(p.ui.state.queue.length,0);
  assert.equal(p.ui.state.data.accounts[id],undefined);
 });
+test('cached Factory Sales is excluded from road choices online and offline without changing saved work',async()=>{
+ for(const online of [true,false]){
+  const initial=saved();initial.data.session=null;
+  initial.data.available_routes=[{code:'R03',name:'SYNTHETIC ROUTE'},{code:'R04',name:'OTHER ROUTE'},{code:'R12',name:'Factory Sales'}];
+  initial.drafts[id]={lines:{P1:{qty:'2',checked:true}},cash:'0',shop2shop:'0'};
+  const p=await page(initial,async()=>initial.data,{online});
+  assert.deepEqual([...p.document.querySelectorAll('#routeChoice option')].map(o=>o.value),['R03','R04']);
+  assert.doesNotMatch(p.document.querySelector('#routeChoice').textContent,/Factory/);
+  assert.equal(p.ui.state.drafts[id].lines.P1.qty,'2');
+  assert.equal(p.ui.state.data.accounts[id].revision,0);
+ }
+});
 test('an unfinished route owned by this phone still requires finishing before switching',async()=>{
  const initial=saved();initial.data.session.date='2020-01-01';
  initial.data.available_routes=[{code:'R03',name:'SYNTHETIC ROUTE'},{code:'R04',name:'OTHER ROUTE'}];
