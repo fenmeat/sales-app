@@ -1,3 +1,4 @@
+import {deriveBudgetImport} from './budget-import.js';
 import {check,UserError,today} from './domain.js';
 import {hash,isAdmin} from './auth.js';
 import {FINANCE_TYPES,validateFinancialRecord,recordKey,recordSummary} from './finance-domain.js';
@@ -26,7 +27,7 @@ export async function readFinance(db,query={}){
  const resource=query.resource??'summary';
  const imports=(await db.prepare('SELECT id,status,result,created_at,completed_at FROM v2_finance_imports ORDER BY created_at DESC').all()).results.map(r=>({...r,result:r.result?JSON.parse(r.result):null}));
  if(resource==='source'){
-  const item=imports.find(i=>i.status==='complete');check(item,'No completed source import.',404);const {source}=await importedSource(db,item.id);
+  const item=imports.find(i=>i.status==='complete'&&(query.import_id?i.id===query.import_id:i.result?.source_sheets?.some(s=>String(s.id)===String(query.sheet))));check(item,'No completed source import.',404);const {source}=await importedSource(db,item.id);
   const sheet=source.sheets.find(s=>String(s.properties.sheetId)===String(query.sheet));check(sheet,'Choose a source section.');
   const q=String(query.q??'').toLowerCase(),offset=Number(query.offset??0);check(Number.isInteger(offset)&&offset>=0&&offset<100000,'Invalid page.');
   const rows=sheet.data[0].rowData.map((r,i)=>({row:i+1,cells:r.values??[]})).filter(r=>r.cells.some(c=>sourceText(c)||c.note)).filter(r=>!q||r.cells.some(c=>(sourceText(c)+' '+(c.note??'')).toLowerCase().includes(q)));
@@ -51,6 +52,10 @@ export async function saveFinance(db,user,b){
  check(!old||old.kind===record.type,'A saved record cannot change type.');
  if(old)check(JSON.stringify(record.data.source??null)===JSON.stringify(JSON.parse(old.payload).source??null),'Original source references cannot be changed.');
  else check(!record.data.source,'Source references are set by the import only.');
+ if(record.type==='budget'){
+  if(old)check(record.data.month===JSON.parse(old.payload).month,'Use Copy to new month to preserve the original budget.');
+  check(record.data.weeks.every(w=>!w.date||w.date<=today()),'Actual set-aside date cannot be in the future.');
+ }
  if(record.type==='payment'){
   const target=await db.prepare('SELECT kind,payload FROM v2_finance_records WHERE id=?').bind(record.data.target_id).first();
   check(target&&['account','weekly'].includes(target.kind)&&!JSON.parse(target.payload).archived,'Choose an active monthly account or weekly invoice.');
@@ -67,9 +72,12 @@ export async function financeImport(db,user,b){
  check(isAdmin(user.username),'Only Alex and Alinda have Financial access.',403);check(hex(b.import_id),'Invalid source checksum.');
  if(b.operation==='import_start'){
   check(b.manifest?.id===b.import_id&&Array.isArray(b.manifest.parts)&&b.manifest.parts.length>=1&&b.manifest.parts.length<=80&&b.manifest.parts.every(hex),'Invalid import manifest.');
+  check(!b.manifest.kind||b.manifest.kind==='budget','Unknown import kind.');
+  if(b.manifest.kind==='budget')check(/^\d{4}-10$/.test(b.manifest.month??''),'Choose the October source month.');
   const existing=await db.prepare('SELECT * FROM v2_finance_imports WHERE id=?').bind(b.import_id).first();
   if(existing){check(existing.manifest===JSON.stringify(b.manifest),'Import manifest changed.',409);return {status:existing.status};}
-  check((await db.prepare('SELECT COUNT(*) n FROM v2_finance_records').first()).n===0,'Financial already contains records. Initial import cannot overwrite them.',409);
+  if(b.manifest.kind==='budget')check(!(await db.prepare('SELECT id FROM v2_finance_records WHERE unique_key=?').bind('budget|'+b.manifest.month).first()),'This budget month already exists; it will not be overwritten.',409);
+  else check((await db.prepare('SELECT COUNT(*) n FROM v2_finance_records').first()).n===0,'Financial already contains records. Initial import cannot overwrite them.',409);
   await db.prepare("INSERT INTO v2_finance_imports VALUES(?,?,'uploading',NULL,?,?,NULL)").bind(b.import_id,JSON.stringify(b.manifest),user.username,new Date().toISOString()).run();return {status:'uploading'};
  }
  const batch=await db.prepare('SELECT * FROM v2_finance_imports WHERE id=?').bind(b.import_id).first();check(batch,'Start the import first.',404);
@@ -81,15 +89,16 @@ export async function financeImport(db,user,b){
  }
  check(b.operation==='import_finish','Unknown financial import operation.');
  if(batch.status==='complete')return {replayed:true,...JSON.parse(batch.result)};
- check((await db.prepare('SELECT COUNT(*) n FROM v2_finance_records').first()).n===0,'Financial contains records; nothing was overwritten.',409);
- const {source}=await importedSource(db,b.import_id);let derived;try{derived=deriveFinanceImport(source);}catch(e){throw new UserError(e.message);}
+ const manifest=JSON.parse(batch.manifest);
+ if(manifest.kind!=='budget')check((await db.prepare('SELECT COUNT(*) n FROM v2_finance_records').first()).n===0,'Financial contains records; nothing was overwritten.',409);
+ const {source}=await importedSource(db,b.import_id);let derived;try{derived=manifest.kind==='budget'?deriveBudgetImport(source,manifest.month):deriveFinanceImport(source);}catch(e){throw new UserError(e.message);}
  check(derived.records.length<=3000,'This initial import is too large.');
  const stamp=new Date().toISOString(),statements=[];
  // The entire initial dataset and completion marker commit in one transaction.
  // JSON batches keep statement and parameter counts bounded.
  for(let i=0;i<derived.records.length;i+=25){const part=derived.records.slice(i,i+25).map(r=>({...r,key:recordKey(r)})),raw=JSON.stringify(part);
   statements.push(db.prepare("INSERT INTO v2_finance_records SELECT json_extract(value,'$.id'),json_extract(value,'$.type'),json_extract(value,'$.key'),1,json_extract(value,'$.data'),?,? FROM json_each(?)").bind(user.username,stamp,raw));
-  statements.push(db.prepare("INSERT INTO v2_finance_events SELECT ?||'-'||json_extract(value,'$.id'),?,json_extract(value,'$.id'),1,'import','Initial import from the authorised supplier workbook',json_extract(value,'$.data'),?,?,1 FROM json_each(?)").bind(b.import_id,b.import_id,user.username,stamp,raw));
+  statements.push(db.prepare("INSERT INTO v2_finance_events SELECT ?||'-'||json_extract(value,'$.id'),?,json_extract(value,'$.id'),1,'import','Import from the authorised financial workbook',json_extract(value,'$.data'),?,?,1 FROM json_each(?)").bind(b.import_id,b.import_id,user.username,stamp,raw));
  }
  statements.push(db.prepare("UPDATE v2_finance_imports SET status='complete',result=?,completed_at=? WHERE id=? AND status='uploading'").bind(JSON.stringify(derived.report),stamp,b.import_id));
  try{await db.batch(statements);}catch{const after=await db.prepare('SELECT status,result FROM v2_finance_imports WHERE id=?').bind(b.import_id).first();if(after.status==='complete')return {replayed:true,...JSON.parse(after.result)};throw new UserError('Import could not finish. The source is retained; retry the same import.',409);}

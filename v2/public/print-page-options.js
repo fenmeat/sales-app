@@ -6,7 +6,7 @@ const validSupplierKey=value=>typeof value==='string'&&value.length<=150&&value=
 const supplierFilename=value=>value.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'')||'unassigned';
 export function printPageOptions(search){
  const p=new URLSearchParams(search),kind=p.get('document'),date=p.get('date'),route=p.get('route'),supplier=p.get('supplier'),revision=p.get('revision');
- if(kind==='financial'){const query=new URLSearchParams();for(const key of ['type','month','from','to','q','filter'])if(p.has(key))query.set(key,p.get(key));return {url:'/api/financial/pdf?'+query,title:'Financial report',filename:'FenMeat-Financial.pdf',unsaved:false,fitPage:false,returnPath:'/financial'};}
+ if(kind==='financial'){const query=new URLSearchParams();for(const key of ['type','month','from','to','q','filter'])if(p.has(key))query.set(key,p.get(key));return {url:'/api/financial/pdf?'+query,title:'Financial report',filename:'FenMeat-Financial.pdf',unsaved:false,fitPage:false,returnPath:p.get('type')==='budget'?'/financial?view=budget':'/financial'};}
  if(kind==='recipe'){
   const group=p.get('group'),version=p.get('version');
   if(!/^[A-Z0-9_-]{1,40}$/.test(group??''))throw Error('Choose a saved recipe in FenMeat first.');

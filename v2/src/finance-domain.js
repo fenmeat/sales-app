@@ -1,8 +1,10 @@
+import {validateBudget,budgetSummary} from './budget-domain.js';
 // Shared financial register rules. Amounts are integer cents; blank is unknown.
 const field=(key,label,type='text',options)=>({key,label,type,...(options?{options}:{})});
 const f=field,amount=(key,label)=>f(key,label,'money'),date=(key,label)=>f(key,label,'date');
 const status=f('status','Status','select',['Unknown','To Pay','Paid','Part paid','Query','Confirmed','Provisional']);
 export const FINANCE_TYPES={
+ budget:{title:'Budget',group:'budget',fields:[f('month','Budget month','month'),f('notes','Notes','textarea')]},
  invoice:{title:'Supplier invoices & credits',group:'suppliers',fields:[f('supplier','Supplier'),f('month','Account month','month'),date('date','Document date'),f('reference','Invoice / credit note'),f('order','Purchase order'),amount('amount','Amount incl. VAT (negative for credit)'),f('review','Needs review','textarea'),f('notes','Notes','textarea')]},
  account:{title:'Monthly accounts',group:'suppliers',fields:[f('supplier','Supplier'),f('month','Account month','month'),date('due_date','Payment due'),f('discount_bps','Settlement discount %','percent'),f('discount_state','Discount','select',['None','Conditional','Confirmed']),amount('statement_total','Statement total before settlement discount'),amount('opening_paid','Previously recorded payment'),date('paid_date','Previous payment date'),f('evidence','Payment evidence','select',['Unknown','Bank proof','Owner confirmation','Marked statement']),status,f('review','Needs review','textarea'),f('notes','Notes','textarea')]},
  weekly:{title:'Weekly payments',group:'weekly',fields:[f('supplier','Supplier'),f('reference','Invoice number'),date('date','Planned payment date'),f('period','Payment week / grouping'),amount('amount','Invoice amount'),amount('opening_paid','Previously recorded payment'),date('paid_date','Previous payment date'),f('evidence','Payment evidence','select',['Unknown','Bank proof','Owner confirmation','Marked statement']),status,f('order','Purchase order'),f('review','Needs review','textarea'),f('notes','Notes','textarea')]},
@@ -32,7 +34,8 @@ export function validLink(url){try{const u=new URL(url,'https://fenmeat.invalid'
 export function validateFinancialRecord(record,{importing=false}={}){
  fail(record&&FINANCE_TYPES[record.type]&&/^[a-zA-Z0-9-]{12,100}$/.test(record.id??''),'Invalid financial record.');
  const spec=FINANCE_TYPES[record.type],data=record.data;fail(data&&typeof data==='object'&&!Array.isArray(data),'Record fields are missing.');
- fail(Object.keys(data).every(k=>spec.fields.some(f=>f.key===k)||['links','source','archived'].includes(k)),'Unknown financial field.');
+ fail(Object.keys(data).every(k=>spec.fields.some(f=>f.key===k)||['links','source','archived'].includes(k)||(record.type==='budget'&&['items','weeks','allocations','copied_from'].includes(k))),'Unknown financial field.');
+ if(record.type==='budget')validateBudget(data);
  for(const field of spec.fields){const v=data[field.key];if(v===null||v===undefined||v==='')continue;
   if(['money','integer','percent'].includes(field.type))fail(Number.isSafeInteger(v)&&Math.abs(v)<=100000000000&&(field.type==='money'||v>=0),'Invalid '+field.label+'.');
   else if(field.type==='quantity')fail(typeof v==='number'&&Number.isFinite(v)&&v>=0&&v<=1000000000,'Invalid '+field.label+'.');
@@ -63,6 +66,7 @@ export function validateFinancialRecord(record,{importing=false}={}){
  return record;
 }
 export function recordKey(r){const d=r.data;if(d.archived)return null;
+ if(r.type==='budget')return 'budget|'+d.month;
  if(r.type==='invoice')return 'invoice|'+norm(d.supplier)+'|'+norm(d.reference).replace(/\s*[—-]\s*bl\..*$/,'');
  if(r.type==='account')return 'account|'+norm(d.supplier)+'|'+d.month;
  if(r.type==='weekly')return 'weekly|'+norm(d.supplier)+'|'+norm(d.reference);
@@ -86,6 +90,7 @@ export function accountSummary(account,records){
  return {total,discount,net,paid,outstanding:known?net-paid:null,payment_status:paymentStatus(known?net-paid:null,paid,d.status),missing,documents:rows.length,statement_difference:d.statement_total==null?null:total-d.statement_total,conditional:d.discount_state==='Conditional',review:rows.filter(r=>r.data.review).length};
 }
 export function recordSummary(r,records){const d=r.data;
+ if(r.type==='budget')return budgetSummary(d);
  if(r.type==='account')return accountSummary(r,records);
  if(r.type==='weekly'){const paid=(d.opening_paid??0)+paymentSum(records,r.id),outstanding=d.amount==null?null:((d.opening_paid!=null||['To Pay','Part paid','Paid'].includes(d.status)||paid>0)?d.amount-paid:null);return {total:d.amount??null,paid,outstanding,payment_status:paymentStatus(outstanding,paid,d.status)};}
  if(r.type==='stock'){const known=['opening','received','sold','other_out'].every(k=>typeof d[k]==='number');const expected=known?d.opening+d.received-d.sold-d.other_out:null;return {expected,difference:expected!==null&&d.closing!=null?d.closing-expected:null};}
@@ -95,4 +100,4 @@ export function recordSummary(r,records){const d=r.data;
  if(r.type==='credit'){const end=d.date,from=new Date(Date.parse(end+'T12:00Z')-60*86400000).toISOString().slice(0,10);const refs=new Set(records.filter(x=>x.type==='credit'&&!x.data.archived&&norm(x.data.route)===norm(d.route)&&norm(x.data.customer)===norm(d.customer)&&x.data.date>=from&&x.data.date<=end).map(x=>norm(x.data.reference)));return {cases:refs.size,warning:refs.size>=3?'Consider cash only':refs.size>=2?'Review credit':'Monitor'};}
  return {};
 }
-export function recordTitle(r){const d=r.data;return [d.supplier||d.customer||d.product||d.title||d.period||d.route||'Payment',d.reference||d.month||d.date].filter(Boolean).join(' · ');}
+export function recordTitle(r){const d=r.data;if(r.type==='budget')return 'Budget · '+d.month;return [d.supplier||d.customer||d.product||d.title||d.period||d.route||'Payment',d.reference||d.month||d.date].filter(Boolean).join(' · ');}

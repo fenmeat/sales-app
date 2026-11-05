@@ -1,3 +1,4 @@
+import {budgetSummary} from './budget-domain.js';
 import {PDFDocument,rgb,PageSizes} from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import {regular,bold as boldFont} from './recipe-fonts.js';
@@ -11,8 +12,20 @@ export async function financePDF(state,query={}){
  const wrap=(text,size=10,font=normal)=>{const lines=[];let line='';for(const word of String(text??'').replace(/[\r\n\t]+/g,' ').split(/\s+/)){if(font.widthOfTextAtSize((line?line+' ':'')+word,size)>width-2*margin&&line){lines.push(line);line='';}for(const char of word){if(font.widthOfTextAtSize(line+char,size)>width-2*margin){lines.push(line);line='';}line+=char;}line+=' ';}if(line.trim())lines.push(line.trim());return lines;};
  const next=()=>{page=doc.addPage(PageSizes.A4);y=height-margin;page.drawText('FEN MEAT',{x:margin,y:y-18,font:bold,size:19,color:ink});y-=40;page.drawText(FINANCE_TYPES[type].title,{x:margin,y,font:bold,size:13,color:ink});y-=18;page.drawText([query.month,query.from&&'From '+query.from,query.to&&'To '+query.to,`${rows.length} entries`].filter(Boolean).join(' · '),{x:margin,y,font:normal,size:10,color:ink});y-=25;};
  const draw=(text,size=10,font=normal)=>{for(const line of wrap(text,size,font)){if(y<margin+30)next();page.drawText(line,{x:margin,y,font,size,color:ink});y-=size+4;}};
- next();draw('Recorded information as at '+new Date().toISOString()+'. Unknown amounts and conditional discounts remain subject to verification.',9);y-=8;
- for(const r of rows){const d=r.data,s=state.summaries[r.id]||{};if(y<margin+100)next();draw(recordTitle(r),11,bold);draw([d.month||d.date||d.period,d.amount!=null?money(d.amount):'',(s.payment_status??d.status)].filter(Boolean).join(' · '));
+ next();if(type!=='budget')draw('Recorded information as at '+new Date().toISOString()+'. Unknown amounts and conditional discounts remain subject to verification.',9);y-=8;
+ for(const r of rows){const d=r.data,s=state.summaries[r.id]||{};
+  if(type==='budget'){
+   const b=budgetSummary(d);draw('Monthly budget (known): '+money(b.total)+' | Set aside recorded: '+money(b.recorded),10,bold);
+   draw((b.surplus?'Recorded surplus: '+money(b.surplus):'Still to set aside: '+money(b.remaining))+' | '+b.missing+' expense amount(s) unknown',10);
+   draw('FOUR-WEEK PLAN — amounts reserved, not supplier payments',10,bold);
+   for(const w of b.weeks)draw('Week '+w.week+' | Planned '+money(w.planned)+' | Recorded '+(w.amount==null?'not entered':money(w.amount))+(w.date?' | '+w.date:''),9.5);
+   y-=5;
+   for(const c of b.categories){draw(c.name+' — known total '+money(c.total)+(c.missing?' ('+c.missing+' unknown)':''),10,bold);for(const item of c.items)draw(item.description+' — '+money(item.amount)+(item.notes?' · '+item.notes:''),9);y-=3;}
+   draw('MONTHLY ACCOUNT UPDATES — separate reference figures',10,bold);for(const a of d.allocations)draw(a.label+' — '+money(a.amount)+(a.notes?' · '+a.notes:''),9);
+   draw('Known account-update total: '+money(b.update_total)+' | '+b.missing_updates+' amount(s) unknown',9,bold);
+   draw('Blank amounts remain unknown. Recorded surplus is based on entered amounts only. Saved revision '+r.revision+'.',9);y-=10;continue;
+  }
+if(y<margin+100)next();draw(recordTitle(r),11,bold);draw([d.month||d.date||d.period,d.amount!=null?money(d.amount):'',(s.payment_status??d.status)].filter(Boolean).join(' · '));
   if(type==='account'){draw(`Invoices less credits ${money(s.total)} | ${s.conditional?'Conditional discount':'Discount'} ${money(s.discount)} | Net ${money(s.net)}`);draw(`Recorded paid ${money(s.paid)} | Balance ${money(s.outstanding)}${s.missing?' | '+s.missing+' amount(s) unknown':''}`);}
   if(type==='weekly')draw(`Recorded paid ${money(s.paid)} | Balance ${money(s.outstanding)} | Paid date ${d.paid_date||'unknown'}`);
   if(type==='credit')draw(`${s.cases} unique invoices / 60 days | ${s.warning} | ${d.verification} | ${d.decision}`);
