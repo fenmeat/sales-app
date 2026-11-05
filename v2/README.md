@@ -1,5 +1,15 @@
 # Customer invoice balances — 0.22.3
 
+## Invoice header branding — 0.33.1
+
+The invoice and rep-phone headers use the same white background, navy FEN MEAT
+wordmark, blue rounded F badge and secondary section label as Sales. Header-only
+styles match its responsive sizing, including hiding the badge on small phones.
+Home and identity controls retain their existing IDs and behavior. Invoice
+content, print layout, permissions, queues and business data are unchanged.
+The invoice shell cache and asset references are refreshed for this release.
+Validation: 381 existing tests pass and the Worker deployment dry-run succeeds.
+
 ## Owner invoice management — 0.33.0
 
 Home → Invoices opens road routes for Alex and Alinda even when the browser last
