@@ -6,7 +6,7 @@ import {parseHTML} from 'linkedom';
 import {signInMarkup,pinExpired,hasDraftWork} from '../public/invoicing/access-ui.js';
 import {applyInvoiceCommand,openingAccount,accountSummary,parseAmount,parseQuantity} from '../src/invoice-domain.js';
 const html=await readFile(new URL('../public/invoicing/index.html',import.meta.url),'utf8');
-const source=(await readFile(new URL('../public/invoicing/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace('void start();','globalThis.ui={ready:start(),get state(){return state;},action,refresh,render};');
+const source=(await readFile(new URL('../public/invoicing/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace('void start();','globalThis.ui={ready:start(),get state(){return state;},action,refresh,render,command};');
 const date=new Date(Date.now()+7200000).toISOString().slice(0,10),phone='synthetic-phone-1234567890',id='9001001';
 const products=[{code:'P1',name:'SYNTHETIC PRODUCT',unit:'bag',active:true,available:true,price_cents:10000}];
 const store={id,name:'SYNTHETIC PRIVATE SHOP',stop:1,terms:7,opening:{customer_id:id,complete:true,balance_cents:0,invoices:[],drafts:[],generated_at:new Date().toISOString()}};
@@ -23,7 +23,7 @@ async function page(initial,respond,{hash='',online=true,search='?v=0.24.1'}={})
  fetch:async(path,options={})=>{const body=options.body?JSON.parse(options.body):null;calls.push({path,body});const r=await respond(path,body);return {ok:r.status===undefined||r.status===200,status:r.status??200,json:async()=>r.data??r};}};
  vm.createContext(context);vm.runInContext(source,context);await context.ui.ready;
  async function submit(id,fields){const f=document.querySelector('#'+id);assert.ok(f,'form '+id+' is visible');for(const [name,value] of Object.entries(fields)){const input=f.querySelector('[name='+name+']');assert.ok(input);input.value=value;}await events.get('submit')({target:f,preventDefault(){}});}
- return {document,calls,writes,replaced,submit,ui:context.ui};
+ return {document,calls,writes,replaced,submit,navigator:context.navigator,click:target=>events.get('click')({target}),ui:context.ui};
 }
 test('registered rep gets a numeric PIN form, and re-login syncs the original queued transaction exactly once',async()=>{
  const initial=saved();initial.needsAuth=true;initial.data.rep_session_expires=Date.now()-1;
@@ -141,4 +141,82 @@ test('owner can sign in and create a phone invitation directly on the setup page
  assert.ok(!document.querySelector('[name=pin]'),'the owner never chooses or sees the rep PIN');
  await events.get('click')({target:document.querySelector('#copy')});assert.equal(copied,'https://example.test/invoicing/?v=0.24.1#setup=1234abcd5678ef90');
  assert.equal(calls.filter(c=>c.body?.action==='create').length,1);assert.equal(document.querySelector('#error').hidden,true);
+});
+
+const ownerData=name=>({...data(),username:name,display_name:name==='alex'?'Alex':'Alinda',admin:true,admin_management:true,rep_phone_id:null,rep_session_expires:null,available_routes:[{code:'R03',name:'FIRST ROUTE'},{code:'R04',name:'SECOND ROUTE'}]});
+test('both owners entering from Home escape cached Factory Sales and can manage a route open on the rep phone',async()=>{
+ for(const username of ['alex','alinda']){
+  const initial=saved();Object.assign(initial.data,{username,admin:true,rep_phone_id:null,rep_session_expires:null,route:'R12',factory_sales:true,session:{...session,actor:username}});
+  initial.drafts['factory-old-id']={lines:{P1:{qty:'2',checked:true}}};
+  const live=ownerData(username),p=await page(initial,async path=>{assert.equal(path,'/api/invoicing/bootstrap');return live;},{search:'?view=routes'});
+  assert.equal(p.ui.state.data.route,'R03');assert.equal(p.document.querySelectorAll('#routeChoice option').length,2);assert.doesNotMatch(p.document.querySelector('#routeChoice').textContent,/Factory/);
+  assert.equal(p.document.querySelector('[data-action=prepare]'),null);assert.ok(p.document.querySelector('#store'));
+  assert.equal(p.document.querySelector('[data-action=terms]').disabled,false);assert.equal(p.document.querySelector('[data-action=name]').disabled,false);
+  assert.equal(p.ui.state.data.session.actor,'tapiz');assert.equal(p.ui.state.drafts['factory-old-id'].lines.P1.qty,'2');
+ }
+});
+test('an explicit old Factory ledger keeps its history and gives owners a route navigation exit',async()=>{
+ const initial=saved();initial.data={...ownerData('alex'),route:'R12',factory_sales:true,admin_management:false,session:null};
+ const p=await page(initial,async path=>path.includes('route=R12')?initial.data:ownerData('alex'),{search:'?route=R12'});
+ assert.match(p.document.querySelector('#app').textContent,/Previous Factory records/);assert.ok(p.document.querySelector('[data-action=roadInvoices]'));
+ await p.ui.action('roadInvoices');assert.equal(p.ui.state.data.route,'R03');assert.ok(p.document.querySelector('#store'));
+});
+test('owner can select another route and edit older invoices; offline management cannot submit a change',async()=>{
+ const initial=saved();initial.data=ownerData('alinda');
+ const a=applyInvoiceCommand(initial.data.accounts[id],{action:'issue',customer_id:id,revision:0,request_id:crypto.randomUUID(),captured_at:'2020-01-01T09:00:00Z',lines:[{code:'P1',qty:1000,checked:true}],cash:0,shop2shop:0},{actor:'tapiz',admin:false,date:'2020-01-01',session:99,products,invoiceId:'FM-OLD-99',invoiceNumber:'OLD-99'});
+ initial.data.accounts[id]=a;
+ const other={...store,id:'9001002',name:'OTHER SHOP',opening:{...store.opening,customer_id:'9001002'}};
+ const next={...ownerData('alinda'),route:'R04',route_name:'SECOND ROUTE',stores:[other],accounts:{[other.id]:openingAccount(other)}};
+ const p=await page(initial,async path=>path.includes('route=R04')?next:initial.data);
+ const edit=p.document.querySelector('[data-edit="FM-OLD-99"]');assert.equal(edit.disabled,false);await p.click(edit);
+ assert.equal(p.ui.state.drafts[id].invoice_id,'FM-OLD-99');assert.ok(p.document.querySelector('[data-draft=reason]'));
+ await p.ui.refresh('R04');assert.equal(p.ui.state.selected,other.id);assert.equal(p.ui.state.drafts[id].invoice_id,'FM-OLD-99');
+ p.navigator.onLine=false;p.ui.render();assert.equal(p.document.querySelector('[data-action=name]').disabled,true);await assert.rejects(p.ui.command({action:'name',name:'No offline save'}),/Connect/);
+ assert.ok(!p.calls.some(c=>c.path.endsWith('/admin/command')));
+});
+test('interrupted owner saves keep the same request for replay and stale saves retain the draft for review',async()=>{
+ const initial=saved();initial.data=ownerData('alex');initial.data.session=null;
+ let account=initial.data.accounts[id],fail=true,reject=false;
+ const p=await page(initial,async(path,body)=>{
+  if(path.includes('/bootstrap'))return {...initial.data,accounts:{[id]:account}};
+  assert.equal(path,'/api/invoicing/admin/command');
+  if(fail){fail=false;throw Error('Connection interrupted');}
+  if(reject)return {status:409,data:{error:'Account changed. Reload shared records.',save_rejected:true}};
+  account=applyInvoiceCommand(account,body.command,{actor:'alex',admin:true,management:true,date,products,session:null});return {account};
+ });
+ await assert.rejects(p.ui.command({action:'name',name:'CONFIRMED NEW NAME'}),/interrupted/);
+ const savedRequest=structuredClone(p.ui.state.adminPending);assert.equal(p.ui.state.data.accounts[id].name,store.name);assert.ok(p.document.querySelector('[data-action=sync]'));
+ await p.ui.action('sync');assert.equal(p.ui.state.adminPending,undefined);assert.equal(p.ui.state.data.accounts[id].name,'CONFIRMED NEW NAME');
+ assert.deepEqual(p.calls.filter(c=>c.body?.command).map(c=>c.body.command.request_id),[savedRequest.body.command.request_id,savedRequest.body.command.request_id]);
+ p.ui.state.drafts[id]={lines:{P1:{qty:'3',checked:true}},cash:'0',shop2shop:'0',reference:'',received:false,reason:'Keep this reason',returned:false};reject=true;
+ await assert.rejects(p.ui.command({action:'draft',draft:p.ui.state.drafts[id]}),/Account changed/);
+ assert.equal(p.ui.state.adminPending,undefined);assert.equal(p.ui.state.drafts[id].reason,'Keep this reason');
+ await p.ui.refresh();assert.equal(p.ui.state.drafts[id].lines.P1.qty,'3');
+});
+test('reopening an interrupted owner save retries before changing routes and never clears the saved draft early',async()=>{
+ const initial=saved();initial.data=ownerData('alex');initial.data.session=null;initial.drafts[id]={lines:{P1:{qty:'1',checked:true}},cash:'0',shop2shop:'0',reference:'',received:false,reason:'',returned:false};
+ const c={action:'issue',customer_id:id,revision:0,request_id:crypto.randomUUID(),captured_at:new Date().toISOString(),lines:[{code:'P1',qty:1000,checked:true}],cash:10000,shop2shop:0,received:true};
+ initial.adminPending={body:{route:'R03',command:c},clearDraft:true};
+ const after=applyInvoiceCommand(initial.data.accounts[id],c,{actor:'alex',admin:true,management:true,date,products,session:null,invoiceId:'FM-REPLAY',invoiceNumber:'REPLAY'});
+ const p=await page(initial,async path=>path.endsWith('/admin/command')?{account:after,replayed:true}:{...initial.data,accounts:{[id]:after}},{search:'?view=routes'});
+ assert.equal(p.calls[0].path,'/api/invoicing/admin/command');assert.equal(p.calls[0].body.command.request_id,c.request_id);assert.equal(p.ui.state.adminPending,undefined);assert.equal(p.ui.state.drafts[id],undefined);assert.equal(p.ui.state.data.accounts[id].receipts.length,1);
+});
+
+test('a rep reviews an owner change without losing the offline invoice or duplicating its payment',async()=>{
+ const initial=saved(),original=initial.data.accounts[id];
+ const c={action:'issue',customer_id:id,revision:0,request_id:crypto.randomUUID(),captured_at:new Date().toISOString(),lines:[{code:'P1',qty:1000,checked:true}],cash:10000,shop2shop:0,received:true};
+ const local=applyInvoiceCommand(original,c,{actor:'tapiz',admin:false,date,session:1,products,invoiceId:'FM-1-1',invoiceNumber:'LOCAL'});
+ initial.data.accounts[id]=local;initial.sequence=1;initial.queue=[{route:'R03',device:phone,session_id:1,sequence:1,command:c}];
+ const owner=applyInvoiceCommand(original,{action:'name',name:'OWNER CONFIRMED NAME',customer_id:id,revision:0,request_id:crypto.randomUUID(),captured_at:new Date().toISOString()},{actor:'alinda',admin:true,management:true,date,session:null,products});
+ let latest=owner;
+ const p=await page(initial,async(path,body)=>{
+  if(path.includes('/bootstrap'))return {...initial.data,accounts:{[id]:latest}};
+  assert.equal(path,'/api/invoicing/command');
+  if(body.command.revision===0)return {status:409,data:{error:'Shop changed',account_conflict:true,account:owner}};
+  latest=applyInvoiceCommand(latest,body.command,{actor:'tapiz',admin:false,date,session:1,products,invoiceId:'FM-1-1',invoiceNumber:'LOCAL'});return {account:latest,sequence:1};
+ });
+ assert.equal(p.ui.state.queue.length,1);assert.ok(p.ui.state.syncConflict);assert.equal(p.ui.state.queue[0].command.request_id,c.request_id);
+ await p.ui.action('reviewConflict');assert.match(p.document.querySelector('#modalBody').textContent,/OWNER CONFIRMED NAME/);
+ await p.ui.action('retryConflict');assert.equal(p.ui.state.queue.length,0);assert.equal(p.ui.state.syncConflict,undefined);assert.equal(p.ui.state.data.accounts[id].name,owner.name);assert.equal(p.ui.state.data.accounts[id].receipts.length,1);
+ assert.ok(p.calls.filter(x=>x.body?.command).every(x=>x.body.command.request_id===c.request_id));
 });

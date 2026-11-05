@@ -63,7 +63,7 @@ export function applyInvoiceCommand(original,c,ctx){
   if(paid)receipt(a,c,[{invoice_id:ctx.invoiceId,amount:paid}],ctx);delete a.draft;
  }
  else if(c.action==='revise'){
-  const i=a.invoices.find(i=>i.id===c.invoice_id);check(i?.kind==='app'&&i.date===ctx.date&&i.session===ctx.session,'Only today’s invoice on this route visit can be edited.');check(i.version===c.invoice_version,'Invoice version changed.',409);
+  const i=a.invoices.find(i=>i.id===c.invoice_id);check(i?.kind==='app'&&(ctx.admin&&ctx.management||i.date===ctx.date&&i.session===ctx.session),'Only today’s invoice on this route visit can be edited.');check(i.version===c.invoice_version,'Invoice version changed.',409);
   const {lines,total}=linesFor(c,ctx,i),paid=sum.invoices.find(x=>x.id===i.id).received;
   check(invoiceMoney(c.cash??0)&&invoiceMoney(c.shop2shop??0),'Enter valid additional payment amounts.');const extra=(c.cash??0)+(c.shop2shop??0);
   check(total>=paid+extra,'This change would require a refund. Keep the issued invoice and ask Alex or Alinda to resolve the refund first.');

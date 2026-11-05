@@ -196,3 +196,70 @@ test('route imports use the latest opening, protect active routes and preserve a
  const moved=structuredClone(removed);moved.routes.push({code:'R04',name:'OTHER',weekday:2,invoice_stores:[store]});
  assert.equal((await f.req('/api/catalog',{revision:3,catalog:moved},f.cookie)).status,409);
 });
+
+test('Alex and Alinda manage every prepared route without taking over an active rep session',async t=>{
+ const f=await fixture(t),db=await f.mf.getD1Database('DB'),second={...store,id:'9001002',name:'SYNTHETIC OTHER SHOP',route:'R04',opening:{...store.opening,customer_id:'9001002',balance_cents:0,invoices:[]}};
+ const catalog={products,routes:[{code:'R03',name:'RIVERSDALE',weekday:2,invoice_stores:[store]},{code:'R04',name:'OTHER ROUTE',weekday:3,invoice_stores:[second]}]};
+ assert.equal((await f.req('/api/catalog',{revision:1,catalog},f.cookie)).status,200);
+ await db.prepare("UPDATE v2_invoice_sessions SET actor='tapiz',device='synthetic-rep-device-123456' WHERE id=?").bind(f.session.id).run();
+ const before=await db.prepare('SELECT * FROM v2_invoice_sessions WHERE id=?').bind(f.session.id).first();
+ for(const username of ['alex','alinda']){
+  const cookie=await f.login(username);
+  const nav=await f.req('/api/navigation',undefined,cookie);assert.equal(nav.data.sections.find(x=>x.id==='invoices'||x.key==='invoices').href,'/invoicing/?view=routes');
+  for(const route of ['R03','R04']){
+   const b=await f.req('/api/invoicing/bootstrap?route='+route,undefined,cookie);assert.equal(b.status,200);assert.equal(b.data.admin_management,true);assert.deepEqual(b.data.available_routes.map(r=>r.code),['R03','R04']);
+   const a=Object.values(b.data.accounts)[0],c={...command(a,'name',{name:'SYNTHETIC '+username+' '+route}),customer_id:a.customer_id};
+   const body={route,command:c},r=await f.req('/api/invoicing/admin/command',body,cookie);assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(r.data.account.name,c.name);assert.equal(r.data.account.revision,a.revision+1);
+   const replay=await f.req('/api/invoicing/admin/command',body,cookie);assert.equal(replay.status,200);assert.equal(replay.data.replayed,true);
+   const fresh=await f.req('/api/invoicing/bootstrap?route='+route,undefined,await f.login(username));assert.equal(fresh.data.accounts[a.customer_id].name,c.name);
+  }
+ }
+ assert.deepEqual(await db.prepare('SELECT * FROM v2_invoice_sessions WHERE id=?').bind(f.session.id).first(),before);
+ assert.equal((await db.prepare("SELECT COUNT(*) count FROM v2_invoice_sessions WHERE device LIKE 'admin-%' AND status='closed' AND sequence=1").first()).count,4);
+ const payload={route:'R03',command:{...command(openingAccount(store),'terms',{terms:7}),admin:true}};
+ for(const user of ['tapiz','mosa','musa','xavier','xalinda','other'])assert.equal((await f.req('/api/invoicing/admin/command',payload,await f.login(user))).status,403,user);
+ assert.equal((await f.req('/api/invoicing/admin/command',payload)).status,401);
+});
+
+test('owner corrections to older invoices preserve original dates, receipts and history and reject stale revisions',async t=>{
+ const f=await fixture(t),db=await f.mf.getD1Database('DB');
+ assert.equal((await f.send(f.body('collect',{cash:10000,shop2shop:0,received:true}))).status,200);
+ assert.equal((await f.send(f.body('issue',{lines:[{code:'P1',qty:2000,checked:true}],cash:1000,shop2shop:0,received:true}))).status,200);
+ assert.equal((await f.req('/api/invoicing/finish',{route:'R03',device:f.device,session_id:f.session.id,sequence:2},f.cookie)).status,200);
+ // Seed a historical saved invoice in the isolated test database.
+ const a=structuredClone(f.a),old=a.invoices.at(-1);old.date='2020-01-01';old.due='2020-01-08';old.actor='tapiz';
+ await db.prepare('UPDATE v2_invoice_events SET payload=? WHERE customer_id=? AND revision=?').bind(JSON.stringify(a),id,a.revision).run();
+ const alinda=await f.login('alinda'),body={route:'R03',command:command(a,'revise',{invoice_id:old.id,invoice_version:1,lines:[{code:'P1',qty:1000,checked:true}],cash:0,shop2shop:0,reason:'One bag returned',returned:true})};
+ const r=await f.req('/api/invoicing/admin/command',body,alinda);assert.equal(r.status,200,JSON.stringify(r.data));
+ const changed=r.data.account.invoices.at(-1);assert.equal(changed.date,old.date);assert.equal(changed.actor,'tapiz');assert.equal(changed.changed_by,'alinda');assert.equal(changed.version,2);const {history,...oldVersion}=old;assert.deepEqual(changed.history[0],oldVersion);
+ assert.deepEqual(r.data.account.receipts,a.receipts);assert.equal(accountSummary(r.data.account).invoices.at(-1).balance,9000);
+ const stale=await f.req('/api/invoicing/admin/command',{...body,command:{...body.command,request_id:crypto.randomUUID()}},f.cookie);assert.equal(stale.status,409);assert.equal(stale.data.save_rejected,true);
+ const reuse=await f.req('/api/invoicing/admin/command',{...body,command:{...body.command,reason:'Different data'}},alinda);assert.equal(reuse.status,409);
+ assert.equal((await f.req('/api/invoicing/admin/command',body,alinda)).data.replayed,true);
+ const refund={route:'R03',command:command(r.data.account,'revise',{invoice_id:old.id,invoice_version:2,lines:[],reason:'Return all',returned:true})};
+ const rejected=await f.req('/api/invoicing/admin/command',refund,alinda);assert.equal(rejected.status,400);assert.equal(rejected.data.save_rejected,true);assert.match(rejected.data.error,/refund/);
+ const read=await f.req('/api/invoicing/bootstrap?route=R03',undefined,f.cookie);assert.deepEqual(read.data.accounts[id],r.data.account);
+ const repCtx={...ctx,actor:'tapiz',admin:false,management:true};assert.throws(()=>applyInvoiceCommand(a,body.command,repCtx),/Only today/);
+});
+
+test('concurrent owner saves append one revision and retries never duplicate an invoice or payment',async t=>{
+ const f=await fixture(t),alinda=await f.login('alinda'),body={route:'R03',command:command(f.a,'collect',{cash:10000,shop2shop:0,received:true})};
+ const results=await Promise.all([f.req('/api/invoicing/admin/command',body,f.cookie),f.req('/api/invoicing/admin/command',{...body,command:{...body.command,request_id:crypto.randomUUID()}},alinda)]);
+ assert.equal(results.filter(r=>r.status===200).length,1);assert.equal(results.filter(r=>r.status===409||r.status===503).length,1);
+ const fresh=(await f.req('/api/invoicing/bootstrap?route=R03',undefined,f.cookie)).data.accounts[id];assert.equal(fresh.receipts.length,1);assert.equal(accountSummary(fresh).balance,0);
+ const issue={route:'R03',command:command(fresh,'issue',{lines:[{code:'P1',qty:1000,checked:true}],cash:10000,shop2shop:0,received:true})};
+ const first=await f.req('/api/invoicing/admin/command',issue,alinda);assert.equal(first.status,200,JSON.stringify(first.data));
+ const again=await f.req('/api/invoicing/admin/command',issue,alinda);assert.equal(again.data.replayed,true);assert.equal(again.data.account.invoices.filter(i=>i.kind==='app').length,1);assert.equal(again.data.account.receipts.length,2);
+ const payments=await f.req('/api/invoicing/export?from='+date+'&to='+date,undefined,f.cookie);assert.equal(payments.data.events.filter(e=>e.action==='issue').length,1);
+});
+
+test('an offline rep can review an owner change and safely resubmit the same unsaved transaction',async t=>{
+ const f=await fixture(t),db=await f.mf.getD1Database('DB'),rep=await f.login('tapiz');
+ await db.prepare("UPDATE v2_invoice_sessions SET actor='tapiz' WHERE id=?").bind(f.session.id).run();
+ const pending=f.body('collect',{cash:10000,shop2shop:0,received:true});
+ const owner=await f.req('/api/invoicing/admin/command',{route:'R03',command:command(f.a,'name',{name:'OWNER CONFIRMED SHOP'})},await f.login('alinda'));assert.equal(owner.status,200);
+ const conflict=await f.req('/api/invoicing/command',pending,rep);assert.equal(conflict.status,409);assert.equal(conflict.data.account_conflict,true);assert.equal(conflict.data.account.name,'OWNER CONFIRMED SHOP');assert.equal(conflict.data.account.receipts.length,0);
+ const reviewed={...pending,command:{...pending.command,revision:conflict.data.account.revision}};
+ const saved=await f.req('/api/invoicing/command',reviewed,rep);assert.equal(saved.status,200,JSON.stringify(saved.data));assert.equal(saved.data.account.name,'OWNER CONFIRMED SHOP');assert.equal(saved.data.account.receipts.length,1);assert.equal(accountSummary(saved.data.account).balance,0);
+ const replay=await f.req('/api/invoicing/command',reviewed,rep);assert.equal(replay.data.replayed,true);assert.equal(replay.data.account.receipts.length,1);
+});

@@ -57,7 +57,7 @@ export function appNavigation(username){
  const sections=[
   ['sales','Sales','Loads, returns & cash-up','/sales',!rep],
   ['pos','Factory POS','Counter sales & receipts','/pos',factory],
-  ['invoices','Invoices','Customers & payments','/invoicing/',factory||rep],
+  ['invoices','Invoices','Customers & payments',admin?'/invoicing/?view=routes':'/invoicing/',factory||rep],
   ['production','Production','Production & packing plans','/production',!rep],
   ['stocktake','Stocktake','Supplier stock counts','/recipes?view=stock',factory],
   ['staff','Staff','Attendance & payroll','/staff',admin],

@@ -1,5 +1,37 @@
 # Customer invoice balances — 0.22.3
 
+## Owner invoice management — 0.33.0
+
+Home → Invoices opens road routes for Alex and Alinda even when the browser last
+viewed the old Factory ledger. A Routes selector remains available while browsing
+shops and invoices. Factory history still opens explicitly from POS and retains
+an exit to road invoices. Existing queued work and local drafts are preserved.
+
+The two owners can manage store names, contacts, locations, credit terms, drafts,
+invoices and receipts online without starting or taking over a road-phone route.
+They can revise older app invoices with a reason and retained invoice history,
+original dates, original issuer and receipts. Imported Zoho openings remain source
+records, with their original links; this release does not import paid Zoho history
+or add refunds/payment reversals. Existing receipt confirmation, credit collection,
+product-price, return and no-overpayment rules still apply.
+
+Owner commands have server-side named-admin checks, account/version checks and
+idempotent request IDs. Each successful command appends an audit event within an
+atomic closed management session. The active rep session and its offline sequence
+are unchanged. Interrupted owner saves keep the exact request until confirmed;
+definitively rejected changes retain the local draft for review. If an owner
+changes an account used offline, the rep reviews the pending transactions against
+the latest account before retrying; no transaction or receipt is silently dropped.
+The invoice service-worker shell advances to v0330; sign-in and staff/rep access
+boundaries are otherwise retained. No production financial data or schema is
+changed by publishing this source.
+
+Validation: real workerd/D1 and DOM tests cover both owners, route navigation from
+cached Factory Sales, older invoice changes, blocked non-admin writes, concurrent
+edits, exact replay, retained drafts and rep conflict review. All 381 automated tests and the Worker deployment dry-run pass.
+Physical iPhone/iPad testing is not claimed.
+
+
 ## Staff recipe access — 0.32.2
 
 Xavier and Xalinda now have a Recipes tile on Home. Their recipe screen shows

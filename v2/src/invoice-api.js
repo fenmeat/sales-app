@@ -33,6 +33,46 @@ async function current(db,store){
  if(!opening)return null;return openingAccount({...store,opening});
 }
 const viewSession=s=>s?{id:s.id,route:s.route,actor:s.actor,device:s.device,date:s.service_date,status:s.status,sequence:s.sequence,products:JSON.parse(s.catalog).products,catalog_revision:JSON.parse(s.catalog).revision,opened_at:s.opened_at}:null;
+// Owner corrections are online, revision checked and independently audited.
+// They never take over a rep's route, sequence or offline phone session.
+async function adminCommand(db,user,catalog,b,route,stores){
+ check(isAdmin(user.username),'Only Alex or Alinda can manage invoices.',403);
+ const c=b.command,fingerprint=await hash(JSON.stringify({route,command:c}));
+ const replay=async()=>{
+  const saved=await db.prepare('SELECT * FROM v2_invoice_events WHERE request_id=?').bind(c?.request_id??'').first();
+  if(!saved)return null;
+  check(saved.request_hash===fingerprint&&saved.actor===user.username,'Transaction identifier was reused for different data.',409);
+  return {account:JSON.parse(saved.payload),replayed:true,saved_at:saved.saved_at};
+ };
+ const prior=await replay();if(prior)return prior;
+ let next,stamp,date,device;
+ try{
+  check(c&&typeof c==='object','Missing invoice command.');
+  check(route!==FACTORY_ROUTE,'Use Factory POS for factory sales.');
+  const store=stores.find(s=>s.id===c.customer_id);check(store,'Unknown customer.');
+  const a=await current(db,store);check(a,'Opening balance is missing. Update opening balances before changing this account.',409);
+  if(a.revision===0&&['issue','collect'].includes(c.action))check(Date.parse(a.opening.generated_at)>=Date.now()-36*3600000,'Refresh this shop’s opening balance before recording invoices or payments.',409);
+  check(typeof c.captured_at==='string'&&Number.isFinite(Date.parse(c.captured_at)),'Missing capture time.');
+  stamp=new Date().toISOString();date=new Date(Date.parse(c.captured_at)+7200000).toISOString().slice(0,10);device='admin-'+c.request_id;
+  next=applyInvoiceCommand(a,c,{actor:user.username,admin:true,management:true,date,session:null,products:catalog.products,invoiceId:'FM-A-'+c.request_id,invoiceNumber:'FM-'+date.replaceAll('-','')+'-A-'+c.request_id});
+ }catch(e){
+  if(e instanceof UserError)return Response.json({error:e.message,save_rejected:true},{status:e.status});
+  throw e;
+ }
+ try{
+  await db.batch([
+   db.prepare(`INSERT INTO v2_invoice_sessions(route,actor,device,service_date,status,sequence,catalog,opened_at,closed_at) SELECT ?,?,?,?,'closed',0,?,?,? WHERE COALESCE((SELECT MAX(revision) FROM v2_invoice_events WHERE customer_id=?),0)=?`).bind(route,user.username,device,date,JSON.stringify({products:catalog.products,revision:catalog.revision}),stamp,stamp,c.customer_id,c.revision),
+   db.prepare(`INSERT INTO v2_invoice_events(request_id,request_hash,session_id,sequence,customer_id,revision,action,payload,actor,captured_at,saved_at) SELECT ?,?,id,1,?,?,?,?,?,?,? FROM v2_invoice_sessions WHERE device=? AND actor=? AND route=? AND status='closed' AND sequence=0`).bind(c.request_id,fingerprint,next.customer_id,next.revision,c.action,JSON.stringify(next),user.username,c.captured_at,stamp,device,user.username,route),
+   db.prepare(`UPDATE v2_invoice_sessions SET sequence=1 WHERE device=? AND actor=? AND status='closed' AND sequence=0 AND EXISTS(SELECT 1 FROM v2_invoice_events WHERE request_id=? AND session_id=v2_invoice_sessions.id)`).bind(device,user.username,c.request_id)
+  ]);
+ }catch{
+  const saved=await replay();if(saved)return saved;
+  // Keep the same identifier after an uncertain result; never submit twice.
+  throw new UserError('Save not confirmed. Retry the saved change to check its result.',503);
+ }
+ const saved=await replay();if(saved)return {...saved,replayed:false};
+ return Response.json({error:'This account changed. Reload shared records and review your changes before saving again.',save_rejected:true},{status:409});
+}
 export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
  invoiceAccess(user);const db=env.DB,path=url.pathname,guard=invoicePhoneGuard(user);
  if(['/api/invoicing/shop-list','/api/invoicing/shop-list/pdf'].includes(path)&&request.method==='GET'){
@@ -54,7 +94,7 @@ export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
   const route=own?.route??requested??available_routes[0]?.code??(canUseFactorySales(user.username)?FACTORY_ROUTE:'R03');routeAccess(user,route);const stores=routeStores(catalog,route),accounts={};
   for(const s of stores)accounts[s.id]=await current(db,s);
   const session=await db.prepare("SELECT * FROM v2_invoice_sessions WHERE route=? AND status='active'").bind(route).first();
-  return {username:user.username,display_name:repName(user.username),admin:isAdmin(user.username),factory_sales:route===FACTORY_ROUTE,rep_phone_id:user.phone_id??null,rep_session_expires:user.phone_id?user.expires:null,date:today(),route,route_name:route===FACTORY_ROUTE?'Factory Sales':available_routes.find(r=>r.code===route)?.name??route,available_routes,stores:stores.map(({opening,...s})=>s),accounts,products:catalog.products.filter(p=>p.active),catalog_revision:catalog.revision,session:viewSession(session),zoho_write:false};
+  return {username:user.username,display_name:isAdmin(user.username)?user.username[0].toUpperCase()+user.username.slice(1):repName(user.username),admin:isAdmin(user.username),admin_management:isAdmin(user.username)&&route!==FACTORY_ROUTE,factory_sales:route===FACTORY_ROUTE,rep_phone_id:user.phone_id??null,rep_session_expires:user.phone_id?user.expires:null,date:today(),route,route_name:route===FACTORY_ROUTE?'Factory Sales':available_routes.find(r=>r.code===route)?.name??route,available_routes,stores:stores.map(({opening,...s})=>s),accounts,products:isAdmin(user.username)?catalog.products:catalog.products.filter(p=>p.active),catalog_revision:catalog.revision,session:viewSession(session),zoho_write:false};
  }
  if(path==='/api/invoicing/reconciliation'&&request.method==='GET'){routeAccess(user,url.searchParams.get('route'));return invoiceReconciliation(db,url.searchParams.get('date'),url.searchParams.get('route'));}
  if(path==='/api/invoicing/export'&&request.method==='GET'){
@@ -63,6 +103,7 @@ export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
   return {generated_at:new Date().toISOString(),from,to,events:rows.results.map(({payload,...e})=>({...e,account:JSON.parse(payload)}))};
  }
  check(request.method==='POST','Method not allowed.',405);const b=await bodyOf(request),route=b.route??'R03';routeAccess(user,route);const stores=routeStores(catalog,route);
+ if(path==='/api/invoicing/admin/command')return adminCommand(db,user,catalog,b,route,stores);
  if(path==='/api/invoicing/balance'){
   check(isAdmin(user.username),'Alex or Alinda refreshes the Zoho opening balances.',403);const s=stores.find(s=>s.id===b.customer_id);check(s,'Unknown customer.');
   const existing=await db.prepare('SELECT 1 AS found FROM v2_invoice_events WHERE customer_id=? LIMIT 1').bind(s.id).first();check(!existing,'This account has started in the app. Its opening balance is locked; use its app ledger.',409);
@@ -98,6 +139,7 @@ export async function invoiceApi({request,url,env,user,catalog,bodyOf}){
  check(session.status==='active','This route has finished.',409);check(Number.isSafeInteger(b.sequence)&&b.sequence===session.sequence+1,'Sync transactions in order before continuing.',409);
  check(typeof c.captured_at==='string'&&Number.isFinite(Date.parse(c.captured_at))&&new Date(Date.parse(c.captured_at)+7200000).toISOString().slice(0,10)===session.service_date,'Capture date differs from the prepared route date.');
  const store=stores.find(s=>s.id===c.customer_id);check(store,'Unknown customer.');const a=await current(db,store);check(a,'Opening balance is missing.',409);
+ if(c.revision!==a.revision)return Response.json({error:'This shop changed while you were working. Review the pending transaction against the latest account before syncing.',account_conflict:true,account:a},{status:409});
  const ctx={actor:user.username,admin:isAdmin(user.username),date:session.service_date,session:session.id,products:JSON.parse(session.catalog).products,invoiceId:`FM-${session.id}-${b.sequence}`,invoiceNumber:`FM-${session.service_date.replaceAll('-','')}-${session.id}-${String(b.sequence).padStart(3,'0')}`};
  const next=applyInvoiceCommand(a,c,ctx),stamp=new Date().toISOString();
  try{

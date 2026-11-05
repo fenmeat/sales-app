@@ -30,6 +30,7 @@ test('Home opens real section destinations, keeps Sales separate, and offers Pro
   assert.equal(p.document.querySelectorAll('.home-tile').length,11);
   assert.equal(p.document.querySelector('a[href="/sales"]').textContent.includes('Sales'),true);
   assert.ok(p.document.querySelector('a[href="/recipes"]'));assert.ok(p.document.querySelector('a[href="/recipes?view=stock"]'));
+  assert.ok(p.document.querySelector('a[href="/invoicing/?view=routes"]'));
   assert.doesNotMatch(p.document.body.textContent,/Order Guy|Print current view/);
   assert.deepEqual(p.calls.map(x=>x.path),['/api/navigation']);
   const button=p.document.querySelector('#home-products');await button.onclick();assert.equal(p.opened.length,1);assert.equal(button.disabled,false);
