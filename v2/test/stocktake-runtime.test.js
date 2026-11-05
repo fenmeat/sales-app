@@ -91,7 +91,7 @@ test('Xavier and Xalinda save and reload stock, keep audit identities and cannot
  for(const [index,name] of ['xavier','xalinda'].entries()){
   const cookie=cookies[name],read=await call('/api/stocktake',{cookie});assert.equal(read.status,200);assert.equal(read.data.current_user,name);assertRestricted(read.data);
   for(const path of ['/api/recipes','/api/recipes/audit','/api/import/recipes','/api/recipes/documented-update','/api/recipes/margot-packs','/api/order-guy','/api/sync/order-guy']){
-   assert.equal((await call(path,{cookie})).status,403,path);
+   assert.equal((await call(path,{cookie})).status,path==='/api/recipes'?200:403,path);
    assert.equal((await call(path,{cookie,body:{register,revision,request_id:crypto.randomUUID(),reason:'Attempt outside stock scope'}})).status,403,path);
   }
   assert.equal((await call('/api/catalog',{cookie,body:{revision:0,catalog:{products:[],routes:[]}}})).status,403,'separate availability permission does not grant catalogue editing');

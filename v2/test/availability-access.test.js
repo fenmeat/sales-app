@@ -77,7 +77,9 @@ test('real Worker persists Xavier and Xalinda availability changes with their ow
   for(const code of ['P01','NO_SUCH_PRODUCT'])assert.equal((await call('/api/products/availability',{cookie:cookies[username],body:{code,available:true,revision:catalog.revision}})).status,400,'only existing active products may be toggled');
   assert.equal((await call('/api/products/availability',{cookie:cookies[username],body:{code:'W01',available:'false',revision:catalog.revision}})).status,400);
   assert.equal((await call('/api/products/availability',{cookie:cookies[username],headers:{Origin:'https://outside.example'},body:{code:'W01',available:false,revision:catalog.revision}})).status,403);
-  for(const path of ['/api/recipes','/api/order-guy?from=2026-10-29&to=2026-10-29','/api/staff'])assert.equal((await call(path,{cookie:cookies[username]})).status,403,path+' remains protected');
+  assert.equal((await call('/api/recipes',{cookie:cookies[username]})).status,200,'named staff can read recipes');
+  assert.equal((await call('/api/recipes',{cookie:cookies[username],body:{}})).status,403,'recipe changes remain protected');
+  for(const path of ['/api/order-guy?from=2026-10-29&to=2026-10-29','/api/staff'])assert.equal((await call(path,{cookie:cookies[username]})).status,403,path+' remains protected');
   assert.equal((await call('/api/zoho/connect',{cookie:cookies[username],body:{}})).status,403);
   assert.equal((await call('/api/catalog',{cookie:cookies[username],body:{revision:catalog.revision,catalog:initialCatalog}})).status,403,'availability permission cannot edit prices or the full catalogue');
  }

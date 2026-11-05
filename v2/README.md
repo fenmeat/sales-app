@@ -1,5 +1,25 @@
 # Customer invoice balances — 0.22.3
 
+## Staff recipe access — 0.32.2
+
+Xavier and Xalinda now have a Recipes tile on Home. Their recipe screen shows
+saved ingredients, batch quantities, approval status and Print recipe. It uses
+the existing saved-revision PDF preview, including Print, Share PDF and return
+to Recipes. Trial and incomplete recipes retain a review warning.
+
+Recipe GET and PDF permissions explicitly include these two named accounts.
+Their recipe response contains only formula fields and material names/units;
+supplier prices, private source notes, packaging administration and register
+history stay restricted. Recipe writes/imports remain admin-only on the server.
+Their existing Stocktake and Products permissions are unchanged, and reps still
+have no recipe access. No credentials, schema or business data are changed.
+
+Validation: all 371 automated tests and the Worker deployment dry-run pass.
+Real workerd/D1 checks cover both staff identities, fresh sessions, saved-revision
+PDFs, blocked writes and unchanged business tables. DOM checks cover Home,
+ingredients, review warnings, search, printing and the absence of editing actions.
+Actual staff-device login and physical printing were not exercised in this change.
+
 
 ## Tasks pilot — 0.25.1
 

@@ -19,6 +19,6 @@ test('each latest recipe card opens its own saved PDF without changing recipes o
  assert.equal(previews[0].url,'/api/print/recipe?group=FIRST&version=2&revision=7');
  assert.equal(previews[1].url,'/api/print/recipe?group=V01&version=1&revision=7');
  assert.equal(previews[0].fitPage,true);assert.equal(previews[0].returnPath,'/recipes');
- assert.deepEqual(requests,[{path:'/api/stocktake',method:'GET'}]);assert.deepEqual(result,before);
+ assert.deepEqual(requests,[{path:'/api/recipes',method:'GET'}]);assert.deepEqual(result,before);
  assert.equal(document.querySelector('#editor').hasAttribute('open'),false);
 });

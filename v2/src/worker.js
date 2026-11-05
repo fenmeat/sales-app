@@ -14,7 +14,7 @@ import {zohoStatus,beginZoho,completeZoho,checkZoho,previewZohoInvoices,previewZ
 import {zohoReconciliation,verifyZohoSnapshot} from './zoho-reconcile.js';
 import {applyZohoMappings} from './zoho-matching.js';
 import {ensureSchema} from './schema.js';
-import {keys,login,sameOrigin,hash,isAdmin,canManageProductAvailability,appNavigation} from './auth.js';
+import {keys,login,sameOrigin,hash,isAdmin,canManageProductAvailability,canViewRecipes,appNavigation} from './auth.js';
 const initialized=new WeakMap();
 const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"};
 const json=(body,status=200,extra={})=>Response.json(body,{status,headers:{...headers,...extra}});
@@ -42,7 +42,7 @@ async function forecastResult(db,date,route,c){
  const snapshot=await hash(JSON.stringify({version:'1.4-recent-sales-floor',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
  return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline with measured month phase and latest comparable sales safety minimum',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
 }
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.32.1',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.32.2',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null,ctx=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
@@ -68,7 +68,7 @@ async function handle(request,env,paUser=null,ctx=null){
  if(path==='/api/invoicing/phones')return json(await invoicePhonesApi({request,env,user,bodyOf}));
  if(path.startsWith('/api/pos/')){const result=await posApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),bodyOf});return result instanceof Response?new Response(result.body,{status:result.status,headers:{...headers,...Object.fromEntries(result.headers)}}):json(result);}
  if(path==='/api/print/recipe'){
-  check(['alex','alinda'].includes(user.username),'Recipes are available to Alex and Alinda.',403);
+  check(canViewRecipes(user.username),'Your account does not have recipe access.',403);
   check(method==='GET','Method not allowed.',405);
   const group=url.searchParams.get('group'),version=url.searchParams.get('version'),revision=printRevision(url);
   check(/^[A-Z0-9_-]{1,40}$/.test(group??''),'Choose a saved recipe.');

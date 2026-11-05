@@ -6,6 +6,8 @@ export const isAdmin=username=>username==='alex'||username==='alinda';
 export const canUseFactorySales=username=>['alex','alinda','xavier','xalinda'].includes(username);
 // Product availability is a separate permission; it does not grant admin access.
 export const canManageProductAvailability=username=>isAdmin(username)||username==='xavier'||username==='xalinda';
+// Recipe reading/printing is separate from recipe and cost administration.
+export const canViewRecipes=username=>isAdmin(username)||username==='xavier'||username==='xalinda';
 export const hash=async s=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(s)))).map(b=>b.toString(16).padStart(2,'0')).join('');
 export const randomToken=()=>Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b=>b.toString(16).padStart(2,'0')).join('');
 function readKeys(raw){
@@ -61,7 +63,7 @@ export function appNavigation(username){
   ['staff','Staff','Attendance & payroll','/staff',admin],
   ['tasks','Tasks','Your tasks & reminders','/tasks',!rep],
   ['report','Daily Report','Priorities & follow-ups','/tasks?view=report',!rep],
-  ['recipes','Recipes','Recipes, materials & costs','/recipes',admin],
+  ['recipes','Recipes',admin?'Recipes, materials & costs':'View & print recipes','/recipes',canViewRecipes(username)],
   ['products','Products','Available products','',!rep],
   ['setup','Setup & Zoho','Settings & connection','/sales#setup',admin]
  ];

@@ -1,5 +1,5 @@
 import {check,UserError,dateKey,addDays,today,routeScheduled,routeName} from './domain.js';
-import {hash} from './auth.js';
+import {hash,isAdmin,canViewRecipes} from './auth.js';
 import {emptyRegister,validateRegister,recipeCost,orderGuyReport,withResaleMaterials} from './order-guy.js';
 import {nextProductionTarget,aggregateProductionDemand,buildProductionPlan,normaliseProductionPlan} from './production.js';
 import {applySupplierCount} from './stocktake.js';
@@ -11,11 +11,22 @@ function registerResponse(result,user,canManage){
  const materials=result.register.materials.map(m=>Object.fromEntries(['id','name','supplier','unit','pack_qty','pack_spec','minimum_stock','procure','resale_available','stock'].filter(k=>Object.hasOwn(m,k)).map(k=>[k,m[k]])));
  return {...result,current_user:user.username,stocktake_only:true,register:{materials,recipes:[],packaging:[]}};
 }
+function recipeReadResponse(result,user){
+ const pick=(value,fields)=>Object.fromEntries(fields.filter(k=>Object.hasOwn(value,k)).map(k=>[k,value[k]]));
+ const lines=items=>items.map(line=>pick(line,['material','qty','unit','status']));
+ const recipes=result.register.recipes.map(recipe=>({...pick(recipe,['group','name','version','effective_date','status','complete','batch_kg']),ingredients:lines(recipe.ingredients),consumables:lines(recipe.consumables)}));
+ const used=new Set(recipes.flatMap(recipe=>[...recipe.ingredients,...recipe.consumables].map(line=>line.material)));
+ const materials=result.register.materials.filter(material=>used.has(material.id)).map(material=>pick(material,['id','name','unit']));
+ // This grants formulas and printing, not supplier prices, stock edits or register administration.
+ return {revision:result.revision,saved_at:result.saved_at,current_user:user.username,stocktake_only:false,recipes_read_only:true,register:{materials,recipes,packaging:[]}};
+}
 export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,forecastResult}){
  const path=url.pathname;
- const canManage=['alex','alinda'].includes(user.username);
+ const canManage=isAdmin(user.username);
  const canCount=canManage||['xavier','xalinda'].includes(user.username);
- check(canManage||(path==='/api/stocktake'&&canCount),'Recipes, costs and Order Guy are available to Alex and Alinda. Xavier and Xalinda can use Stocktake.',403);
+ const canRead=path==='/api/recipes'&&request.method==='GET'&&canViewRecipes(user.username);
+ check(canManage||(path==='/api/stocktake'&&canCount)||canRead,'Your account does not have access to this recipe or stock action.',403);
+ if(canRead&&!canManage)return recipeReadResponse(await readRegister(db,catalog),user);
  if(path==='/api/recipes/audit'){check(request.method==='GET','Method not allowed.',405);const r=await db.prepare('SELECT revision,actor,saved_at,reason FROM v2_recipe_events ORDER BY revision DESC LIMIT 50').all();return {events:r.results};}
  if(['/api/recipes','/api/import/recipes','/api/stocktake','/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){
   if(request.method==='GET'){const r=await readRegister(db,catalog);if(['/api/recipes/documented-update','/api/recipes/margot-packs'].includes(path)){const {changes,skipped,applied}=(path.endsWith('/margot-packs')?margotPackCorrections:documentedCorrections)(r.register);return {revision:r.revision,changes,skipped,applied};}return registerResponse(r,user,canManage);}
