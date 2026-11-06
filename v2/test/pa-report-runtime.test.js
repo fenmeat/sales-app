@@ -12,12 +12,12 @@ async function setup(t){const f=await fixture(t),env={DB:f.db,APP_ACCESS_KEYS:JS
  await publish('register',{source_at:new Date().toISOString(),source_url:source,rows});
  return {...f,env,rows,publish};
 }
-const reportData=()=>({date:new Date().toISOString().slice(0,10),source_at:new Date().toISOString(),source_url:'https://mail.google.com/mail/#sent/synthetic',register_revision:1,coverage:'Synthetic source coverage',sections:['emails','activity','tasks','tomorrow','rabbi'].map((id,n)=>({id,title:id,items:[{id:'item-'+n,title:'PRIVATE BRIEFING '+id,text:'Private report narrative\nSecond paragraph',needs_reply:n===0,question:'What should happen next?',pa_task_ids:n===0?['TSK-00003']:[],links:[{label:'Source',url:source}]}]}))});
+const reportData=()=>({date:new Date().toISOString().slice(0,10),source_at:new Date().toISOString(),source_url:'https://mail.google.com/mail/#sent/synthetic',register_revision:1,coverage:'Synthetic source coverage',sections:['emails','activity','tasks','tomorrow','rabbi'].map((id,n)=>({id,title:id,items:[{id:'item-'+n,title:id==='rabbi'?'SHARED SCRIPTURE':'PRIVATE BRIEFING '+id,text:id==='rabbi'?'Shared Scripture reading\nPractical example':'Private report narrative\nSecond paragraph',needs_reply:n===0,question:'What should happen next?',pa_task_ids:n===0?['TSK-00003']:[],links:[{label:'Source',url:source}]}]}))});
 
 test('full report and private PA are server-isolated; staff see only their existing assignments',async t=>{
  const {call,publish}=await setup(t);await publish('report',reportData());
  let r=await call('alex','/api/pa-report');assert.equal(r.status,200);assert.equal(r.data.summary.open,3);assert.equal(r.data.summary.private,1);assert.equal(r.data.report.sections.length,5);
- r=await call('alinda','/api/pa-report');assert.equal(r.status,200);assert.equal(r.data.rows.length,3);assert.equal(r.data.report,null);assert.deepEqual(r.data.history,[]);assert.doesNotMatch(JSON.stringify(r.data),/PRIVATE LEGAL|PRIVATE BRIEFING/);
+ r=await call('alinda','/api/pa-report');assert.equal(r.status,200);assert.equal(r.data.rows.length,3);assert.equal(r.data.report,null);assert.deepEqual(r.data.history,[]);assert.equal(r.data.rabbi_access,true);assert.equal(r.data.rabbi.items[0].title,'SHARED SCRIPTURE');assert.doesNotMatch(JSON.stringify(r.data),/PRIVATE LEGAL|PRIVATE BRIEFING/);
  r=await call('xavier','/api/pa-report');assert.deepEqual(r.data.rows.map(r=>r.id),['TSK-00002']);assert.equal(r.data.summary.open,1);
  assert.equal((await call('xalinda','/api/pa-report')).data.rows.length,0);
  assert.equal((await call('tapiz','/api/pa-report')).status,403);
@@ -81,4 +81,37 @@ test('canonical counts join stages once, include unpublished app work, and keep 
  const rows=unifiedWork(app,pa);assert.equal(rows.length,4);assert.equal(rows[0].status,'Waiting');assert.equal(rows[0].stages.length,2);assert.equal(workCounts(rows,'alex').open,3);
  assert.equal(selectWork(rows,{username:'alex',admin:true,scope:'private',status:'open'}).length,1);
  assert.equal(selectWork(rows,{username:'alex',admin:true,scope:'fenmeat',status:'open'}).length,2);
+});
+
+
+test('named Rabbi readers receive only the reading, including history, without private replies or write access',async t=>{
+ const {call,env,publish}=await setup(t),current=reportData(),older={...reportData(),date:'2026-10-01'};
+ older.sections[4].items[0].text='Earlier shared lesson';
+ // Even sensitive metadata inside a Rabbi item must not enter its shared projection.
+ current.sections[4].items[0].pa_task_ids=['TSK-00003'];
+ current.sections[4].items[0].question='PRIVATE QUESTION';
+ current.sections[4].items[0].links=[{label:'PRIVATE SOURCE',url:'https://mail.google.com/mail/#sent/private'}];
+ await publish('report',older);await publish('report',current);
+ const before=await call('alex','/api/pa-report'),item=before.data.report.sections[4].items[0];
+ const feedback={request_id:crypto.randomUUID(),subject_key:item.subject_key,subject_hash:item.subject_hash,action:'respond',note:'PRIVATE RABBI REPLY'};
+ assert.equal((await call('alex','/api/pa-report/feedback',feedback)).status,200);
+ const upload={id:crypto.randomUUID(),subject_key:item.subject_key,subject_hash:item.subject_hash,mime_type:'application/pdf',filename:'private.pdf',base64:btoa('%PDF-1.7 private')};
+ assert.equal((await call('alex','/api/pa-report/file',upload)).status,200);
+ for(const username of ['alinda','xalinda','xavier']){
+  const r=await call(username,'/api/pa-report');assert.equal(r.status,200);assert.equal(r.data.rabbi_access,true);assert.equal(r.data.private_report,false);
+  assert.deepEqual(r.data.rabbi,{date:current.date,title:'rabbi',items:[{id:'item-4',title:'SHARED SCRIPTURE',text:'Shared Scripture reading\nPractical example'}]});
+  assert.deepEqual(r.data.rabbi_history,[{date:current.date},{date:older.date}]);
+  assert.equal(r.data.report,null);assert.deepEqual(r.data.history,[]);assert.deepEqual(r.data.feedback,[]);
+  assert.doesNotMatch(JSON.stringify(r.data),/PRIVATE|Private report narrative|mail.google.com|Synthetic source coverage/);
+  const historical=await call(username,'/api/pa-report?date='+older.date);assert.equal(historical.data.rabbi.items[0].text,'Earlier shared lesson');
+  assert.equal((await call(username,'/api/pa-report?date=2026-09-01')).data.rabbi,null);
+  assert.equal((await call(username,'/api/pa-report/feedback',{...feedback,request_id:crypto.randomUUID()})).status,404);
+  assert.equal((await call(username,'/api/pa-report/file?id='+upload.id)).status,404);
+  assert.equal((await call(username,'/api/pa-report/file',{...upload,id:crypto.randomUUID()})).status,404);
+  await assert.rejects(readPaReport(env,{username},{resource:'pending_feedback'}),/Only Alex/);
+ }
+ assert.equal((await call('tapiz','/api/pa-report')).status,403);
+ const otherEnv={...env,APP_ACCESS_KEYS:JSON.stringify({...JSON.parse(env.APP_ACCESS_KEYS),other:'synthetic-other-'+'.'.repeat(40)})};
+ const other=await readPaReport(otherEnv,{username:'other'});assert.equal(other.rabbi_access,false);assert.equal(other.rabbi,null);assert.deepEqual(other.rabbi_history,[]);
+ const after=await call('alex','/api/pa-report');assert.deepEqual(after.data.report,before.data.report);assert.deepEqual(after.data.rows,before.data.rows);assert.equal(after.data.feedback.length,1);
 });

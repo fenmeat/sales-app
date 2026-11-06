@@ -120,7 +120,7 @@ test('existing Rabbi report links open the original reading in its own view',asy
  assert.ok(ui.document.querySelector('.pa-full-report'));
 });
 
-test('Rabbi has an explicit empty state and remains private to Alex',async()=>{
+test('Rabbi has an explicit empty state and hides the menu without reading permission',async()=>{
  const p=paState();p.report=null;
  const ui=await screen('alex',[],'?view=rabbi',null,p);
  assert.match(ui.document.querySelector('.pa-rabbi').textContent,/has not been published/);
@@ -131,4 +131,41 @@ test('Rabbi has an explicit empty state and remains private to Alex',async()=>{
   assert.equal(view.document.querySelector('#pa-rabbi'),null);
   assert.equal(view.document.querySelector('h1').textContent,'Tasks');
  }
+});
+
+
+function sharedReading(){
+ const p=paState(),section=p.report.sections[4];
+ p.rabbi_access=true;p.rabbi={date:p.report.date,title:section.title,items:section.items.map(({id,title,text})=>({id,title,text}))};
+ p.rabbi_history=[{date:'2026-11-05'},{date:'2026-11-04'}];p.private_report=false;p.report=null;p.history=[];p.rows=[];return p;
+}
+test('Alinda, Xalinda and Xavier can open Rabbi from their workspace, choose dates and return to their own work',async()=>{
+ for(const username of ['alinda','xalinda','xavier']){
+  const p=sharedReading();p.register_revision=0;
+  const ui=await screen(username,[],'?view=report',null,p);
+  assert.equal(ui.document.querySelector('#pa-rabbi').textContent,'Rabbi');
+  await ui.document.querySelector('#pa-rabbi').onclick();
+  assert.equal(ui.document.querySelector('h1').textContent,'Rabbi');
+  assert.match(ui.document.querySelector('.pa-rabbi').textContent,/Practical detail/);
+  assert.equal(ui.document.querySelector('#pa-rabbi').getAttribute('aria-current'),'page');
+  assert.equal(ui.document.querySelector('.pa-rabbi [data-pa-action]'),null);
+  assert.equal(ui.document.querySelector('.pa-rabbi a'),null);
+  assert.equal(ui.document.querySelector('.pa-rabbi script'),null);
+  assert.equal(ui.document.querySelector('.pa-full-report'),null);
+  assert.equal(ui.document.querySelector('.pa-register'),null);
+  assert.doesNotMatch(ui.document.querySelector('#app').textContent,/Private matter|All PA open|Replies save immediately|Open original report/);
+  await ui.document.querySelector('#pa-report-date').onchange({target:{value:'2026-11-04'}});
+  assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-04'));
+  assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');
+  await ui.document.querySelector('#pa-tasks').onclick();assert.ok(ui.document.querySelector('.pa-register'));
+  await ui.document.querySelector('#pa-report').onclick();assert.equal(ui.document.querySelector('.pa-full-report'),null);
+ }
+});
+test('shared Rabbi deep links retain their original date and show a useful empty state',async()=>{
+ const p=sharedReading();
+ let ui=await screen('xavier',[],'?view=report&case=report-2026-11-05:report-item-4',null,p);
+ assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');assert.ok(ui.document.querySelector('.pa-rabbi #report-item-4'));
+ p.rabbi=null;ui=await screen('xalinda',[],'?view=rabbi&date=2026-11-04',null,p);
+ assert.match(ui.document.querySelector('.pa-rabbi').textContent,/has not been published/);
+ assert.equal(ui.document.querySelector('#pa-report-date option[selected]').value,'2026-11-04');
 });

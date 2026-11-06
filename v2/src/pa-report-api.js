@@ -20,6 +20,12 @@ const txt=(v,max,required=false)=>{check(typeof v==='string'&&v.length<=max&&(!r
 const iso=v=>{check(typeof v==='string'&&Number.isFinite(Date.parse(v)),'Provide the source timestamp.');return new Date(v).toISOString();};
 function link(v){if(!v)return '';let u;try{u=new URL(v);}catch{throw new UserError('Use a complete secure source link.');}check(u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<=2000,'Use a secure source link.');return u.href;}
 const canSee=(u,r)=>r.scope==='private'?u.username==='alex':isAdmin(u.username)||r.assigned_to===u.username;
+const canReadRabbi=user=>['alex','alinda','xalinda','xavier'].includes(user.username);
+// Share the reading itself, never the surrounding private report, links or replies.
+function rabbiReading(report){
+ const section=report?.sections.find(s=>s.id==='rabbi');
+ return section?{date:report.date,title:section.title,items:section.items.map(({id,title,text})=>({id,title,text}))}:null;
+}
 async function latest(db,key){const r=await db.prepare('SELECT * FROM v2_pa_report_versions WHERE resource_key=? ORDER BY revision DESC LIMIT 1').bind(key).first();return r?{...JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at}:null;}
 async function subject(env,user,key){
  const register=await latest(env.DB,'register');
@@ -50,14 +56,17 @@ export async function readPaReport(env,user,query={}){
  const alerts=(await env.DB.prepare('SELECT * FROM v2_pa_report_alerts WHERE username=? AND read_at IS NULL ORDER BY created_at DESC LIMIT 100').bind(user.username).all()).results;
  const reminders=(await env.DB.prepare('SELECT subject_key,remind_at FROM v2_pa_report_reminders WHERE username=?').bind(user.username).all()).results.filter(r=>visible.has(r.subject_key)||user.username==='alex'&&r.subject_key.startsWith('report-'));
  const currentAlerts=[];for(const a of alerts)if(await reportAlertVisible(env,a))currentAlerts.push(a);
- let report=null,history=[];
- if(user.username==='alex'){
-  history=(await env.DB.prepare("SELECT resource_key,MAX(revision) revision FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' GROUP BY resource_key ORDER BY resource_key DESC LIMIT 30").all()).results.map(r=>({date:r.resource_key.slice(7),revision:r.revision}));
-  const date=query.date?dateKey(query.date):history[0]?.date;if(date)report=await latest(env.DB,'report-'+date);
+ let report=null,history=[],rabbi=null,rabbi_history=[];
+ const rabbi_access=canReadRabbi(user);
+ if(rabbi_access){
+  const dates=(await env.DB.prepare("SELECT resource_key,MAX(revision) revision FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' GROUP BY resource_key ORDER BY resource_key DESC LIMIT 30").all()).results.map(r=>({date:r.resource_key.slice(7),revision:r.revision}));
+  const date=query.date?dateKey(query.date):dates[0]?.date,selected=date?await latest(env.DB,'report-'+date):null;
+  rabbi=rabbiReading(selected);rabbi_history=dates.map(({date})=>({date}));
+  if(user.username==='alex'){report=selected;history=dates;}
  }
  for(const r of rows){const fingerprint=await hash(JSON.stringify(r));r.subject_key=r.id;r.subject_hash=fingerprint;}
  if(report)for(const s of report.sections)for(const i of s.items){i.subject_key='report-'+report.date+':'+i.id;i.subject_hash=await hash(JSON.stringify({...i,subject_key:undefined,subject_hash:undefined}));}
- return {username:user.username,admin:isAdmin(user.username),private_report:user.username==='alex',today:today(),users:isAdmin(user.username)?users(env):[user.username],register_revision:register?.revision??0,source_at:register?.source_at??null,source_url:register?.source_url??null,summary:summary(rows),rows,feedback,report,history,reminders,alerts:currentAlerts};
+ return {username:user.username,admin:isAdmin(user.username),private_report:user.username==='alex',rabbi_access,rabbi,rabbi_history,today:today(),users:isAdmin(user.username)?users(env):[user.username],register_revision:register?.revision??0,source_at:register?.source_at??null,source_url:register?.source_url??null,summary:summary(rows),rows,feedback,report,history,reminders,alerts:currentAlerts};
 }
 function validateRegister(data,env){
  check(data&&Array.isArray(data.rows)&&data.rows.length>0&&data.rows.length<=2000,'Supply the complete bounded PA register.');
