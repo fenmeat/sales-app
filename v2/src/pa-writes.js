@@ -1,4 +1,5 @@
 import {ensureFinanceSchema,readFinance,saveFinance,financeImport} from './finance-api.js';
+import {readPaReport,savePaReport} from './pa-report-api.js';
 import {check,UserError,dateKey} from './domain.js';
 import {hash,isAdmin} from './auth.js';
 import {catalog,paBusinessRequest} from './worker.js';
@@ -65,6 +66,7 @@ function auditedDatabase(db,change,before) {
 
 export async function getEditContext(args,env,username) {
   check(isAdmin(username),'Admin access is required.',403);
+  if(args.target==='daily_report')return readPaReport(env,{username},args.query??{});
   if(args.target==='financial'){await ensureFinanceSchema(env.DB);return readFinance(env.DB,args.query??{});}
   if(args.target==='tasks')return readTasksForPa(env,{username},args.query??{});
   if(args.target==='catalog')return {target:'catalog',catalog:await catalog(env.DB),editing:'Supply products/routes keyed by code. Omitted entries and fields stay unchanged. Use availability target for availability switches.'};
@@ -83,6 +85,7 @@ export async function getChangeHistory(args,env,username) {
 
 export async function saveAppData(args,env,username,{fingerprintArgs=args,restore=false}={}) {
   check(isAdmin(username),'Admin access is required.',403);
+  if(args.target==='daily_report'){check(!restore,'Read report history and publish an explicit new revision.');return savePaReport(env,{username,via:'pa'},{...args.data,revision:args.revision,request_id:args.request_id,reason:args.reason});}
   if(args.target==='financial'){check(!restore,'Use the Financial change history for corrections.');await ensureFinanceSchema(env.DB);const b={...args.data,revision:args.revision,request_id:args.request_id,reason:args.reason};return b.operation?.startsWith('import_')?financeImport(env.DB,{username},b):saveFinance(env.DB,{username},b);}
   if(args.target==='tasks'){
     check(!restore,'Read the task history and reopen or update explicitly.');

@@ -4,11 +4,13 @@ import {POS_SCHEMA} from './pos-api.js';
 import {INVOICE_AUTH_SCHEMA} from './invoice-auth.js';
 import {STAFF_SCHEMA} from './staff-api.js';
 import {TASK_SCHEMA} from './tasks-api.js';
+import {PA_REPORT_SCHEMA} from './pa-report-api.js';
 // Additive pilot schema. These tables do not alter the five initial tables.
 export const SCHEMA = [
 ...FINANCE_SCHEMA,
 ...POS_SCHEMA,
 ...TASK_SCHEMA,
+...PA_REPORT_SCHEMA,
 ...STAFF_SCHEMA,
 ...INVOICE_SCHEMA,
 ...INVOICE_AUTH_SCHEMA,

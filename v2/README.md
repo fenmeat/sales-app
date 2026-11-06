@@ -1,5 +1,16 @@
 # Customer invoice balances — 0.22.3
 
+## Complete private Daily Report — 0.36.0
+
+Alex can read all five sections of the existing PA Daily Report and respond to individual points inside Tasks → Daily Report. A versioned read model keeps the existing PA Tasks identities and source links; the PA spreadsheet remains authoritative. Historical reports retain their original date, source cutoff and counts. Current work combines PA obligations and app stages without double-counting; a completed PO sending step does not close its remaining receipt/payment cycle.
+
+The server returns the full briefing and private PA rows only to Alex. Alinda sees Fen Meat work; other eligible staff see their assigned work. Replies, completion confirmations, assignment requests, personal reminders and evidence are durable and use source hashes and stable retry IDs. Replies wait for the existing PA bridge to verify and update the source; acknowledgement is separate. Evidence, history and private notifications remain behind existing authentication. Existing app notifications, detailed task actions and approved task-email review remain available.
+
+Connector: `get_access_status({daily_report:{resource:"summary"|"pending_feedback"|"file",date?,id?,offset?}})` or `get_app_edit_context({target:"daily_report",query})`. Only the Alex write grant can publish through `save_app_data({target:"daily_report",revision,request_id,reason,data:{operation:"register"|"report"|"acknowledge",...}})`. See `src/pa-report-api.js` for the bounded, validated payload. Reports require the current register revision and five ordered sections. The initial historical email import explicitly records its original counts; it does not pretend to be today's report. No customer data or report contents are committed to this repository.
+
+Validation: all 407 automated checks passed across the full suite and the corrected availability fixture rerun, including real Worker/D1 privacy, concurrency, evidence, reminders, stale replies and lost-response retries; deployment dry run passed. DOM acceptance covers all five sections, current/historical counts, staff boundaries, input capture and persisted reply feedback. The visual browser run was unavailable in this environment (browser startup/preview policy); physical phone/iPad layout acceptance remains outstanding. No live synthetic business records or test emails were created.
+
+
 ## Invoice header branding — 0.33.1
 
 The invoice and rep-phone headers use the same white background, navy FEN MEAT

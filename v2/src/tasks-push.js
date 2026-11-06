@@ -2,6 +2,7 @@ import {buildPushPayload} from './webpush-bundle.js';
 import {check,UserError} from './domain.js';
 import {hash} from './auth.js';
 import {ensureTaskSchema,taskUsers,currentTaskNotification} from './tasks-api.js';
+import {ensurePaReportSchema,queuePaReportReminders,reportAlertVisible} from './pa-report-api.js';
 
 const b64=bytes=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
 export function allowedPushEndpoint(value){
@@ -27,27 +28,32 @@ export async function pushApi({request,env,user,bodyOf}){
 }
 export async function flushTaskPush(env){
  await ensureTaskSchema(env.DB);
+ await ensurePaReportSchema(env.DB);
  const now=new Date().toISOString();
  const due=await env.DB.prepare('SELECT n.* FROM v2_task_notifications n WHERE n.push_sent_at IS NULL AND n.read_at IS NULL AND (n.next_attempt IS NULL OR n.next_attempt<=?) AND EXISTS(SELECT 1 FROM v2_task_push_subscriptions s WHERE s.username=n.username) ORDER BY n.created_at LIMIT 5').bind(now).all();
+ const reportDue=await env.DB.prepare('SELECT n.* FROM v2_pa_report_alerts n WHERE n.push_sent_at IS NULL AND n.read_at IS NULL AND (n.next_attempt IS NULL OR n.next_attempt<=?) AND EXISTS(SELECT 1 FROM v2_task_push_subscriptions s WHERE s.username=n.username) ORDER BY n.created_at LIMIT 5').bind(now).all();
+ due.results.push(...reportDue.results.map(n=>({...n,pa_report:true})));
  if(!due.results.length)return {sent:0};const vapid=await pushKeys(env.DB);let sent=0;
  for(const n of due.results){
   if(!taskUsers(env).includes(n.username))continue;
-  const latest=await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 1').bind(n.task_id).first();
-  if(!currentTaskNotification(latest?JSON.parse(latest.payload):null,n)){
+  const latest=n.pa_report?null:await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 1').bind(n.task_id).first();
+  const valid=n.pa_report?await reportAlertVisible(env,n):currentTaskNotification(latest?JSON.parse(latest.payload):null,n);
+  const table=n.pa_report?'v2_pa_report_alerts':'v2_task_notifications';
+  if(!valid){
    // Withdraw an undelivered notification after completion, reassignment or rescheduling.
-   await env.DB.prepare('DELETE FROM v2_task_notifications WHERE id=? AND push_sent_at IS NULL').bind(n.id).run();continue;
+   await env.DB.prepare(`DELETE FROM ${table} WHERE id=? AND push_sent_at IS NULL`).bind(n.id).run();continue;
   }
   const subscriptions=await env.DB.prepare('SELECT * FROM v2_task_push_subscriptions WHERE username=?').bind(n.username).all();let failed=false;
   for(const row of subscriptions.results){
    try{const subscription=JSON.parse(row.payload);if(!allowedPushEndpoint(subscription.endpoint))throw new UserError('Invalid push endpoint.');
-    const payload=await buildPushPayload({data:JSON.stringify({title:'FenMeat Tasks',body:n.kind==='update_requested'?'Please give a quick update on your task.':n.kind==='response'?'A task has new feedback.':n.kind==='follow_up'?'Reminder: follow up this task.':n.kind==='due'?'Reminder: you have a task to attend to.':n.kind==='completed'?'A task you created is complete.':n.kind==='assigned'?'A task has been assigned to you.':'A task has an update.',tag:n.id,url:'/tasks?task='+encodeURIComponent(n.task_id)}),options:{ttl:86400}},subscription,{...vapid,subject:'https://fenmeat-sales-test.alexander-fenwick.workers.dev'});
+    const payload=await buildPushPayload({data:JSON.stringify({title:'FenMeat Tasks',body:n.pa_report?(n.kind==='remind'?'You have a report follow-up reminder.':n.kind==='request_update'?'Please give a quick task update.':'Your report has new feedback.'):n.kind==='update_requested'?'Please give a quick update on your task.':n.kind==='response'?'A task has new feedback.':n.kind==='follow_up'?'Reminder: follow up this task.':n.kind==='due'?'Reminder: you have a task to attend to.':n.kind==='completed'?'A task you created is complete.':n.kind==='assigned'?'A task has been assigned to you.':'A task has an update.',tag:n.id,url:n.pa_report?'/tasks?view=report&case='+encodeURIComponent(n.subject_key):'/tasks?task='+encodeURIComponent(n.task_id)}),options:{ttl:86400}},subscription,{...vapid,subject:'https://fenmeat-sales-test.alexander-fenwick.workers.dev'});
     const response=await fetch(subscription.endpoint,{...payload,redirect:'manual'});
     if([404,410].includes(response.status))await env.DB.prepare('DELETE FROM v2_task_push_subscriptions WHERE endpoint_hash=?').bind(row.endpoint_hash).run();
     else if(!response.ok)failed=true;
    }catch{failed=true;}
   }
   const next=new Date(Date.now()+Math.min(3600,60*2**Math.min(n.push_attempts,6))*1000).toISOString();
-  await env.DB.prepare('UPDATE v2_task_notifications SET push_attempts=push_attempts+1,next_attempt=?,push_sent_at=? WHERE id=?').bind(failed?next:null,failed?null:now,n.id).run();if(!failed)sent++;
+  await env.DB.prepare(`UPDATE ${table} SET push_attempts=push_attempts+1,next_attempt=?,push_sent_at=? WHERE id=?`).bind(failed?next:null,failed?null:now,n.id).run();if(!failed)sent++;
  }
  return {sent};
 }
@@ -67,4 +73,5 @@ export async function queueTaskReminders(env,now=new Date()){
  FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision, json_each(e.payload,'$.followup_reminders') f
  WHERE json_extract(e.payload,'$.status') IN ('Pending','Waiting') AND f.key IN ('alex','alinda') AND f.value<=?`).bind(now.toISOString(),now.toISOString()));
  await env.DB.batch(statements);
+ await queuePaReportReminders(env,now);
 }
