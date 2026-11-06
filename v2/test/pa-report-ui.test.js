@@ -9,7 +9,7 @@ import {attachmentPicker,MAX_TASK_ATTACHMENTS} from '../public/task-attachments.
 import {renderPaWorkspace} from '../public/pa-report-ui.js';
 async function screen(username,tasks=[],view='',mailPages=null,paState=null){
  const {document}=parseHTML('<html><body><div id="app"></div><dialog id="dialog"></dialog><div id="message"></div></body></html>');
- globalThis.document=document;globalThis.location={href:'https://ui-test.example/tasks'+view};
+ globalThis.document=document;globalThis.CSS={escape:v=>v};globalThis.location={href:'https://ui-test.example/tasks'+view};
  const dialog=document.querySelector('dialog');dialog.showModal=()=>dialog.open=true;dialog.close=()=>dialog.open=false;
  const query=document.querySelector.bind(document);
  const prepare=form=>{
@@ -27,13 +27,14 @@ async function screen(username,tasks=[],view='',mailPages=null,paState=null){
   [Symbol.iterator](){return this.values[Symbol.iterator]();}
  }
  const state={username,admin:['alex','alinda'].includes(username),today:'2099-11-02',users:['alex','alinda'].includes(username)?['alex','alinda','xalinda','xavier']:[username],suppliers:['crown'],tasks,notifications:[],next_offset:null};
- const posts=[],postPaths=[];let failNext=false,failAt=-1;
+ const posts=[],postPaths=[],getPaths=[];let failNext=false,failAt=-1;
  const fetch=async(path,options={})=>{
   if(options.method==='POST'){
    const body=JSON.parse(options.body);posts.push(body);postPaths.push(path);
    if(failNext||posts.length===failAt){failNext=false;throw Error('Connection interrupted. Please retry.');}
    return {ok:true,json:async()=>({task:{...body.data,id:body.task_id,revision:1}})};
   }
+  getPaths.push(path);
   if(path.startsWith('/api/pa-report'))return {ok:true,json:async()=>structuredClone(paState||{register_revision:0})};
   if(path.startsWith('/api/tasks/emails'))return {ok:true,json:async()=>mailPages?structuredClone(mailPages[path]):({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
   return {ok:true,json:async()=>structuredClone(state)};
@@ -41,7 +42,7 @@ async function screen(username,tasks=[],view='',mailPages=null,paState=null){
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
  await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','renderPaWorkspace',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,renderPaWorkspace);
- return {document,dialog,posts,postPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
+ return {document,dialog,posts,postPaths,getPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 
 
@@ -61,4 +62,11 @@ test('staff presentation has no full private report or assignment controls and r
  const p=paState();p.private_report=false;p.report=null;p.history=[];p.rows=[{...p.rows[0],assigned_to:'xavier'}];p.users=['xavier'];
  const ui=await screen('xavier',[],'?view=report',null,p);assert.equal(ui.document.querySelector('.pa-full-report'),null);assert.equal(ui.document.querySelector('[data-pa-action="assign"]'),null);assert.doesNotMatch(ui.document.querySelector('#app').textContent,/Private matter|All PA open/);
  ui.document.querySelector('[data-pa-action="remind"]').onclick();const form=ui.dialog.querySelector('form');form.elements.remind_at.value='2099-11-02T09:45';await form.onsubmit({preventDefault(){}});assert.equal(ui.posts[0].remind_at,'2099-11-02T07:45:00.000Z');assert.equal(ui.posts[0].assigned_to,undefined);
+});
+
+test('a saved report point opens its own historical date and remains addressable',async()=>{
+ const ui=await screen('alex',[],'?view=report&case=report-2026-11-05:report-item-0',null,paState());
+ assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-05'));
+ assert.ok(ui.document.querySelector('[data-case="report-2026-11-05:report-item-0"]'));
+ assert.equal(ui.document.getElementById('report-item-0').parentElement.open,true);
 });
