@@ -6,7 +6,7 @@ import {parseHTML} from 'linkedom';
 import {signInMarkup,pinExpired,hasDraftWork} from '../public/invoicing/access-ui.js';
 import {applyInvoiceCommand,openingAccount,accountSummary,parseAmount,parseQuantity} from '../src/invoice-domain.js';
 const html=await readFile(new URL('../public/invoicing/index.html',import.meta.url),'utf8');
-const source=(await readFile(new URL('../public/invoicing/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace('void start();','globalThis.ui={ready:start(),get state(){return state;},action,refresh,render,command};');
+const source=(await readFile(new URL('../public/invoicing/app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace('void start();','globalThis.ui={ready:start(),get state(){return state;},action,refresh,render,command,persist};');
 const date=new Date(Date.now()+7200000).toISOString().slice(0,10),phone='synthetic-phone-1234567890',id='9001001';
 const products=[{code:'P1',name:'SYNTHETIC PRODUCT',unit:'bag',active:true,available:true,price_cents:10000}];
 const store={id,name:'SYNTHETIC PRIVATE SHOP',stop:1,terms:7,opening:{customer_id:id,complete:true,balance_cents:0,invoices:[],drafts:[],generated_at:new Date().toISOString()}};
@@ -15,16 +15,33 @@ const data=()=>({username:'tapiz',display_name:'Tapiz',admin:false,rep_phone_id:
 const saved=()=>({localVersion:1,device:phone,data:data(),selected:id,queue:[],drafts:{},sequence:0});
 class FormDataForDOM{constructor(form){this.values=[];for(const e of form.querySelectorAll('[name]'))if(e.type!=='checkbox'||e.checked)this.values.push([e.name,e.value??e.querySelector('option')?.value??'']);}get(name){return this.values.find(([n])=>n===name)?.[1]??null;}getAll(name){return this.values.filter(([n])=>n===name).map(([,v])=>v);}has(name){return this.values.some(([n])=>n===name);}}
 async function page(initial,respond,{hash='',online=true,search='?v=0.24.1'}={}){
- const {document}=parseHTML(html),events=new Map(),calls=[],writes=[],replaced=[];let version=initial?.localVersion??0;
+ const {document}=parseHTML(html),events=new Map(),calls=[],writes=[],replaced=[],navigation=[];let version=initial?.localVersion??0,saveGate=null;
  document.addEventListener=(event,handler)=>events.set(event,handler);const modal=document.querySelector('#modal');modal.close=()=>{modal.open=false;};modal.showModal=()=>{modal.open=true;};
- const location={hash,pathname:'/invoicing/',search,origin:'https://example.test'};
+ const location={hash,pathname:'/invoicing/',search,origin:'https://example.test',assign:url=>navigation.push(url)};
  const context={document,window:{addEventListener(){},print(){}},location,history:{replaceState:(...args)=>replaced.push(args)},navigator:{onLine:online},URL,URLSearchParams,crypto,TextEncoder,structuredClone,Date,Intl,setTimeout,clearTimeout,setInterval(){},FormData:FormDataForDOM,installInputSelection(){},signInMarkup,pinExpired,hasDraftWork,applyInvoiceCommand,accountSummary,parseAmount,parseQuantity,
- load:async()=>structuredClone(initial),save:async(value,expected)=>{assert.equal(expected,version);writes.push(structuredClone(value));return ++version;},
+ load:async()=>structuredClone(initial),save:async(value,expected)=>{assert.equal(expected,version);if(saveGate)await saveGate();writes.push(structuredClone(value));return ++version;},
  fetch:async(path,options={})=>{const body=options.body?JSON.parse(options.body):null;calls.push({path,body});const r=await respond(path,body);return {ok:r.status===undefined||r.status===200,status:r.status??200,json:async()=>r.data??r};}};
  vm.createContext(context);vm.runInContext(source,context);await context.ui.ready;
  async function submit(id,fields){const f=document.querySelector('#'+id);assert.ok(f,'form '+id+' is visible');for(const [name,value] of Object.entries(fields)){const input=f.querySelector('[name='+name+']');assert.ok(input);input.value=value;}await events.get('submit')({target:f,preventDefault(){}});}
- return {document,calls,writes,replaced,submit,navigator:context.navigator,click:target=>events.get('click')({target}),ui:context.ui};
+ return {document,calls,writes,replaced,navigation,setSaveGate:fn=>saveGate=fn,submit,navigator:context.navigator,click:target=>events.get('click')({target}),ui:context.ui};
 }
+
+test('opening Tasks waits for invoice storage and stays in Invoices on a failed save or offline',async()=>{
+ const p=await page(saved(),async()=>data());let release;
+ p.setSaveGate(()=>new Promise(resolve=>release=resolve));
+ const saving=p.ui.persist(s=>{s.drafts[id]={lines:{P1:{qty:'2',checked:false}}};});
+ await Promise.resolve();
+ let prevented=false;const event={preventDefault(){prevented=true;},currentTarget:{href:'https://example.test/tasks'}};
+ const leaving=p.document.querySelector('#tasks').onclick(event);assert.equal(prevented,true);assert.deepEqual(p.navigation,[]);
+ release();await saving;await leaving;
+ assert.deepEqual(p.navigation,['https://example.test/tasks']);assert.equal(p.writes.at(-1).drafts[id].lines.P1.qty,'2');
+ const failed=await page(saved(),async()=>data());failed.setSaveGate(()=>Promise.reject(Error('Storage unavailable')));
+ const rejected=failed.ui.persist(s=>{s.drafts[id]={lines:{P1:{qty:'3',checked:false}}};}).catch(()=>{});
+ const blocked=failed.document.querySelector('#tasks').onclick(event);await rejected;await blocked;
+ assert.deepEqual(failed.navigation,[]);assert.match(failed.document.querySelector('#error').textContent,/finish saving/);
+ p.navigator.onLine=false;await p.document.querySelector('#tasks').onclick(event);assert.equal(p.navigation.length,1);
+ assert.match(p.document.querySelector('#error').textContent,/internet connection/);
+});
 test('registered rep gets a numeric PIN form, and re-login syncs the original queued transaction exactly once',async()=>{
  const initial=saved();initial.needsAuth=true;initial.data.rep_session_expires=Date.now()-1;
  const command={action:'issue',customer_id:id,revision:0,request_id:crypto.randomUUID(),captured_at:new Date().toISOString(),lines:[{code:'P1',qty:1000,checked:true}],cash:10000,shop2shop:0,received:true};
@@ -139,7 +156,7 @@ test('owner can sign in and create a phone invitation directly on the setup page
  await events.get('submit')({target:document.querySelector('#create'),preventDefault(){}});
  assert.match(document.querySelector('#code').textContent,/Activate phone/);assert.equal(document.querySelector('#code input').value,'1234-abcd-5678-ef90');
  assert.ok(!document.querySelector('[name=pin]'),'the owner never chooses or sees the rep PIN');
- await events.get('click')({target:document.querySelector('#copy')});assert.equal(copied,'https://example.test/invoicing/?v=0.24.1#setup=1234abcd5678ef90');
+ await events.get('click')({target:document.querySelector('#copy')});assert.equal(copied,'https://example.test/invoicing/?v=0.36.2#setup=1234abcd5678ef90');
  assert.equal(calls.filter(c=>c.body?.action==='create').length,1);assert.equal(document.querySelector('#error').hidden,true);
 });
 

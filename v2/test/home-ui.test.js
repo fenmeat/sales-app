@@ -35,7 +35,7 @@ test('Home opens real section destinations, keeps Sales separate, and offers Pro
   assert.deepEqual(p.calls.map(x=>x.path),['/api/navigation']);
   const button=p.document.querySelector('#home-products');await button.onclick();assert.equal(p.opened.length,1);assert.equal(button.disabled,false);
 });
-test('staff Home includes read-only Recipes, stocktake and Products, while reps see only Invoices',async()=>{
+test('staff Home includes read-only Recipes, stocktake and Products, while reps see only Invoices and Tasks',async()=>{
   for(const username of ['xavier','xalinda']){
     const p=await page({username});assert.equal(p.document.querySelectorAll('.home-tile').length,9);
     assert.match(p.document.querySelector('a[href="/recipes"]').textContent,/View & print recipes/);
@@ -43,8 +43,8 @@ test('staff Home includes read-only Recipes, stocktake and Products, while reps 
     assert.ok(p.document.querySelector('a[href="/recipes?view=stock"]'));
   }
   for(const username of ['tapiz','mosa','musa']){
-    const p=await page({username});assert.equal(p.document.querySelectorAll('.home-tile').length,1);
-    assert.ok(p.document.querySelector('a[href="/invoicing/"]'));assert.equal(p.document.querySelector('#home-products'),null);
+    const p=await page({username});assert.equal(p.document.querySelectorAll('.home-tile').length,2);
+    assert.ok(p.document.querySelector('a[href="/invoicing/"]'));assert.ok(p.document.querySelector('a[href="/tasks"]'));assert.equal(p.document.querySelector('#home-products'),null);
   }
 });
 test('expired sessions show sign-in without module data; successful sign-in reaches Home and sign-out clears it',async()=>{

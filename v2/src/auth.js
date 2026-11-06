@@ -62,7 +62,7 @@ export function appNavigation(username){
   ['stocktake','Stocktake','Supplier stock counts','/recipes?view=stock',factory],
   ['financial','Financial','Accounts, payments & follow-ups','/financial',admin],
   ['staff','Staff','Attendance & payroll','/staff',admin],
-  ['tasks','Tasks','Your tasks & reminders','/tasks',!rep],
+  ['tasks','Tasks','Your tasks & reminders','/tasks',true],
   ['report','Daily Report','Priorities & follow-ups','/tasks?view=report',!rep],
   ['recipes','Recipes',admin?'Recipes, materials & costs':'View & print recipes','/recipes',canViewRecipes(username)],
   ['products','Products','Available products','',!rep],

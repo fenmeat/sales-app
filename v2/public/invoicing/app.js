@@ -194,4 +194,4 @@ async function start(){try{state=await load()??{localVersion:0,device:uuid(),dat
 setInterval(()=>{if(state?.data&&!state.needsAuth&&pinExpired(state.data)){void persist(s=>{s.needsAuth=true;}).catch(error);}},30000);
 void start();
 
-$('#home').onclick=event=>{if(busy||syncing||storageFailed||!navigator.onLine){event.preventDefault();error(!navigator.onLine?'Home needs an internet connection. Your saved invoices stay on this phone.':'Wait for the current save or sync to finish before opening Home.');}};
+for(const id of ['home','tasks'])$('#'+id).onclick=async event=>{event.preventDefault();const target=event.currentTarget.href;if(busy||syncing||storageFailed||!navigator.onLine){error(!navigator.onLine?'Home and Tasks need an internet connection. Your saved invoices stay on this phone.':'Wait for the current save or sync to finish before leaving Invoices.');return;}try{await writeTail;if(storageFailed)throw Error('Could not finish saving. Keep Invoices open and retry before leaving.');location.assign(target);}catch(e){error(e);}};

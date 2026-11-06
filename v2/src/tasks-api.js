@@ -1,5 +1,6 @@
 import {check,UserError,dateKey,today} from './domain.js';
 import {isAdmin,keys,hash} from './auth.js';
+import {isInvoiceRep} from './invoice-auth.js';
 import {MAIL_SCHEMA,mailAction,readTaskMail} from './tasks-mail.js';
 
 export const TASK_SCHEMA=[
@@ -16,7 +17,8 @@ export const TASK_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_task_attachments (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, username TEXT NOT NULL, mime_type TEXT NOT NULL, filename TEXT NOT NULL, bytes BLOB NOT NULL, created_at TEXT NOT NULL)`
 ];
 export const ensureTaskSchema=db=>db.batch(TASK_SCHEMA.map(s=>db.prepare(s)));
-export const taskUsers=env=>Object.keys(keys(env)).filter(u=>!['tapiz','mosa','musa'].includes(u)).sort();
+// Phone registration uses the existing canonical rep IDs, independently of old keys.
+export const taskUsers=env=>[...Object.keys(keys(env)).filter(u=>!isInvoiceRep(u)),'tapiz','mosa'].sort();
 const ID=/^[a-zA-Z0-9-]{8,90}$/,PA_ID=/^TSK-\d{5,}$/;
 const statusSet=new Set(['Pending','Waiting','Complete','Cancelled']);
 const reminderFields=['reminder_mode','reminder_at'];
@@ -56,9 +58,9 @@ export async function listTasks(env,user,query={}){
  const where=conditions.length?' WHERE '+conditions.join(' AND '):'';
  const result=await env.DB.prepare(latestSQL+where+' ORDER BY e.saved_at DESC,e.task_id LIMIT 101 OFFSET ?').bind(...params,offset).all();
  const notifications=await env.DB.prepare(`SELECT n.id,n.username,n.task_id,n.kind,n.created_at,n.read_at,e.payload FROM v2_task_notifications n JOIN v2_task_events e ON e.task_id=n.task_id AND e.revision=(SELECT MAX(revision) FROM v2_task_events WHERE task_id=n.task_id) WHERE n.username=? ORDER BY n.created_at DESC LIMIT 100`).bind(user.username).all();
- const register=await env.DB.prepare('SELECT payload FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();
+ const register=isInvoiceRep(user.username)?null:await env.DB.prepare('SELECT payload FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();
  const suppliers=register?[...new Set(JSON.parse(register.payload).materials.filter(m=>m.procure&&m.resale_available!==false).map(m=>m.supplier.trim().toLowerCase()))].sort():[];
- return {username:user.username,admin:isAdmin(user.username),today:today(),users:isAdmin(user.username)?taskUsers(env):[user.username],suppliers,tasks:result.results.slice(0,100).map(decode),next_offset:result.results.length>100?offset+100:null,notifications:notifications.results.filter(n=>currentTaskNotification(JSON.parse(n.payload),n)).map(({payload,username,...n})=>n)};
+ return {username:user.username,admin:isAdmin(user.username),invoice_rep:isInvoiceRep(user.username),today:today(),users:isAdmin(user.username)?taskUsers(env):[user.username],suppliers,tasks:result.results.slice(0,100).map(decode),next_offset:result.results.length>100?offset+100:null,notifications:notifications.results.filter(n=>currentTaskNotification(JSON.parse(n.payload),n)).map(({payload,username,...n})=>n)};
 }
 function validateReminder(task){
  const t={...task,reminder_mode:task.reminder_mode??'daily'};

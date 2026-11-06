@@ -52,7 +52,7 @@ test('PIN and legacy rep identities cannot reach other APIs, direct pages, owner
   for(const path of ['/api/invoicing/phones','/api/invoicing/export'])assert.equal((await f.req(path,null,cookie)).status,403,path);
   assert.equal((await f.req('/api/invoicing/phones',{action:'create',rep:'mosa'},cookie)).status,403);
   assert.equal((await f.req('/api/invoicing/balance',{route:'R03',customer_id:'9001001'},cookie)).status,403);
-  const home=await f.req('/api/navigation',null,cookie);assert.equal(home.status,200);assert.deepEqual(home.data.sections.map(x=>x.id),['invoices']);
+  const home=await f.req('/api/navigation',null,cookie);assert.equal(home.status,200);assert.deepEqual(home.data.sections.map(x=>x.id),['invoices','tasks']);
   assert.equal((await f.req('/',null,cookie)).status,200,'rep Home is a limited menu, not a new business permission');
   for(const path of ['/sales','/sales.html','/production','/production.html','/recipes/','/staff','/staff-clock','/access-setup','/print-page']){const r=await f.req(path,null,cookie);assert.equal(r.status,302,path);assert.equal(r.headers.get('location'),'/invoicing/');}
  }
@@ -191,4 +191,53 @@ test('Home navigation follows existing account permissions and cannot mutate bus
   assert.equal((await f.req('/api/navigation',{},cookie)).status,405);
  }
  assert.deepEqual(await f.db.prepare('SELECT payload,revision FROM v2_catalog WHERE id=1').first(),before);
+});
+
+test('registered reps create only own tasks; assignments, evidence and histories remain private',async t=>{
+ const f=await fixture(t),tapiz=await f.paired('tapiz'),musa=await f.paired('musa');
+ const create=(assigned_to,title)=>({action:'create',task_id:crypto.randomUUID(),request_id:crypto.randomUUID(),revision:0,data:{title,assigned_to,review_date:today(),reminder_mode:'off'}});
+ const assigned=create('tapiz','Synthetic rep assignment'),other=create('mosa','Synthetic other assignment');
+ const file={id:crypto.randomUUID(),filename:'synthetic.pdf',mime_type:'application/pdf',base64:btoa('%PDF-1.4\nSynthetic evidence only')};
+ assigned.files=[file];
+ for(const body of [assigned,other]){const r=await f.req('/api/tasks',body,f.admin);assert.equal(r.status,200,JSON.stringify(r.data));}
+ const self=create('tapiz','Synthetic own task');self.data.reminder_mode='once';self.data.reminder_at=new Date(Date.now()+3600000).toISOString();
+ assert.equal((await f.req('/api/tasks',self,tapiz.cookie)).status,200);
+ assert.equal((await f.req('/api/tasks',self,tapiz.cookie)).data.replayed,true);
+ assert.equal((await f.req('/api/tasks',create('mosa','Forbidden reassignment'),tapiz.cookie)).status,403);
+ for(const [person,count] of [[tapiz,2],[musa,1]]){
+  const own=await f.req('/api/tasks?mine=0',null,person.cookie);assert.equal(own.status,200);assert.equal(own.data.invoice_rep,true);
+  assert.equal(own.data.tasks.length,count);assert.ok(own.data.tasks.every(t=>t.assigned_to===person.username));assert.deepEqual(own.data.users,[person.username]);assert.deepEqual(own.data.suppliers,[]);
+  assert.deepEqual((await f.req('/api/navigation',null,person.cookie)).data.sections.map(s=>s.id),['invoices','tasks']);
+  for(const path of ['/tasks','/tasks/','/tasks.html'])assert.ok([200,307,308].includes((await f.req(path,null,person.cookie)).status),path);
+  for(const path of ['/api/pa-report','/api/financial','/api/pos/daily','/api/tasks/emails','/api/catalog','/api/recipes','/api/staff'])assert.equal((await f.req(path,null,person.cookie)).status,403,path);
+  assert.equal((await f.req('/api/tasks/push',null,person.cookie)).status,200);
+ }
+ assert.equal((await f.req('/api/tasks/file?id='+file.id,null,tapiz.cookie)).status,200);
+ assert.equal((await f.req('/api/tasks/file?id='+file.id,null,musa.cookie)).status,404);
+ assert.equal((await f.req('/api/tasks/audit?id='+assigned.task_id,null,musa.cookie)).status,404);
+ const reassigned=await f.req('/api/tasks',{action:'update',task_id:assigned.task_id,request_id:crypto.randomUUID(),revision:1,data:{assigned_to:'mosa'}},f.admin);assert.equal(reassigned.status,200);
+ assert.equal((await f.req('/api/tasks/file?id='+file.id,null,tapiz.cookie)).status,404);
+ assert.equal((await f.req('/api/tasks/file?id='+file.id,null,musa.cookie)).status,200);
+ assert.equal((await f.req('/api/tasks',{action:'complete',task_id:other.task_id,request_id:crypto.randomUUID(),revision:1},tapiz.cookie)).status,404);
+ assert.equal((await f.req('/api/tasks',{action:'complete',task_id:self.task_id,request_id:crypto.randomUUID(),revision:1},tapiz.cookie)).status,200);
+ const admin=await f.req('/api/tasks',null,f.admin);assert.equal(admin.data.tasks.length,3);assert.ok(admin.data.users.includes('tapiz'));assert.ok(admin.data.users.includes('mosa'));assert.ok(!admin.data.users.includes('musa'));
+ const stock=create('tapiz','Forbidden stocktake');stock.data={...stock.data,kind:'stocktake',supplier:'crown',due_date:today()};assert.equal((await f.req('/api/tasks',stock,tapiz.cookie)).status,400);
+ assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM v2_invoice_events').first()).n,0);
+});
+
+test('task access uses the same registered phone and stops on lock, expiry and revocation',async t=>{
+ const f=await fixture(t),p=await f.paired();
+ const taskPath='/api/tasks';assert.equal((await f.req(taskPath,null,p.cookie)).status,200);
+ assert.equal((await f.req('/api/invoicing/access/lock',{},p.cookie)).status,200);
+ assert.equal((await f.req(taskPath,null,p.cookie)).status,401);
+ const signed=await f.req('/api/invoicing/access/login',{pin},p.cookie),fresh=p.cookie.split('; ').find(c=>c.startsWith('__Host-fm_invoice_phone='))+'; '+cookies(signed);
+ assert.equal((await f.req(taskPath,null,fresh)).status,200);
+ await f.db.prepare('UPDATE v2_invoice_phones SET session_expires=? WHERE id=?').bind(Date.now()-1,p.phone_id).run();
+ assert.equal((await f.req(taskPath,null,fresh)).status,401);
+ const renewed=await f.req('/api/invoicing/access/login',{pin},fresh),current=fresh.split('; ').find(c=>c.startsWith('__Host-fm_invoice_phone='))+'; '+cookies(renewed);
+ assert.equal((await f.req(taskPath,null,current)).status,200);
+ assert.equal((await f.update(p.phone_id,'revoke')).status,200);
+ assert.equal((await f.req(taskPath,null,current)).status,401);
+ assert.equal((await f.req('/api/tasks/push',null,current)).status,401);
+ assert.equal((await f.req('/api/invoicing/bootstrap',null,current)).status,401);
 });

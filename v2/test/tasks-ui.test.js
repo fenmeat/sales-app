@@ -7,7 +7,7 @@ import {reminderOptions} from '../public/task-report-model.js';
 import {attachmentPicker,MAX_TASK_ATTACHMENTS} from '../public/task-attachments.js';
 import {createCanvas,loadImage} from '@napi-rs/canvas';
 
-async function screen(username,tasks=[],view='',mailPages=null){
+async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={}){
  const {document}=parseHTML('<html><body><div id="app"></div><dialog id="dialog"></dialog><div id="message"></div></body></html>');
  globalThis.document=document;
  const dialog=document.querySelector('dialog');dialog.showModal=()=>dialog.open=true;dialog.close=()=>dialog.open=false;
@@ -25,14 +25,17 @@ async function screen(username,tasks=[],view='',mailPages=null){
   has(name){return this.values.some(([key])=>key===name);}
   [Symbol.iterator](){return this.values[Symbol.iterator]();}
  }
- const state={username,admin:['alex','alinda'].includes(username),today:'2099-11-02',users:['alex','alinda'].includes(username)?['alex','alinda','xalinda','xavier']:[username],suppliers:['crown'],tasks,notifications:[],next_offset:null};
+ const state={username,invoice_rep:['tapiz','mosa'].includes(username),admin:['alex','alinda'].includes(username),today:'2099-11-02',users:['alex','alinda'].includes(username)?['alex','alinda','xalinda','xavier']:[username],suppliers:['crown'],tasks,notifications:[],next_offset:null};
  const posts=[],postPaths=[];let failNext=false,failAt=-1;
  const fetch=async(path,options={})=>{
   if(options.method==='POST'){
+   if(path==='/api/invoicing/access/login')expired=false;
    const body=JSON.parse(options.body);posts.push(body);postPaths.push(path);
    if(failNext||posts.length===failAt){failNext=false;throw Error('Connection interrupted. Please retry.');}
    return {ok:true,json:async()=>({task:{...body.data,id:body.task_id,revision:1}})};
   }
+  if(path==='/api/tasks'&&expired)return {ok:false,status:401,json:async()=>({error:'Enter your PIN again.'})};
+  if(path==='/api/invoicing/access/status')return {ok:true,json:async()=>({registered:true,name:username==='tapiz'?'Tapiz':'Musa'})};
   if(path.startsWith('/api/tasks/emails'))return {ok:true,json:async()=>mailPages?structuredClone(mailPages[path]):({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
   return {ok:true,json:async()=>structuredClone(state)};
  };
@@ -41,6 +44,31 @@ async function screen(username,tasks=[],view='',mailPages=null){
  await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS);
  return {document,dialog,posts,postPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
+
+test('road phone Tasks shows only Home and Invoices with own general tasks and reminders',async()=>{
+ for(const username of ['tapiz','mosa']){
+  const {document,dialog,posts}=await screen(username,[],'?view=report');
+  assert.equal(document.querySelector('h1').textContent,'Tasks');
+  assert.deepEqual([...document.querySelectorAll('header nav a')].map(a=>a.getAttribute('href')),['/','/invoicing/']);
+  assert.equal(document.querySelector('#daily-report'),null);assert.equal(document.querySelector('#owner'),null);
+  assert.ok(document.querySelector('#push'));assert.doesNotMatch(document.body.textContent,/PA register could not/);
+  document.querySelector('#new').onclick();const form=dialog.querySelector('form');
+  assert.equal(form.elements.assigned_to.value,username);assert.equal(form.elements.kind,undefined);assert.equal(form.elements.supplier,undefined);
+  assert.ok(form.elements.reminder_mode);assert.ok(document.querySelector('#attachment'));
+  form.elements.title.value='Synthetic rep task';await form.onsubmit({preventDefault(){}});
+  assert.equal(posts[0].data.assigned_to,username);assert.equal(posts[0].action,'create');assert.equal(dialog.open,false);
+ }
+});
+
+test('expired road phone Tasks renews the same PIN session without asking for an access key',async()=>{
+ const {document,posts,postPaths}=await screen('tapiz',[],'',null,{expired:true});
+ const form=document.querySelector('#task-pin');assert.ok(form);
+ const input=form.querySelector('[name=pin]');assert.equal(input.getAttribute('inputmode'),'numeric');assert.equal(input.type,'password');
+ assert.equal(form.querySelector('[name=key]'),null);input.value='804739';
+ await form.onsubmit({target:form,preventDefault(){}});
+ assert.equal(input.value,'');assert.equal(document.querySelector('#task-pin'),null);
+ assert.ok(document.querySelector('#new'));assert.deepEqual(postPaths,['/api/invoicing/access/login']);assert.deepEqual(posts,[{pin:'804739'}]);
+});
 
 test('staff creation UI offers self-assigned tasks, SAST reminders and stable retry identifiers',async()=>{
  for(const username of ['xavier','xalinda']){

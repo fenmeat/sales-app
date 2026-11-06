@@ -27,7 +27,7 @@ async function api(path,body){
   return data;
 }
 function signIn(){
-  app.innerHTML=header()+`<main class="home-signin"><p class="eyebrow">WELCOME TO FEN MEAT</p><h1>Sign in</h1><p>Use your own app account.</p><form id="home-login"><label>Username<input name="username" autocomplete="username" required></label><label>Personal access key<input name="key" type="password" autocomplete="current-password" required></label><button class="primary" type="submit">Sign in</button><p id="login-error" role="alert"></p></form><a class="rep-signin" href="/invoicing/">Rep PIN sign-in → Invoices</a><p class="home-help"><a href="/access-setup">Access setup</a></p></main>`;
+  app.innerHTML=header()+`<main class="home-signin"><p class="eyebrow">WELCOME TO FEN MEAT</p><h1>Sign in</h1><p>Use your own app account.</p><form id="home-login"><label>Username<input name="username" autocomplete="username" required></label><label>Personal access key<input name="key" type="password" autocomplete="current-password" required></label><button class="primary" type="submit">Sign in</button><p id="login-error" role="alert"></p></form><a class="rep-signin" href="/invoicing/">Rep PIN sign-in → Invoices &amp; Tasks</a><p class="home-help"><a href="/access-setup">Access setup</a></p></main>`;
   document.querySelector('#home-login').onsubmit=async event=>{
     event.preventDefault();const form=event.target,button=form.querySelector('button');if(button.disabled)return;
     const values=new FormData(form);button.disabled=true;document.querySelector('#login-error').textContent='';
@@ -37,7 +37,7 @@ function signIn(){
   };
 }
 function render(data){
-  app.innerHTML=header(data.username)+`<main class="home-shell"><div class="home-heading"><h1>Home</h1><p>Choose where you want to work.</p></div><nav class="home-grid" aria-label="Fen Meat sections">${data.sections.map(section=>{
+  app.innerHTML=header(data.display_name??data.username)+`<main class="home-shell"><div class="home-heading"><h1>Home</h1><p>Choose where you want to work.</p></div><nav class="home-grid" aria-label="Fen Meat sections">${data.sections.map(section=>{
     const content=`<span class="home-icon">${icon(section.id)}</span><span class="home-tile-title">${esc(section.title)}</span><span class="home-tile-description">${esc(section.description)}</span>`;
     return section.id==='products'?`<button class="home-tile" id="home-products">${content}</button>`:`<a class="home-tile" href="${esc(section.href)}">${content}</a>`;
   }).join('')}</nav></main>`;
