@@ -5,6 +5,7 @@ import {parseHTML} from 'linkedom';
 import {renderReport} from '../public/tasks-report.js';
 import {reminderOptions} from '../public/task-report-model.js';
 import {attachmentPicker,MAX_TASK_ATTACHMENTS} from '../public/task-attachments.js';
+import {createCanvas,loadImage} from '@napi-rs/canvas';
 
 async function screen(username,tasks=[],view='',mailPages=null){
  const {document}=parseHTML('<html><body><div id="app"></div><dialog id="dialog"></dialog><div id="message"></div></body></html>');
@@ -118,6 +119,65 @@ test('report reads every email-status page before offering another send',async()
 
 const pdf=name=>new File(['%PDF-1.4 synthetic test evidence'],name,{type:'application/pdf',lastModified:1});
 function selectFiles(ui,files){const input=ui.dialog.querySelector('#attachment');Object.defineProperty(input,'files',{configurable:true,value:files});input.onchange();}
+
+test('new task photos are selected, removed and saved atomically with instructions for admins and staff',async()=>{
+ for(const user of ['alex','alinda','xavier','xalinda']){
+  const ui=await screen(user);ui.document.querySelector('#new').onclick();
+  const a=pdf('instructions.pdf'),b=pdf('wrong.pdf'),c=pdf('example.pdf');
+  selectFiles(ui,[a,b]);selectFiles(ui,[a,c]);
+  ui.dialog.querySelector('[aria-label="Remove wrong.pdf"]').onclick();
+  const form=ui.dialog.querySelector('form');form.elements.title.value='Check these examples';form.elements.details.value='Keep these instructions';
+  await Promise.all([form.onsubmit({preventDefault(){}}),form.onsubmit({preventDefault(){}})]);
+  assert.deepEqual(ui.postPaths,['/api/tasks'],'photos and task have one save, with no pre-existing task required');
+  assert.equal(ui.posts[0].action,'create');assert.equal(ui.posts[0].data.details,'Keep these instructions');
+  assert.deepEqual(ui.posts[0].files.map(f=>f.filename),['instructions.pdf','example.pdf']);
+  assert.ok(ui.posts[0].files.every(f=>atob(f.base64).startsWith('%PDF-')));
+  assert.equal(ui.dialog.open,false);
+ }
+});
+
+test('lost new-task save keeps all photo bytes, task ID, request ID and instructions for retry',async()=>{
+ const ui=await screen('alex');ui.document.querySelector('#new').onclick();
+ selectFiles(ui,[pdf('first.pdf'),pdf('second.pdf')]);
+ const form=ui.dialog.querySelector('form');form.elements.title.value='With photos';form.elements.assigned_to.value='xavier';
+ ui.failNext();await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.dialog.open,true);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,2);
+ assert.match(form.querySelector('.error').textContent,/Connection interrupted/);
+ await form.onsubmit({preventDefault(){}});
+ assert.deepEqual(ui.posts[0],ui.posts[1]);assert.equal(ui.posts.length,2);
+ assert.equal(ui.posts[1].data.assigned_to,'xavier');assert.equal(ui.dialog.open,false);
+});
+
+test('creation resizes real photo pixels and sends the resulting JPEG with its preview',async t=>{
+ const ui=await screen('xavier');ui.document.querySelector('#new').onclick();
+ const bitmap=globalThis.createImageBitmap;
+ globalThis.createImageBitmap=async file=>{const image=await loadImage(Buffer.from(await file.arrayBuffer()));image.close=()=>{};return image;};
+ t.after(()=>{globalThis.createImageBitmap=bitmap;});
+ const create=ui.document.createElement.bind(ui.document);
+ ui.document.createElement=name=>{
+  if(name!=='canvas')return create(name);
+  const canvas=createCanvas(1,1);canvas.toBlob=(callback,mime)=>callback(new Blob([canvas.toBuffer(mime)],{type:mime}));return canvas;
+ };
+ const photo=createCanvas(2000,1000);photo.getContext('2d').fillRect(0,0,2000,1000);
+ selectFiles(ui,[new File([photo.toBuffer('image/png')],'photo.png',{type:'image/png'})]);
+ assert.ok(ui.dialog.querySelector('.attachment-row img'));
+ const form=ui.dialog.querySelector('form');form.elements.title.value='Photo example';await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.posts.length,1);assert.equal(ui.posts[0].files[0].mime_type,'image/jpeg');
+ const saved=await loadImage(Buffer.from(ui.posts[0].files[0].base64,'base64'));assert.equal(saved.width,1600);assert.equal(saved.height,800);
+});
+
+test('task instruction photos reopen while pending, survive edits and stay separate from completion evidence',async()=>{
+ const ids=['instruction-file-one','instruction-file-two'];
+ const ui=await screen('xavier',[reportTask({created_by:'xavier',attachments:ids})]);
+ ui.document.querySelector('[data-task]').onclick();
+ const links=[...ui.dialog.querySelectorAll('a[href^="/api/tasks/file"]')];
+ assert.deepEqual(links.map(a=>a.getAttribute('href')),ids.map(id=>'/api/tasks/file?id='+id));
+ assert.match(ui.dialog.textContent,/Task photos \/ documents/);
+ ui.document.querySelector('#edit').onclick();
+ assert.equal(ui.dialog.querySelectorAll('a[href^="/api/tasks/file"]').length,2);
+ const form=ui.dialog.querySelector('form');form.elements.title.value='Updated instructions';await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.posts[0].action,'update');assert.equal(ui.posts[0].files,undefined);assert.equal(ui.posts[0].data.attachments,undefined);
+});
 
 test('completion accepts multiple selections, adds more, ignores duplicate choices and removes one file',async()=>{
  const ui=await screen('xavier',[reportTask({requires_evidence:true})]);

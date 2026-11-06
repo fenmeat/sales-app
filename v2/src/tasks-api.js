@@ -86,6 +86,17 @@ function validateTask(raw,env){
  return t;
 }
 function notification(db,requestId,username,task,kind,at){return db.prepare('INSERT INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind(requestId+'-'+username,username,task.id,kind,at);}
+function attachmentData(b){
+ check(b&&ID.test(b.id??'')&&['image/jpeg','image/png','application/pdf'].includes(b.mime_type),'Use a JPG, PNG or PDF attachment.');
+ check(typeof b.base64==='string'&&b.base64.length<=700000&&/^[A-Za-z0-9+/]*={0,2}$/.test(b.base64),'Keep each attachment smaller than 500 KB.');
+ let bytes;try{bytes=Uint8Array.from(atob(b.base64),c=>c.charCodeAt(0));}catch{throw new UserError('Invalid attachment.');}
+ check(bytes.length>0&&bytes.length<=500000,'Keep each attachment smaller than 500 KB.');
+ const signature=b.mime_type==='application/pdf'?String.fromCharCode(...bytes.slice(0,5))==='%PDF-':b.mime_type==='image/png'?bytes[0]===137&&bytes[1]===80&&bytes[2]===78&&bytes[3]===71:bytes[0]===255&&bytes[1]===216&&bytes[2]===255;
+ check(signature,'The file contents do not match its type.');
+ const filename=optionalText(b.filename,100).replace(/[^a-zA-Z0-9._-]/g,'_')||'attachment';
+ return {id:b.id,mime_type:b.mime_type,filename,bytes};
+}
+function insertAttachment(db,taskId,username,at,file){return db.prepare('INSERT INTO v2_task_attachments VALUES(?,?,?,?,?,?,?)').bind(file.id,taskId,username,file.mime_type,file.filename,file.bytes,at);}
 export async function saveTask(env,user,b){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
  check(b&&ID.test(b.request_id??'')&&ID.test(b.task_id??''),'Use a valid save identifier.');
@@ -97,7 +108,8 @@ export async function saveTask(env,user,b){
  const old=await getTask(env.DB,b.task_id),admin=isAdmin(user.username),at=new Date().toISOString();
  if(old)visible(user,old);
  check((old?.revision??0)===b.revision,'This task changed. Reload before saving.',409);
- const action=b.action??'create';let task=old?structuredClone(old):null;
+ const action=b.action??'create';let task=old?structuredClone(old):null,files=[];
+ check(b.files===undefined||action==='create','Task photos can only be supplied when creating a task.');
  if(action==='create'){
   check(!old,'This task already exists.',409);
   check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||k==='area'),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat','Personal PA matters cannot be imported into FenMeat.');
@@ -113,6 +125,11 @@ export async function saveTask(env,user,b){
    const duplicate=await env.DB.prepare(latestSQL+" WHERE json_extract(e.payload,'$.parent_cycle_id')=? AND json_extract(e.payload,'$.kind')='po_dispatch' LIMIT 1").bind(task.parent_cycle_id).first();
    check(!duplicate,'This PO cycle already has a dispatch task. Update its existing revision.',409);
   }
+  check(b.files===undefined||(Array.isArray(b.files)&&b.files.length<=12),'Choose up to 12 different attachments.');
+  files=(b.files??[]).map(attachmentData);
+  check(new Set(files.map(f=>f.id)).size===files.length,'Choose up to 12 different attachments.');
+  // References belong to the instructions, never to completion evidence.
+  task.attachments=files.map(f=>f.id);
  }else{
   check(old,'Task not found.',404);
   if(action==='update'){
@@ -137,6 +154,7 @@ export async function saveTask(env,user,b){
    check(old.status==='Pending'||old.status==='Waiting','This task is already closed.');
    const note=optionalText(b.note,2000),proof_url=safeURL(b.proof_url),attachments=Array.isArray(b.attachments)?b.attachments:[];
    check(attachments.length<=12&&new Set(attachments).size===attachments.length&&attachments.every(x=>typeof x==='string'&&ID.test(x)),'Choose up to 12 different attachments.');
+   check(attachments.every(id=>!task.attachments?.includes(id)),'Add completion evidence; the task instruction photos are not completion evidence.');
    for(const id of attachments){const file=await env.DB.prepare('SELECT task_id FROM v2_task_attachments WHERE id=?').bind(id).first();check(file?.task_id===task.id,'An attachment belongs to another task.');}
    check(!task.requires_evidence||proof_url||attachments.length,'Attach the required completion evidence.');
    const completion={by:user.username,at,note,proof_url,attachments};
@@ -189,6 +207,7 @@ export async function saveTask(env,user,b){
  for(const key of ['revision','updated_at','updated_by','pa_sync'])delete task[key];
  const revision=b.revision+1;
  const statements=[env.DB.prepare('INSERT INTO v2_task_events(request_id,fingerprint,task_id,revision,action,payload,actor,saved_at) VALUES(?,?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,task.id,revision,action,JSON.stringify(task),user.username,at)];
+ statements.push(...files.map(file=>insertAttachment(env.DB,task.id,user.username,at,file)));
  if(action==='create'&&task.kind==='po_dispatch')statements.push(env.DB.prepare('INSERT INTO v2_task_po_links VALUES(?,?)').bind(task.parent_cycle_id,task.id));
  if(action==='create'||old?.assigned_to!==task.assigned_to)statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'assigned',at));
  else if(['complete','wait'].includes(action))statements.push(notification(env.DB,b.request_id,task.created_by,task,action==='complete'?'completed':'waiting',at));
@@ -241,16 +260,10 @@ export async function tasksApi({request,url,env,user,bodyOf}){
  }
  if(path==='/api/tasks/file'){
   const task=visible(user,await getTask(env.DB,b.task_id));check(!['Complete','Cancelled'].includes(task.status),'Reopen the task before adding evidence.');
-  check(ID.test(b.id??'')&&['image/jpeg','image/png','application/pdf'].includes(b.mime_type),'Use a JPG, PNG or PDF attachment.');
-  check(typeof b.base64==='string'&&b.base64.length<=700000&&/^[A-Za-z0-9+/]*={0,2}$/.test(b.base64),'Keep each attachment smaller than 500 KB.');
-  let bytes;try{bytes=Uint8Array.from(atob(b.base64),c=>c.charCodeAt(0));}catch{throw new UserError('Invalid attachment.');}
-  check(bytes.length>0&&bytes.length<=500000,'Keep each attachment smaller than 500 KB.');
-  const signature=b.mime_type==='application/pdf'?String.fromCharCode(...bytes.slice(0,5))==='%PDF-':b.mime_type==='image/png'?bytes[0]===137&&bytes[1]===80&&bytes[2]===78&&bytes[3]===71:bytes[0]===255&&bytes[1]===216&&bytes[2]===255;
-  check(signature,'The file contents do not match its type.');
+  const file=attachmentData(b);
   const old=await env.DB.prepare('SELECT task_id FROM v2_task_attachments WHERE id=?').bind(b.id).first();if(old){check(old.task_id===task.id,'Attachment identifier already used.',409);return {id:b.id};}
-  const count=await env.DB.prepare('SELECT COUNT(*) n FROM v2_task_attachments WHERE task_id=?').bind(task.id).first();check(count.n<12,'This task already has twelve attachments.');
-  const filename=optionalText(b.filename,100).replace(/[^a-zA-Z0-9._-]/g,'_')||'evidence';
-  await env.DB.prepare('INSERT INTO v2_task_attachments VALUES(?,?,?,?,?,?,?)').bind(b.id,task.id,user.username,b.mime_type,filename,bytes,new Date().toISOString()).run();return {id:b.id};
+  const count=await env.DB.prepare('SELECT COUNT(*) n FROM v2_task_attachments WHERE task_id=? AND id NOT IN (SELECT value FROM json_each(?))').bind(task.id,JSON.stringify(task.attachments??[])).first();check(count.n<12,'This task already has twelve completion attachments.');
+  await insertAttachment(env.DB,task.id,user.username,new Date().toISOString(),file).run();return {id:b.id};
  }
  if(path==='/api/tasks')return saveTask(env,user,b);
  if(path==='/api/tasks/read'){check(/^[a-zA-Z0-9_-]{8,140}$/.test(b.id??''),'Invalid notification.');await env.DB.prepare('UPDATE v2_task_notifications SET read_at=? WHERE id=? AND username=?').bind(new Date().toISOString(),b.id,user.username).run();return {saved:true};}

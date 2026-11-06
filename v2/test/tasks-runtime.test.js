@@ -183,3 +183,57 @@ test('twelve evidence files persist, reopen independently and retain task access
  assert.equal((await call('xalinda','/api/tasks',{...completion,task_id:other.task_id,request_id:crypto.randomUUID(),attachments:[legacy.id]})).status,200);
  assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_events').first()).n,0);
 });
+
+const instructionFile=(overrides={})=>({id:crypto.randomUUID(),filename:'instructions.png',mime_type:'image/png',base64:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=',...overrides});
+test('new-task photos commit with the task, reopen for its owner and admins, and replay once',async t=>{
+ const {call,task,db,readFile}=await fixture(t),b={...task({requires_evidence:true}),files:[instructionFile(),instructionFile()]};
+ const first=await call('alinda','/api/tasks',b);assert.equal(first.status,200,JSON.stringify(first.data));
+ assert.equal(first.data.task.status,'Pending');assert.equal(first.data.task.completion,null);
+ assert.deepEqual(first.data.task.attachments,b.files.map(f=>f.id));
+ assert.equal((await call('alinda','/api/tasks',b)).data.replayed,true);
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_task_events').first()).n,1);
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_task_notifications').first()).n,1);
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_task_attachments').first()).n,2);
+ const payload=(await db.prepare('SELECT payload FROM v2_task_events').first()).payload;assert.equal(payload.includes(b.files[0].base64),false,'event stores references, not file bytes');
+ for(const user of ['alex','alinda','xalinda']){
+  const current=(await call(user,'/api/tasks')).data.tasks.find(x=>x.id===b.task_id);assert.deepEqual(current.attachments,b.files.map(f=>f.id));
+  const file=await readFile(user,b.files[0].id);assert.equal(file.status,200);assert.deepEqual(Buffer.from(await file.arrayBuffer()),Buffer.from(b.files[0].base64,'base64'));
+ }
+ for(const user of ['xavier','tapiz',''])assert.notEqual((await readFile(user,b.files[0].id)).status,200);
+ const complete={task_id:b.task_id,request_id:crypto.randomUUID(),revision:1,action:'complete'};
+ assert.equal((await call('xalinda','/api/tasks',complete)).status,400,'instruction photos do not satisfy completion evidence');
+ assert.equal((await call('xalinda','/api/tasks',{...complete,attachments:[b.files[0].id]})).status,400);
+ const move=await call('alex','/api/tasks',{task_id:b.task_id,request_id:crypto.randomUUID(),revision:1,action:'update',data:{title:'Updated instructions',assigned_to:'xavier'}});
+ assert.equal(move.status,200);assert.deepEqual(move.data.task.attachments,b.files.map(f=>f.id));
+ assert.equal((await readFile('xalinda',b.files[0].id)).status,404);assert.equal((await readFile('xavier',b.files[0].id)).status,200);
+ const own={...task({assigned_to:'xalinda'}),files:[instructionFile()]};assert.equal((await call('xalinda','/api/tasks',own)).status,200);
+ assert.equal((await call('xalinda','/api/tasks',{...task({assigned_to:'xavier'}),files:[instructionFile()]})).status,403);
+});
+
+test('invalid new-task photos and attachment collisions leave no partial task, files or notification',async t=>{
+ const {call,task,db}=await fixture(t);
+ for(const files of [[instructionFile({base64:btoa('not a PNG')})],[instructionFile({mime_type:'text/html'})],Array.from({length:13},()=>instructionFile()),[null]]){
+  assert.equal((await call('alex','/api/tasks',{...task(),files})).status,400);
+ }
+ const duplicate=instructionFile();assert.equal((await call('alex','/api/tasks',{...task(),files:[duplicate,duplicate]})).status,400);
+ for(const table of ['v2_task_events','v2_task_attachments','v2_task_notifications'])assert.equal((await db.prepare('SELECT COUNT(*) n FROM '+table).first()).n,0);
+ const existing={...task(),files:[instructionFile()]};assert.equal((await call('alex','/api/tasks',existing)).status,200);
+ const collision={...task(),files:[instructionFile(),existing.files[0]]};assert.equal((await call('alex','/api/tasks',collision)).status,409);
+ for(const table of ['v2_task_events','v2_task_attachments','v2_task_notifications'])assert.equal((await db.prepare('SELECT COUNT(*) n FROM '+table).first()).n,1,'transaction rolls back all partial writes');
+ assert.equal((await call('alex','/api/tasks/audit?id='+collision.task_id)).status,404);
+});
+
+test('twelve full-size creation files still allow twelve separate completion files',async t=>{
+ const {call,task,db,readFile}=await fixture(t);
+ const base64=Buffer.from('%PDF-'+'.'.repeat(499995)).toString('base64');
+ const b={...task({requires_evidence:true}),files:Array.from({length:12},(_,i)=>instructionFile({mime_type:'application/pdf',filename:`reference-${i}.pdf`,base64}))};
+ const saved=await call('alex','/api/tasks',b);assert.equal(saved.status,200,JSON.stringify(saved.data));
+ assert.equal((await readFile('xalinda',b.files[11].id)).headers.get('Content-Type'),'application/pdf');
+ const evidence=Array.from({length:12},()=>({...instructionFile(),task_id:b.task_id}));
+ for(const file of evidence)assert.equal((await call('xalinda','/api/tasks/file',file)).status,200);
+ assert.equal((await call('xalinda','/api/tasks/file',{...instructionFile(),task_id:b.task_id})).status,400);
+ const completed=await call('xalinda','/api/tasks',{task_id:b.task_id,request_id:crypto.randomUUID(),revision:1,action:'complete',attachments:evidence.map(f=>f.id)});
+ assert.equal(completed.status,200);assert.deepEqual(completed.data.task.attachments,b.files.map(f=>f.id));assert.deepEqual(completed.data.task.completion.attachments,evidence.map(f=>f.id));
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_task_attachments').first()).n,24);
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_events').first()).n,0);
+});

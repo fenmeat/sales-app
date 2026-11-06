@@ -34,12 +34,18 @@ export function attachmentPicker(form,{taskId,api,prepareFile}){
   render();
  };
  render();
+ async function prepare(){
+  for(const entry of entries){
+   try{entry.payload??=await prepareFile(entry.file);}catch(e){throw Error(entry.file.name+': '+e.message);}
+  }
+  return entries.map(entry=>({id:entry.id,...entry.payload}));
+ }
  return {
+  // New-task photos are committed with the task in one atomic save.
+  prepare,
   async upload(){
    // Validate and resize every file before writing any of this selection.
-   for(const entry of entries){
-    try{entry.payload??=await prepareFile(entry.file);}catch(e){throw Error(entry.file.name+': '+e.message);}
-   }
+   await prepare();
    for(const [index,entry] of entries.entries()){
     if(entry.uploaded)continue;
     status.textContent=`Uploading ${index+1} of ${entries.length}…`;

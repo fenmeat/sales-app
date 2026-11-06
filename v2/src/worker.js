@@ -23,7 +23,7 @@ const json=(body,status=200,extra={})=>Response.json(body,{status,headers:{...he
 const accessResponse=result=>{const r=json(result.data);for(const c of result.cookies??[])r.headers.append('Set-Cookie',c);return r;};
 function printRevision(url){const value=url.searchParams.get('revision');if(value===null)return null;check(/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value)),'Invalid document revision.');return Number(value);}
 async function init(db){if(!initialized.has(db))initialized.set(db,ensureSchema(db).catch(e=>{initialized.delete(db);throw e;}));await initialized.get(db);}
-async function bodyOf(req){check(Number(req.headers.get('Content-Length')??0)<=750000,'Upload too large.',413);const text=await req.text();check(text.length<=750000,'Upload too large.',413);try{return JSON.parse(text);}catch{throw new UserError('Invalid JSON.');}}
+async function bodyOf(req,limit=750000){check(Number(req.headers.get('Content-Length')??0)<=limit,'Upload too large.',413);const text=await req.text();check(text.length<=limit,'Upload too large.',413);try{return JSON.parse(text);}catch{throw new UserError('Invalid JSON.');}}
 async function catalog(db){const r=await db.prepare('SELECT * FROM v2_catalog WHERE id=1').first();return effectiveAvailability(r?{...JSON.parse(r.payload),revision:r.revision}:{products:[],routes:[],revision:0});}
 function catalogForBrowser(c){return {...c,routes:c.routes.filter(r=>r.code!==FACTORY_ROUTE).map(r=>{const {invoice_stores,...publicRoute}=r;return {...publicRoute,invoice_enabled:!!invoice_stores?.length};})};}
 const idFor=(d,r)=>`${d}|${r}`;
@@ -68,7 +68,7 @@ async function handle(request,env,paUser=null,ctx=null){
  if(path==='/api/navigation'){check(method==='GET','Method not allowed.',405);return json({username:user.username,sections:appNavigation(user.username)});}
  if(path==='/api/pa-report'||path.startsWith('/api/pa-report/')){const result=await paReportApi({request,url,env,user,bodyOf});if(ctx&&method==='POST')ctx.waitUntil(flushTaskPush(env));return result instanceof Response?new Response(result.body,{status:result.status,headers:{...headers,...Object.fromEntries(result.headers)}}):json(result);}
  if(path==='/api/tasks/push')return json(await pushApi({request,env,user,bodyOf}));
- if(path==='/api/tasks'||path.startsWith('/api/tasks/')){const result=await tasksApi({request,url,env,user,bodyOf});if(ctx&&method==='POST')ctx.waitUntil(flushTaskPush(env));return result instanceof Response?result:json(result);}
+ if(path==='/api/tasks'||path.startsWith('/api/tasks/')){const result=await tasksApi({request,url,env,user,bodyOf:req=>bodyOf(req,path==='/api/tasks'?8100000:750000)});if(ctx&&method==='POST')ctx.waitUntil(flushTaskPush(env));return result instanceof Response?result:json(result);}
  if(path==='/api/invoicing/phones')return json(await invoicePhonesApi({request,env,user,bodyOf}));
  if(path.startsWith('/api/pos/')){const result=await posApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),bodyOf});return result instanceof Response?new Response(result.body,{status:result.status,headers:{...headers,...Object.fromEntries(result.headers)}}):json(result);}
  if(path==='/api/print/recipe'){
