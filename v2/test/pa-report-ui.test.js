@@ -41,15 +41,15 @@ async function screen(username,tasks=[],view='',mailPages=null,paState=null){
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','renderPaWorkspace',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,renderPaWorkspace);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','renderPaWorkspace',source)(document,{addEventListener(){}}, Object.assign(globalThis.location,{origin:'https://ui-test.example'}),{replaceState(_state,_title,url){globalThis.location.href=new URL(url,globalThis.location.href).href;}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,renderPaWorkspace);
  return {document,dialog,posts,postPaths,getPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 
 
 const paState=()=>({private_report:true,register_revision:3,source_at:new Date().toISOString(),history:[{date:'2026-11-05'}],alerts:[],reminders:[],users:['alex','alinda','xavier','xalinda'],feedback:[],rows:[{id:'TSK-00001',subject_key:'TSK-00001',subject_hash:'hash-one',scope:'fenmeat',title:'Invoice follow-up',status:'Waiting',assigned_to:'alinda',review_group:'Supplier — November',next_action:'Confirm receipt and payment.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'},{id:'TSK-00002',subject_key:'TSK-00002',subject_hash:'hash-two',scope:'private',title:'Private matter',status:'Pending',assigned_to:'alex',next_action:'Reply to private letter.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'}],report:{date:'2026-11-05',source_at:'2026-11-05T14:14:12Z',task_summary:{open:141},source_url:'https://mail.google.com/mail/#sent/test',coverage:'One verified mailbox; unavailable sources stated.',sections:['emails','activity','tasks','tomorrow','rabbi'].map((id,n)=>({id,title:id,items:[{id:'report-item-'+n,subject_key:'report-2026-11-05:report-item-'+n,subject_hash:'hash-item-'+n,title:'Section '+id,text:'Practical detail <script>blocked</script>',needs_reply:n===0,question:'Please choose the next step.',links:[],pa_task_ids:n===0?['TSK-00002']:[]}]}))}});
-test('full report shows five sections, dated counts, grouped PA obligations and closed app steps',async()=>{
+test('daily report shows four sections with Rabbi in its own menu, dated counts and linked work',async()=>{
  const ui=await screen('alex',[{id:'step',pa_task_id:'TSK-00001',status:'Complete',title:'PO sent',assigned_to:'alinda'}],'?view=report',null,paState());
- const app=ui.document.querySelector('#app');assert.equal(app.querySelectorAll('.pa-full-report .pa-section').length,6);assert.match(app.textContent,/task count was 141/);assert.match(app.textContent,/2 All PA open/);assert.match(app.textContent,/remaining PA work above stays open/);assert.match(app.textContent,/Private matter/);assert.equal(app.querySelector('script'),null);
+ const app=ui.document.querySelector('#app');assert.equal(app.querySelector('#report-item-4'),null);assert.equal(app.querySelector('#pa-rabbi').textContent,'Rabbi');assert.equal(app.querySelectorAll('.pa-full-report .pa-section').length,5);assert.match(app.textContent,/task count was 141/);assert.match(app.textContent,/2 All PA open/);assert.match(app.textContent,/remaining PA work above stays open/);assert.match(app.textContent,/Private matter/);assert.equal(app.querySelector('script'),null);
  app.querySelector('[data-jump-item]').onclick();assert.equal(ui.document.getElementById('report-item-0').parentElement.open,true);
  app.querySelector('[data-open-case]').onclick();assert.match(ui.dialog.textContent,/Private matter/);
 });
@@ -69,4 +69,66 @@ test('a saved report point opens its own historical date and remains addressable
  assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-05'));
  assert.ok(ui.document.querySelector('[data-case="report-2026-11-05:report-item-0"]'));
  assert.equal(ui.document.getElementById('report-item-0').parentElement.open,true);
+});
+
+
+test('Rabbi menu opens the full reading directly, preserves feedback identity and returns to tasks',async()=>{
+ const p=paState();p.report.sections[4].title='5. Rabbi: A fresh start';
+ const ui=await screen('alex',[],'?view=report',null,p);
+ await ui.document.querySelector('#pa-rabbi').onclick();
+ assert.equal(ui.document.querySelector('h1').textContent,'Rabbi');
+ assert.equal(ui.document.querySelector('.pa-rabbi h2').textContent,'Rabbi: A fresh start');
+ assert.equal(ui.document.querySelector('#pa-rabbi').getAttribute('aria-current'),'page');
+ assert.equal(ui.document.querySelector('.pa-register'),null);
+ assert.equal(ui.document.querySelector('.pa-full-report'),null);
+ assert.ok(ui.document.querySelector('#report-item-4 .pa-prose'));
+ assert.equal(ui.document.querySelector('script'),null);
+ assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');
+ ui.document.querySelector('#report-item-4 [data-pa-action="respond"]').onclick();
+ const form=ui.dialog.querySelector('form');form.elements.note.value='Please explain the practical step.';
+ await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.posts[0].subject_key,'report-2026-11-05:report-item-4');
+ assert.equal(ui.posts[0].subject_hash,'hash-item-4');
+ assert.ok(ui.document.querySelector('.pa-rabbi'));
+ await ui.document.querySelector('#pa-tasks').onclick();
+ assert.ok(ui.document.querySelector('.pa-register'));
+ assert.equal(ui.document.querySelector('.pa-rabbi'),null);
+ assert.ok(ui.document.querySelector('#pa-rabbi'));
+});
+
+test('Rabbi date selection and navigation keep the chosen historical date',async()=>{
+ const ui=await screen('alex',[],'?view=rabbi&date=2026-11-05',null,paState());
+ assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-05'));
+ assert.ok(ui.document.querySelector('.pa-rabbi'));
+ await ui.document.querySelector('#pa-report-date').onchange({target:{value:'2026-11-04'}});
+ assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-04'));
+ assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');
+ assert.equal(new URL(location.href).searchParams.get('date'),'2026-11-04');
+ await ui.document.querySelector('#pa-report').onclick();
+ assert.equal(new URL(location.href).searchParams.get('date'),'2026-11-04');
+ assert.ok(ui.document.querySelector('.pa-full-report'));
+ assert.equal(ui.document.querySelector('#report-item-4'),null);
+});
+
+test('existing Rabbi report links open the original reading in its own view',async()=>{
+ const ui=await screen('alex',[],'?view=report&case=report-2026-11-05:report-item-4',null,paState());
+ assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-05'));
+ assert.ok(ui.document.querySelector('.pa-rabbi #report-item-4'));
+ assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');
+ await ui.document.querySelector('#pa-report').onclick();
+ assert.equal(ui.document.querySelector('.pa-rabbi'),null);
+ assert.ok(ui.document.querySelector('.pa-full-report'));
+});
+
+test('Rabbi has an explicit empty state and remains private to Alex',async()=>{
+ const p=paState();p.report=null;
+ const ui=await screen('alex',[],'?view=rabbi',null,p);
+ assert.match(ui.document.querySelector('.pa-rabbi').textContent,/has not been published/);
+ for(const username of ['alinda','xavier']){
+  const staff=paState();staff.private_report=false;staff.report=null;staff.history=[];staff.rows=[];
+  const view=await screen(username,[],'?view=rabbi',null,staff);
+  assert.equal(view.document.querySelector('.pa-rabbi'),null);
+  assert.equal(view.document.querySelector('#pa-rabbi'),null);
+  assert.equal(view.document.querySelector('h1').textContent,'Tasks');
+ }
 });
