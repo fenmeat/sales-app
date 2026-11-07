@@ -1,0 +1,53 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {build} from 'esbuild';
+import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {PDFDocument} from 'pdf-lib';
+import {hash} from '../src/auth.js';
+import {deriveBudgetImport} from '../src/budget-import.js';
+import {budgetSummary,copyBudget,splitBudget,validateBudget} from '../src/budget-domain.js';
+import {budgetSource} from './fixtures/budget-source.js';
+import {printPageOptions} from '../public/print-page-options.js';
+const code=await build({entryPoints:['src/connected-worker.js'],bundle:true,write:false,format:'esm',platform:'browser',external:['cloudflare:workers'],target:'es2022'});
+test('four-week budget preserves unknown/zero, exact cents, partial funding, surplus and independent account updates',()=>{
+ const d=deriveBudgetImport(budgetSource(),'2026-10').records[0].data,s=budgetSummary(d);
+ assert.equal(s.total,1001);assert.equal(s.missing,1);assert.equal(s.recorded,333);assert.equal(s.remaining,668);assert.equal(s.update_total,200);assert.equal(s.unentered_weeks,1);
+ assert.deepEqual(s.targets,[251,250,250,250]);assert.deepEqual(s.weeks[0].next_targets,[223,223,222]);
+ d.weeks[1].amount=1000;assert.equal(budgetSummary(d).remaining,0);assert.equal(budgetSummary(d).surplus,332);assert.deepEqual(budgetSummary(d).weeks[1].next_targets,[0,0]);
+ const next=copyBudget(d,'2026-11');assert.deepEqual(next.items,d.items);assert.ok(next.weeks.every(w=>w.amount===null&&w.date===null));assert.ok(next.allocations.every(a=>a.amount===null));assert.equal(next.source,undefined);assert.equal(d.weeks[0].amount,333);
+ assert.deepEqual(splitBudget(1),[1,0,0,0]);next.items[0].amount=-1;assert.throws(()=>validateBudget(next));
+ const broken=budgetSource();broken.sheets[0].data[0].rowData[41].values[1].effectiveValue.numberValue=999;assert.throws(()=>deriveBudgetImport(broken,'2026-10'),/totals/);
+});
+test('budget imports append atomically, retain existing records and source histories, enforce owner access and survive revisions/retries',async t=>{
+ const users=['alex','alinda','xavier'],keys=Object.fromEntries(users.map(u=>[u,'SYNTHETIC-budget-'+u+'-01234567890123456789']));
+ const mf=new Miniflare(convertV4MiniflareOptions({name:'isolated-budget',modules:true,script:code.outputFiles[0].text,compatibilityDate:'2026-09-30',d1Databases:{DB:'isolated-budget'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify(keys)},outboundService:()=>{throw Error('No external traffic in budget tests');}}));t.after(()=>mf.dispose());
+ const cookies={},origin='https://budget.example';
+ const call=async(path,body,user='alex')=>{const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,Cookie:cookies[user]??'','Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});return {status:r.status,headers:r.headers,data:r.headers.get('content-type')?.includes('application/pdf')?new Uint8Array(await r.arrayBuffer()):await r.json()};};
+ for(const u of users){const r=await call('/api/login',{username:u,key:keys[u]});assert.equal(r.status,200);cookies[u]=r.headers.get('set-cookie').split(';')[0];}
+ const save=(record,revision=0)=>({record,revision,request_id:crypto.randomUUID(),reason:'Synthetic authorised budget test'});
+ const invoice={id:'synthetic-existing-weekly',type:'weekly',data:{supplier:'Synthetic',reference:'SYN-EXISTING',amount:9876,status:'To Pay',opening_paid:0}};
+ assert.equal((await call('/api/financial/record',save(invoice))).status,200);
+ const db=await mf.getD1Database('DB');const original=(await db.prepare('SELECT * FROM v2_finance_records').all()).results;
+ // Earlier workbook archive with the same sheet ID exercises qualified source selection.
+ const old={spreadsheetId:'synthetic-old',sheets:[{properties:{sheetId:9876543,title:'Earlier source'},data:[{rowData:[{values:[{formattedValue:'Original preserved'}]}]}]}]},oldRaw=JSON.stringify(old),oldId=await hash(oldRaw);
+ await db.prepare("INSERT INTO v2_finance_imports VALUES(?,?,'complete',?,'alex','earlier','earlier')").bind(oldId,JSON.stringify({id:oldId,parts:[oldId]}),JSON.stringify({source_sheets:[{id:9876543,name:'Earlier source'}]})).run();await db.prepare('INSERT INTO v2_finance_parts VALUES(?,0,?,?)').bind(oldId,oldId,oldRaw).run();
+ const source=budgetSource(),raw=JSON.stringify(source),id=await hash(raw),manifest={id,parts:[id],kind:'budget',month:'2026-10'},start={operation:'import_start',import_id:id,manifest};
+ assert.equal((await call('/api/financial/import',start,'xavier')).status,403);assert.equal((await call('/api/financial/import',start)).status,200);
+ assert.equal((await call('/api/financial/import',{operation:'import_finish',import_id:id})).status,409);
+ assert.equal((await call('/api/financial/import',{operation:'import_chunk',import_id:id,part:0,payload:raw})).status,200);
+ assert.equal((await call('/api/financial/import',{operation:'import_finish',import_id:id},'alinda')).status,200);
+ assert.equal((await call('/api/financial/import',{operation:'import_finish',import_id:id})).data.replayed,true);
+ assert.deepEqual((await db.prepare('SELECT * FROM v2_finance_records WHERE id=?').bind(invoice.id).all()).results,original);
+ let state=(await call('/api/financial')).data,budget=state.records.find(r=>r.type==='budget');assert.equal(state.records.length,2);assert.deepEqual(budget.data,deriveBudgetImport(source,'2026-10').records[0].data);
+ const history=(await call('/api/financial/source?sheet=9876543&import_id='+oldId)).data;assert.equal(history.rows[0].cells[0].formattedValue,'Original preserved');assert.equal((await call('/api/financial/source?sheet=9876543&import_id='+id)).data.source_id,id);
+ const copy={id:'synthetic-copy-budget',type:'budget',data:copyBudget(budget.data,'2026-11')};assert.equal((await call('/api/financial/record',save(copy))).status,200);
+ assert.equal((await call('/api/financial/record',save({...copy,id:'synthetic-duplicate-budget'}))).status,409);
+ const update=save({...budget,data:{...budget.data,weeks:budget.data.weeks.map((w,i)=>i===1?{...w,amount:222,date:'2026-10-16'}:w)}},1);
+ assert.equal((await call('/api/financial/record',update,'alinda')).status,200);assert.equal((await call('/api/financial/record',update,'alinda')).data.replayed,true);
+ assert.equal((await call('/api/financial/record',{...update,request_id:crypto.randomUUID()},'alex')).status,409);
+ const fresh=(await call('/api/financial?resource=record&id='+budget.id)).data;assert.equal(fresh.record.revision,2);assert.equal(fresh.summary.recorded,555);assert.equal((await call('/api/financial/audit?id='+budget.id)).data.history.length,2);
+ assert.equal((await call('/api/financial/record',save({...fresh.record,data:{...fresh.record.data,month:'2026-12'}},2))).status,400);
+ for(const path of ['/api/financial','/api/financial/pdf?type=budget&month=2026-10','/api/financial/source?sheet=9876543&import_id='+id])assert.equal((await call(path,null,'xavier')).status,403);
+ const pdf=await call('/api/financial/pdf?type=budget&month=2026-10');assert.equal(pdf.status,200);assert.ok((await PDFDocument.load(pdf.data)).getPageCount()>0);
+ assert.equal(printPageOptions('?document=financial&type=budget&month=2026-10').returnPath,'/financial?view=budget');
+});
