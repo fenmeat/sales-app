@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {parseHTML} from 'linkedom';
 import {renderReport} from '../public/tasks-report.js';
 import {reminderOptions} from '../public/task-report-model.js';
-import {attachmentPicker,MAX_TASK_ATTACHMENTS} from '../public/task-attachments.js';
+import {attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData} from '../public/task-attachments.js';
 
 import {renderPaWorkspace} from '../public/pa-report-ui.js';
 async function screen(username,tasks=[],view='',mailPages=null,paState=null){
@@ -41,7 +41,7 @@ async function screen(username,tasks=[],view='',mailPages=null,paState=null){
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','renderPaWorkspace',source)(document,{addEventListener(){}}, Object.assign(globalThis.location,{origin:'https://ui-test.example'}),{replaceState(_state,_title,url){globalThis.location.href=new URL(url,globalThis.location.href).href;}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,renderPaWorkspace);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData','renderPaWorkspace',source)(document,{addEventListener(){}}, Object.assign(globalThis.location,{origin:'https://ui-test.example'}),{replaceState(_state,_title,url){globalThis.location.href=new URL(url,globalThis.location.href).href;}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData,renderPaWorkspace);
  return {document,dialog,posts,postPaths,getPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 

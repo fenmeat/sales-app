@@ -4,7 +4,7 @@ import {readFile} from 'node:fs/promises';
 import {parseHTML} from 'linkedom';
 import {renderReport} from '../public/tasks-report.js';
 import {reminderOptions} from '../public/task-report-model.js';
-import {attachmentPicker,MAX_TASK_ATTACHMENTS} from '../public/task-attachments.js';
+import {attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData} from '../public/task-attachments.js';
 import {createCanvas,loadImage} from '@napi-rs/canvas';
 
 async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={}){
@@ -41,7 +41,7 @@ async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData);
  return {document,dialog,posts,postPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 
@@ -244,7 +244,7 @@ test('selection limits and invalid files keep earlier choices and completed task
  selectFiles(ui,Array.from({length:12},(_,i)=>pdf(`file-${i}.pdf`)));
  assert.match(ui.dialog.querySelector('#attachment-status').textContent,/12 of 12/);
  selectFiles(ui,[pdf('extra.pdf')]);assert.match(ui.dialog.querySelector('.error').textContent,/up to 12/);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,12);
- selectFiles(ui,[new File(['bad'],'unsupported.txt',{type:'text/plain'})]);assert.match(ui.dialog.querySelector('.error').textContent,/JPG, PNG or PDF/);
+ selectFiles(ui,[new File(['bad'],'unsupported.txt',{type:'text/plain'})]);assert.match(ui.dialog.querySelector('.error').textContent,/JPG, PNG, HEIC, HEIF, WebP or PDF/);
  assert.equal(ui.posts.length,0);
  const ids=['first-file-id','second-file-id','third-file-id'];
  const closed=await screen('xavier',[reportTask({status:'Complete',completion:{by:'xavier',at:'2099-11-02T08:00:00Z',attachments:ids}})]);
@@ -253,4 +253,64 @@ test('selection limits and invalid files keep earlier choices and completed task
  const links=[...closed.dialog.querySelectorAll('a[href^="/api/tasks/file"]')];
  assert.deepEqual(links.map(a=>a.getAttribute('href')),ids.map(id=>'/api/tasks/file?id='+id));
  assert.deepEqual(links.map(a=>a.textContent),['Open attachment 1 of 3','Open attachment 2 of 3','Open attachment 3 of 3']);
+});
+
+function realPhotoTools(ui,t,{failBitmap=false,nullBlob=false}={}){
+ const previous=globalThis.createImageBitmap,calls=[];let closed=0;
+ globalThis.createImageBitmap=async(file,options)=>{assert.equal(options.imageOrientation,'from-image');if(failBitmap)throw Error('Unsupported bitmap decoder');const image=await loadImage(Buffer.from(await file.arrayBuffer()));image.close=()=>closed++;return image;};
+ t.after(()=>{globalThis.createImageBitmap=previous;});
+ const create=ui.document.createElement.bind(ui.document);
+ ui.document.createElement=name=>{
+  if(name!=='canvas')return create(name);
+  const canvas=createCanvas(1,1);
+  canvas.toBlob=(callback,mime,quality)=>{const bytes=canvas.toBuffer(mime,Math.round(quality*100));calls.push({width:canvas.width,height:canvas.height,bytes:bytes.length,quality});callback(nullBlob?null:new Blob([bytes],{type:mime}));};
+  return canvas;
+ };
+ return {calls,closed:()=>closed};
+}
+function noisyPhoto(width=1600,height=1200){
+ const canvas=createCanvas(width,height),ctx=canvas.getContext('2d'),pixels=ctx.createImageData(width,height);let seed=1;
+ for(let i=0;i<pixels.data.length;i+=4){for(let j=0;j<3;j++){seed=(1664525*seed+1013904223)>>>0;pixels.data[i+j]=seed>>>24;}pixels.data[i+3]=255;}
+ ctx.putImageData(pixels,0,0);return canvas;
+}
+
+test('multi-MB detailed photo that failed the old 500 KB limit now fits, with exact retry bytes',async t=>{
+ const ui=await screen('alex');ui.document.querySelector('#new').onclick();const tools=realPhotoTools(ui,t);
+ const photo=noisyPhoto();assert.ok(photo.toBuffer('image/jpeg',75).length>500000,'reproduces old rejection');
+ const original=photo.toBuffer('image/png');assert.ok(original.length>5000000);
+ selectFiles(ui,[new File([original],'large-photo.PNG',{type:'image/png'})]);
+ const form=ui.dialog.querySelector('form');form.elements.title.value='Detailed phone photo';ui.failNext();await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.posts.length,1);const saved=ui.posts[0].files[0];const bytes=Buffer.from(saved.base64,'base64');
+ assert.ok(bytes.length<=500000);assert.equal(saved.filename,'large-photo.jpg');assert.equal(saved.mime_type,'image/jpeg');
+ const image=await loadImage(bytes);assert.ok(image.width>=900);assert.equal(image.width/image.height,4/3);
+ assert.ok(tools.calls.length>1);assert.ok(tools.calls.some(c=>c.width<1600),'also reduces dimensions when quality alone is insufficient');assert.equal(tools.closed(),1);
+ const count=tools.calls.length;await form.onsubmit({preventDefault(){}});assert.deepEqual(ui.posts[0],ui.posts[1]);assert.equal(tools.calls.length,count,'does not decode again on retry');assert.equal(ui.dialog.open,false);
+});
+
+test('12 MP portrait keeps orientation, small canvas and correct JPEG name for an untyped photo',async t=>{
+ const ui=await screen('xavier');ui.document.querySelector('#new').onclick();const tools=realPhotoTools(ui,t);
+ const photo=createCanvas(3000,4000),ctx=photo.getContext('2d');ctx.fillStyle='red';ctx.fillRect(0,0,3000,2000);ctx.fillStyle='blue';ctx.fillRect(0,2000,3000,2000);
+ selectFiles(ui,[new File([photo.toBuffer('image/png')],'IMG_1234.PNG',{type:''})]);
+ const form=ui.dialog.querySelector('form');form.elements.title.value='Portrait';await form.onsubmit({preventDefault(){}});
+ const saved=ui.posts[0].files[0],image=await loadImage(Buffer.from(saved.base64,'base64'));assert.equal(image.width,1200);assert.equal(image.height,1600);assert.equal(saved.filename,'IMG_1234.jpg');assert.ok(tools.calls.every(c=>c.width<=1600&&c.height<=1600));
+});
+
+test('HEIC selection uses native image fallback when bitmap decoding fails',async t=>{
+ const ui=await screen('alex');ui.document.querySelector('#new').onclick();realPhotoTools(ui,t,{failBitmap:true});
+ const photo=createCanvas(1200,1600);photo.getContext('2d').fillRect(0,0,1200,1600);
+ // This tests the Safari fallback contract; the test runtime has no HEIC codec.
+ const image=await loadImage(photo.toBuffer('image/png'));
+ Object.defineProperty(image,'src',{set(value){if(value)queueMicrotask(()=>image.onload());}});
+ const create=ui.document.createElement.bind(ui.document);ui.document.createElement=name=>name==='img'?image:create(name);
+ const urls=[],oldRevoke=URL.revokeObjectURL;URL.revokeObjectURL=url=>{urls.push(url);oldRevoke(url);};t.after(()=>URL.revokeObjectURL=oldRevoke);
+ const saved=await fileData(new File(['synthetic codec input'],'IMG_1234.HEIC',{type:'image/heic'}));
+ assert.equal(saved.mime_type,'image/jpeg');assert.equal(saved.filename,'IMG_1234.jpg');assert.equal(urls.length,1);
+ ui.document.createElement=create;selectFiles(ui,[new File(['synthetic'],'selected.HEIC',{type:'image/heic'})]);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,1);assert.match(ui.dialog.querySelector('#attachment').getAttribute('accept'),/image\/heic/);
+});
+
+test('photo encoding failure keeps task text and selected files, saves nothing and releases bitmap',async t=>{
+ const ui=await screen('alex');ui.document.querySelector('#new').onclick();const tools=realPhotoTools(ui,t,{nullBlob:true});
+ const photo=createCanvas(100,100);selectFiles(ui,[new File([photo.toBuffer('image/png')],'broken.png',{type:'image/png'})]);
+ const form=ui.dialog.querySelector('form');form.elements.title.value='Do not lose this';await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.posts.length,0);assert.equal(form.elements.title.value,'Do not lose this');assert.equal(ui.dialog.open,true);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,1);assert.match(form.querySelector('.error').textContent,/could not be prepared/);assert.equal(tools.closed(),1);assert.equal(form.querySelector('fieldset').disabled,false);
 });
