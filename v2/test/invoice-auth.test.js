@@ -186,7 +186,8 @@ test('Home navigation follows existing account permissions and cannot mutate bus
   assert.equal(menu.status,200);assert.equal(menu.data.username,username);
   const ids=menu.data.sections.map(x=>x.id);
   for(const id of ['sales','pos','invoices','production','stocktake','tasks','report','recipes','products'])assert.ok(ids.includes(id),username+' can open '+id);
-  for(const id of ['staff','setup'])assert.equal(ids.includes(id),['alex','alinda'].includes(username));
+  assert.equal(ids.includes('staff'),['alex','alinda','xalinda'].includes(username));
+  for(const id of ['financial','setup'])assert.equal(ids.includes(id),['alex','alinda'].includes(username));
   assert.ok(!ids.includes('orders'));assert.equal(menu.data.sections.find(x=>x.id==='sales').href,'/sales');
   assert.equal((await f.req('/api/navigation',{},cookie)).status,405);
  }

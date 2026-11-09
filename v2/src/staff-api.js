@@ -1,5 +1,5 @@
 import {check,UserError,dateKey,today,addDays} from './domain.js';
-import {hash,randomToken,isAdmin,sameOrigin} from './auth.js';
+import {hash,randomToken,canManageStaff,sameOrigin} from './auth.js';
 import {blankStaff,applyStaffAction,staffPerson,uuid,text,shiftSummary,appendPunch,periodHours,dayStart,dayAt,LEAVE_TYPES,balance,clockPin,casualPin,isCasual} from './staff-domain.js';
 import {PAYROLL_SCHEMA,payrollApi} from './payroll-api.js';
 import {IMPORT_SCHEMA,staffImportApi} from './staff-import.js';
@@ -104,7 +104,7 @@ export async function staffClockApi({request,url,env,bodyOf}){
 }
 
 export async function staffApi({request,url,env,user,bodyOf}){
- check(isAdmin(user.username),'Only Alex or Alinda can access Staff administration.',403);
+ check(canManageStaff(user.username),'Your account does not have Staff administration access.',403);
  const db=env.DB,path=url.pathname,current=await staffState(db),stamp=new Date().toISOString();
  if(path==='/api/staff/payroll'||path==='/api/staff/payroll/history')return payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,env});
  if(path==='/api/staff/imports'||path.startsWith('/api/staff/imports/'))return staffImportApi({request,url,db,user,bodyOf,current});

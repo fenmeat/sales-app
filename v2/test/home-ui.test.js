@@ -37,9 +37,10 @@ test('Home opens real section destinations, keeps Sales separate, and offers Pro
 });
 test('staff Home includes read-only Recipes, stocktake and Products, while reps see only Invoices and Tasks',async()=>{
   for(const username of ['xavier','xalinda']){
-    const p=await page({username});assert.equal(p.document.querySelectorAll('.home-tile').length,9);
+    const p=await page({username});assert.equal(p.document.querySelectorAll('.home-tile').length,username==='xalinda'?10:9);
     assert.match(p.document.querySelector('a[href="/recipes"]').textContent,/View & print recipes/);
-    for(const path of ['/staff','/sales#setup'])assert.equal(p.document.querySelector('a[href="'+path+'"]'),null);
+    assert.equal(!!p.document.querySelector('a[href="/staff"]'),username==='xalinda');
+    for(const path of ['/financial','/sales#setup'])assert.equal(p.document.querySelector('a[href="'+path+'"]'),null);
     assert.ok(p.document.querySelector('a[href="/recipes?view=stock"]'));
   }
   for(const username of ['tapiz','mosa','musa']){

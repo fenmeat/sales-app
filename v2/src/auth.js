@@ -2,6 +2,8 @@ import {check,UserError} from './domain.js';
 const encoder=new TextEncoder();
 // Named primary administrators; extra staff keys cannot introduce either account.
 export const isAdmin=username=>username==='alex'||username==='alinda';
+// Staff administration is separate from Financial and general administrator access.
+export const canManageStaff=username=>isAdmin(username)||username==='xalinda';
 // Factory invoicing does not grant credit approval or general admin access.
 export const canUseFactorySales=username=>['alex','alinda','xavier','xalinda'].includes(username);
 // Product availability is a separate permission; it does not grant admin access.
@@ -61,7 +63,7 @@ export function appNavigation(username){
   ['production','Production','Production & packing plans','/production',!rep],
   ['stocktake','Stocktake','Supplier stock counts','/recipes?view=stock',factory],
   ['financial','Financial','Accounts, payments & follow-ups','/financial',admin],
-  ['staff','Staff','Attendance & payroll','/staff',admin],
+  ['staff','Staff','Attendance & payroll','/staff',canManageStaff(username)],
   ['tasks','Tasks','Your tasks & reminders','/tasks',true],
   ['report','Daily Report','Priorities & follow-ups','/tasks?view=report',!rep],
   ['recipes','Recipes',admin?'Recipes, materials & costs':'View & print recipes','/recipes',canViewRecipes(username)],

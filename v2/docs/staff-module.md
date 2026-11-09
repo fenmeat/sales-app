@@ -1,5 +1,16 @@
 # Native Staff core — 0.21.0
 
+## Staff section access — 0.36.5
+
+Staff read/write access is available to the named `alex`, `alinda` and `xalinda`
+accounts through the existing sign-in. Home shows Staff for these accounts.
+`canManageStaff` guards the complete Staff API, including attendance, people,
+leave, devices, imported records and payroll. Changes retain the signed-in actor.
+This permission does not make Xalinda a general administrator: Financial,
+catalogue/recipe administration, Zoho and connector consent remain restricted.
+Other staff and representatives gain no access. Clock devices still require
+their own registration and employee PIN. No data migration or key change is needed.
+
 ## Weekly payroll
 
 Version 0.21.0 adds Friday wages, reviewed and locked payslips, payment recording
@@ -121,7 +132,7 @@ Existing Sales and Production data is not migrated or rewritten.
 
 - Permanent employee UUID and immutable code/start date; name, team and active
   status; effective-dated weekly paid-minute schedules with source notes.
-- Alex/Alinda-only Staff read/write APIs. Existing stocktake accounts, PA
+- Named Staff read/write APIs (see current section access above). Other stocktake accounts, PA
   connector scopes, bearer integrations and yard-device credentials do not
   acquire HR permissions.
 - Admin-created, single-use 10-minute device codes; independently scoped,
