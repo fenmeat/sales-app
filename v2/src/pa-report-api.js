@@ -144,7 +144,7 @@ async function respond(env,user,b){
  check(['respond','complete','assign','request_update','remind'].includes(b.action),'Choose a feedback action.');
  const attachments=b.attachments??[];check(Array.isArray(attachments)&&attachments.length<=12&&new Set(attachments).size===attachments.length,'Choose up to twelve evidence files.');
  for(const id of attachments){const f=await file(env,user,id);check(f.subject_key===s.subject_key&&f.actor===user.username,'Use your evidence for this item.');}
- const payload={action:b.action,note:txt(b.note??'',5000,!['remind'].includes(b.action)),attachments,proof_url:link(b.proof_url),assigned_to:'',remind_at:'',source_task_ids:TSK.test(s.subject_key)?[s.id]:s.pa_task_ids??[]};
+ const payload={action:b.action,note:txt(b.note??'',5000,!['remind','complete'].includes(b.action)),attachments,proof_url:link(b.proof_url),assigned_to:'',remind_at:'',source_task_ids:TSK.test(s.subject_key)?[s.id]:s.pa_task_ids??[]};
  if(b.action==='complete')check(TSK.test(s.subject_key)&&opened(s),'Choose an open PA obligation. This records your confirmation for PA verification.');
  if(b.action==='assign'){check(isAdmin(user.username)&&TSK.test(s.subject_key),'Only admins can reassign an existing task.',403);check(s.scope!=='private','Private PA work cannot be assigned to staff.',403);check(users(env).includes(b.assigned_to),'Choose an existing app user.');payload.assigned_to=b.assigned_to;}
  if(b.action==='request_update')check(isAdmin(user.username)&&TSK.test(s.subject_key)&&s.assigned_to&&s.assigned_to!==user.username&&s.scope==='fenmeat','Choose another staff member’s task.',403);

@@ -169,3 +169,35 @@ test('shared Rabbi deep links retain their original date and show a useful empty
  assert.match(ui.document.querySelector('.pa-rabbi').textContent,/has not been published/);
  assert.equal(ui.document.querySelector('#pa-report-date option[selected]').value,'2026-11-04');
 });
+
+
+test('normal completed work is immediately separated from open tasks pending PA sync',async()=>{
+ const p=paState();p.rows=[{id:'TSK-00010',subject_key:'TSK-00010',subject_hash:'hash-simple',scope:'fenmeat',title:'Vervang kantoorstoel',status:'Pending',assigned_to:'alex',review_group:'Kantoor',next_action:'Koop die stoel.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'}];
+ p.feedback=[{id:'f1',subject_key:'TSK-00010',subject_hash:'hash-simple',action:'complete',status:'pending',actor:'alex',note:'',created_at:'2026-11-10T12:00:00Z'}];
+ const ui=await screen('alex',[],'',null,p);
+ assert.equal(ui.document.querySelector('.pa-work-row'),null);
+ assert.match(ui.document.querySelector('.counts').textContent,/1 Klaar gemeld/);
+ ui.document.querySelector('#pa-status').onchange({target:{value:'submitted'}});
+ const item=ui.document.querySelector('.pa-work-row');assert.match(item.textContent,/Vervang kantoorstoel/);
+ assert.match(item.textContent,/Jy het die taak klaar gemerk/);
+ assert.equal(item.querySelector('[data-pa-action="complete"]'),null);
+ ui.document.querySelector('#pa-status').onchange({target:{value:'closed'}});
+ assert.equal(ui.document.querySelector('.pa-work-row'),null);
+});
+test('unverified orders stay open despite completion confirmation',async()=>{
+ const p=paState();p.rows=[{id:'TSK-00011',subject_key:'TSK-00011',subject_hash:'hash-po',scope:'fenmeat',title:'Stuur bestelling PO-00480',status:'Pending',assigned_to:'alex',review_group:'Bestelling',next_action:'Bevestig die aflewering.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'}];
+ p.feedback=[{id:'f2',subject_key:'TSK-00011',subject_hash:'hash-po',action:'complete',status:'pending',actor:'alex',note:'',created_at:'2026-11-10T12:00:00Z'}];
+ const ui=await screen('alex',[],'',null,p),item=ui.document.querySelector('.pa-work-row');
+ assert.ok(item);assert.match(item.textContent,/Stuur bestelling PO-00480/);
+ assert.match(item.textContent,/Hierdie taak bly oop totdat PA/);
+ assert.equal(item.querySelector('[data-pa-action="complete"]'),null);
+});
+test('complete form needs no Done text',async()=>{
+ const ui=await screen('alex',[],'',null,paState());
+ ui.document.querySelector('[data-pa-action="complete"]').onclick();
+ const form=ui.dialog.querySelector('form');
+ assert.equal(form.querySelector('[name="note"]').hasAttribute('required'),false);
+ await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.posts[0].action,'complete');
+ assert.equal(ui.posts[0].note,'');
+});
