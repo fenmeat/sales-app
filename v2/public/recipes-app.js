@@ -26,6 +26,17 @@ function render(){const r=state.result,reg=r.register;
  $('#documented-update').onclick=documentedDialog;$('#documented-update').hidden=reg.applied_updates?.includes('packaging-patties-2026-10-09')??false;$('#import-register').onclick=()=>{if(state.stockDirty){notice('Save your supplier count first.');return;}importDialog();};$('#export-register').onclick=()=>download('fenmeat-recipe-register-r'+r.revision+'.json',{...r,exported_at:new Date().toISOString()});$('#register-history').onclick=async()=>{try{const h=await api('/api/recipes/audit');$('#history-list').innerHTML='<ul>'+h.events.map(e=>`<li>Revision ${e.revision} · ${esc(e.saved_at)} · ${esc(e.actor)}<br>${esc(e.reason)}</li>`).join('')+'</ul>';}catch(e){notice(e.message);}};
  if(state.view==='recipes')recipesView();if(state.view==='materials')materialsView();if(state.view==='packaging')packagingView();if(state.view==='stock')stockView();bindStocktakeSummary();
 }
+// Shared form helpers for the material, packaging and recipe editors.
+// Escape stored values before inserting them into form markup.
+function field(label,name,value='',type='text',attributes=''){
+ return `<label>${esc(label)}<input type="${esc(type)}" name="${esc(name)}" value="${esc(value)}" ${attributes}></label>`;
+}
+function options(choices,selected){
+ return choices.map(value=>`<option value="${esc(value)}"${String(value)===String(selected)?' selected':''}>${esc(value)}</option>`).join('');
+}
+function select(label,name,choices,selected){
+ return `<label>${esc(label)}<select name="${esc(name)}">${options(choices,selected)}</select></label>`;
+}
 function searchBar(){return `<div class="register-toolbar"><input id="search" type="search" aria-label="Find an item" placeholder="Find a code, name or supplier…" value="${esc(state.search)}"></div>`;}
 function bindSearch(){if($('#search'))$('#search').oninput=e=>{state.search=e.target.value;const q=state.search.toLowerCase();for(const el of document.querySelectorAll('[data-search]'))el.hidden=!el.dataset.search.includes(q);};}
 function recipesReadOnlyView(){
