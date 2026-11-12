@@ -314,7 +314,7 @@ test('Staff-only consent preserves read-only business rights, refresh, owner iso
 
 test('Tasks MCP keeps read grants read-only and acknowledges only a verified current PA mapping',async t=>{
  const f=await fixture(t),read=await f.connect(),write=await f.connect(true);
- const task={task_id:crypto.randomUUID(),revision:0,request_id:crypto.randomUUID(),action:'create',data:{title:'Synthetic task bridge',assigned_to:'alinda',review_date:'2026-10-29'}};
+ const task={task_id:crypto.randomUUID(),revision:0,request_id:crypto.randomUUID(),action:'create',data:{task_type:'workflow',pa_required:true,title:'Synthetic task bridge',assigned_to:'alinda',review_date:'2026-10-29'}};
  assert.equal((await f.rpc(read.tokens,'tools/call',{name:'save_task',arguments:{task}})).response.status,403);
  const created=await ok(f,write.tokens,'save_app_data',change('tasks',0,task));assert.equal(created.task.revision,1);
  const pending=await ok(f,read.tokens,'get_access_status',{tasks:{resource:'pending_sync'}});assert.equal(pending.tasks.tasks.length,1);
@@ -324,6 +324,6 @@ test('Tasks MCP keeps read grants read-only and acknowledges only a verified cur
  const saved=await ok(f,write.tokens,'acknowledge_task_sync',{...ack,revision:1});assert.equal(saved.task.pa_sync.status,'synced');
  assert.equal((await ok(f,read.tokens,'get_tasks',{query:{resource:'pending_sync'}})).tasks.length,0);
  assert.equal((await call(f,write.tokens,'acknowledge_task_sync',{...ack,revision:1,pa_task_id:'TSK-00998'})).isError,true);
- const updated=await ok(f,write.tokens,'save_task',{task:{task_id:task.task_id,revision:1,request_id:crypto.randomUUID(),action:'wait',note:'Waiting for source document',review_date:'2026-10-30'}});assert.equal(updated.task.pa_sync.status,'pending');
+ const updated=await ok(f,write.tokens,'save_task',{task:{task_id:task.task_id,revision:1,request_id:crypto.randomUUID(),action:'step_update',step_id:'step-1',data:{status:'Waiting',waiting_reason:'Waiting for source document',due_date:'2026-10-30'}}});assert.equal(updated.task.pa_sync.status,'pending');
  assert.equal((await ok(f,read.tokens,'get_tasks',{query:{resource:'pending_sync'}})).tasks.length,1);
 });

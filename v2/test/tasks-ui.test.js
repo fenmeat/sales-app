@@ -1,3 +1,5 @@
+import {taskType,projectTask,statusLabel,localDate} from '../src/task-workflow.js';
+import {stepsHTML,workflowForms} from '../public/task-workflow-ui.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
@@ -21,7 +23,9 @@ async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={
  const dq=dialog.querySelector.bind(dialog);dialog.querySelector=s=>prepare(dq(s));
  document.querySelector=s=>prepare(query(s));
  class FormData{
-  constructor(form){this.values=(form.querySelector('fieldset')?.disabled?[]:[...form.querySelectorAll('[name]')]).filter(c=>c.type!=='checkbox'||c.checked).map(c=>[c.name,c.type==='checkbox'?'on':c.value]);}
+  constructor(form){this.values=(form.querySelector('fieldset')?.disabled?[]:[...form.querySelectorAll('[name]')]).filter(c=>c.type!=='checkbox'||c.checked).map(c=>[c.name,c.type==='checkbox'?(c.getAttribute('value')||'on'):c.value]);}
+  get(name){return this.values.find(([k])=>k===name)?.[1]??null;}
+  getAll(name){return this.values.filter(([k])=>k===name).map(x=>x[1]);}
   has(name){return this.values.some(([key])=>key===name);}
   [Symbol.iterator](){return this.values[Symbol.iterator]();}
  }
@@ -41,7 +45,7 @@ async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms);
  return {document,dialog,posts,postPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 
@@ -200,7 +204,7 @@ test('task instruction photos reopen while pending, survive edits and stay separ
  ui.document.querySelector('[data-task]').onclick();
  const links=[...ui.dialog.querySelectorAll('a[href^="/api/tasks/file"]')];
  assert.deepEqual(links.map(a=>a.getAttribute('href')),ids.map(id=>'/api/tasks/file?id='+id));
- assert.match(ui.dialog.textContent,/Task photos \/ documents/);
+ assert.match(ui.dialog.textContent,/Foto’s en dokumente/);
  ui.document.querySelector('#edit').onclick();
  assert.equal(ui.dialog.querySelectorAll('a[href^="/api/tasks/file"]').length,2);
  const form=ui.dialog.querySelector('form');form.elements.title.value='Updated instructions';await form.onsubmit({preventDefault(){}});
@@ -313,4 +317,12 @@ test('photo encoding failure keeps task text and selected files, saves nothing a
  const photo=createCanvas(100,100);selectFiles(ui,[new File([photo.toBuffer('image/png')],'broken.png',{type:'image/png'})]);
  const form=ui.dialog.querySelector('form');form.elements.title.value='Do not lose this';await form.onsubmit({preventDefault(){}});
  assert.equal(ui.posts.length,0);assert.equal(form.elements.title.value,'Do not lose this');assert.equal(ui.dialog.open,true);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,1);assert.match(form.querySelector('.error').textContent,/could not be prepared/);assert.equal(tools.closed(),1);assert.equal(form.querySelector('fieldset').disabled,false);
+});
+
+
+test('workflow form adds dependencies and completes only the selected step with a stable save',async()=>{
+ const task={id:'workflow-synthetic',task_type:'workflow',kind:'general',status:'Pending',assigned_to:'alex',created_by:'alex',revision:3,title:'Synthetic step workflow',due_date:'2099-11-02',pa_sync:{status:'app_only'},steps:[{id:'step-1',description:'Inspect documents',assigned_to:'alex',status:'Pending',due_date:'2099-11-02',dependencies:[]},{id:'step-2',description:'Arrange later payment',assigned_to:'alinda',status:'Scheduled',due_date:'2099-11-30',dependencies:['step-1']}],progress:{done:0,total:2}};
+ const ui=await screen('alex',[task]);ui.document.querySelector('[data-task]').onclick();assert.equal(ui.dialog.querySelectorAll('.step').length,2);assert.ok(ui.dialog.querySelector('[data-step-complete="step-2"]').hasAttribute('disabled'));assert.equal(ui.dialog.querySelector('#complete'),null);
+ ui.dialog.querySelector('#add-step').onclick();let f=ui.dialog.querySelector('form');f.elements.description.value='Record proof';f.elements.assigned_to.value='alinda';f.elements.due_date.value='2099-12-01';f.elements.status.value='Scheduled';f.elements.required.checked=true;ui.dialog.querySelector('[name=dependency][value="step-2"]').checked=true;await f.onsubmit({preventDefault(){}});assert.equal(ui.posts[0].action,'step_add');assert.deepEqual(ui.posts[0].data.dependencies,['step-2']);assert.equal(ui.posts[0].data.description,'Record proof');
+ ui.document.querySelector('[data-task]').onclick();ui.dialog.querySelector('[data-step-complete="step-1"]').onclick();f=ui.dialog.querySelector('form');f.elements.note.value='Checked';await f.onsubmit({preventDefault(){}});assert.equal(ui.posts[1].action,'step_complete');assert.equal(ui.posts[1].step_id,'step-1');assert.equal(ui.posts[1].note,'Checked');
 });

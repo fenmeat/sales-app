@@ -78,7 +78,7 @@ test('reminders belong to the requester; superseded, closed and reassigned remin
 });
 test('canonical counts join stages once, include unpublished app work, and keep closed steps in open cycles',()=>{
  const pa={rows:[row('TSK-00001'),row('TSK-00002',{scope:'private',assigned_to:'alex'}),row('TSK-00003',{status:'Complete'})]},app={tasks:[{id:'step',pa_task_id:'TSK-00001',status:'Complete'},{id:'old-duplicate',pa_task_id:'TSK-00001',status:'Cancelled'},{id:'newtask',pa_task_id:'',status:'Pending',assigned_to:'xavier',title:'New app work'}]};
- const rows=unifiedWork(app,pa);assert.equal(rows.length,4);assert.equal(rows[0].status,'Waiting');assert.equal(rows[0].stages.length,2);assert.equal(workCounts(rows,'alex').open,3);
+ const rows=unifiedWork(app,pa);assert.equal(rows.length,4);assert.equal(rows[0].status,'Pending');assert.equal(rows[0].stages.length,2);assert.equal(workCounts(rows,'alex').open,3);
  assert.equal(selectWork(rows,{username:'alex',admin:true,scope:'private',status:'open'}).length,1);
  assert.equal(selectWork(rows,{username:'alex',admin:true,scope:'fenmeat',status:'open'}).length,2);
 });

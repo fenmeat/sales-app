@@ -1,6 +1,8 @@
 import {check,UserError,dateKey,today} from './domain.js';
 import {isAdmin,keys,hash} from './auth.js';
 import {isInvoiceRep} from './invoice-auth.js';
+import {projectTask,taskType,syncRequired} from './task-workflow.js';
+import {workflowAction,validateSteps,completeReminder} from './task-workflow-actions.js';
 import {MAIL_SCHEMA,mailAction,readTaskMail} from './tasks-mail.js';
 
 export const TASK_SCHEMA=[
@@ -20,32 +22,36 @@ export const ensureTaskSchema=db=>db.batch(TASK_SCHEMA.map(s=>db.prepare(s)));
 // Phone registration uses the existing canonical rep IDs, independently of old keys.
 export const taskUsers=env=>[...Object.keys(keys(env)).filter(u=>!isInvoiceRep(u)),'tapiz','mosa'].sort();
 const ID=/^[a-zA-Z0-9-]{8,90}$/,PA_ID=/^TSK-\d{5,}$/;
-const statusSet=new Set(['Pending','Waiting','Complete','Cancelled']);
+const statusSet=new Set(['Pending','Scheduled','Waiting','Complete','Cancelled']);
 const reminderFields=['reminder_mode','reminder_at'];
-const editable=['title','details','assigned_to','due_date','review_date','priority','kind','supplier','required_materials','po_number','po_revision','document_url','source_url','parent_cycle_id','pa_task_id','requires_evidence',...reminderFields];
-const selfEditable=['title','details','assigned_to','due_date','review_date','priority','kind','supplier','document_url','requires_evidence',...reminderFields];
+const workflowFields=['task_type','repeat','pa_required'];
+const editable=[...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','required_materials','po_number','po_revision','document_url','source_url','parent_cycle_id','pa_task_id','requires_evidence',...reminderFields];
+const selfEditable=[...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','document_url','requires_evidence',...reminderFields];
 export const managesOwnTask=(user,task)=>task.created_by===user.username&&task.assigned_to===user.username&&task.kind!=='po_dispatch';
-const latestSQL=`SELECT e.*,s.acknowledged_revision,s.pa_task_id AS synced_pa_task_id,s.source_url AS synced_source_url,s.synced_at,s.last_error FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON e.task_id=l.task_id AND e.revision=l.revision LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`;
+const latestSQL=`SELECT e.*,(SELECT MAX(c.revision) FROM v2_task_events c WHERE c.task_id=e.task_id AND c.action NOT IN ('reminder','followup_reminder')) AS pa_revision,s.acknowledged_revision,s.pa_task_id AS synced_pa_task_id,s.source_url AS synced_source_url,s.synced_at,s.last_error FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON e.task_id=l.task_id AND e.revision=l.revision LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`;
 const text=(value,max,required=false)=>{check(typeof value==='string'&&value.length<=max&&(!required||value.trim()),'Enter the required task details.');return value.trim();};
 const optionalText=(v,max)=>v===null||v===undefined?'':text(v,max);
 function safeURL(value){if(!value)return '';let u;try{u=new URL(value);}catch{throw new UserError('Enter a complete secure document link.');}check(u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<=2000,'Use a secure document link.');return u.href;}
-function decode(row){if(!row)return null;return {...JSON.parse(row.payload),revision:row.revision,updated_at:row.saved_at,updated_by:row.actor,pa_task_id:row.synced_pa_task_id||JSON.parse(row.payload).pa_task_id||'',pa_sync:{acknowledged_revision:row.acknowledged_revision??0,status:(row.acknowledged_revision??0)>=row.revision?'synced':'pending',synced_at:row.synced_at??null,error:row.last_error??null}};}
+function decode(row){if(!row)return null;const raw=JSON.parse(row.payload);const task=projectTask({...raw,revision:row.revision,updated_at:row.saved_at,updated_by:row.actor,pa_task_id:row.synced_pa_task_id||raw.pa_task_id||''});return {...task,pa_sync:{acknowledged_revision:row.acknowledged_revision??0,status:!syncRequired(task)?'app_only':(row.acknowledged_revision??0)>=(row.pa_revision??row.revision)?'synced':'pending',synced_at:row.synced_at??null,error:row.last_error??null}};}
+
 export async function getTask(db,id){check(ID.test(id),'Invalid task.');return decode(await db.prepare(latestSQL+' WHERE e.task_id=?').bind(id).first());}
-function canSee(user,task){return isAdmin(user.username)||task.assigned_to===user.username;}
+function canSee(user,task){return isAdmin(user.username)||task.assigned_to===user.username||task.steps?.some(s=>s.assigned_to===user.username);}
 export function currentTaskNotification(task,n,now=new Date()){
+ if(task)task=projectTask(task,new Date(now.getTime()+7200000).toISOString().slice(0,10));
  if(!task||!canSee({username:n.username},task))return false;
  if(n.kind==='follow_up'){
   const when=task.followup_reminders?.[n.username];
   return openTask(task)&&isAdmin(n.username)&&!!when&&n.id==='followup-'+task.id+'-'+n.username+'-'+Math.floor(Date.parse(when)/1000)&&Date.parse(when)<=now.getTime();
  }
  if(n.kind==='update_requested')return openTask(task)&&task.feedback_request?.status==='pending'&&task.feedback_request.to===n.username&&n.id===task.feedback_request.id+'-'+n.username;
+ if(n.kind==='step_due'){const step=task.steps?.find(s=>n.id==='step-'+task.id+'-'+s.id+'-'+new Date(now.getTime()+7200000).toISOString().slice(0,10)+'-'+s.assigned_to);return !!step&&step.assigned_to===n.username&&step.effective_status==='Pending'&&!step.blocked&&task.status==='Pending';}
  if(n.kind!=='due')return true;
  if(!openTask(task)||n.username!==task.assigned_to)return false;
  const mode=task.reminder_mode??'daily';
  if(mode==='off')return false;
  const date=new Date(now.getTime()+7200000).toISOString().slice(0,10);
  const id=mode==='once'?'reminder-once-'+task.id+'-'+Math.floor(Date.parse(task.reminder_at)/1000):'reminder-'+task.id+'-'+date;
- const due=task.status==='Waiting'?task.review_date:task.due_date||task.review_date;
+ const due=task.next_action_date||(task.status==='Waiting'?task.review_date:task.due_date||task.review_date);
  return n.id===id&&(mode==='once'?Date.parse(task.reminder_at)<=now.getTime():!!due&&due<=date);
 }
 function visible(user,task){check(task&&canSee(user,task),'Task not found.',404);return task;}
@@ -53,8 +59,8 @@ export async function listTasks(env,user,query={}){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
  const offset=Number(query.offset??0);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  const conditions=[],params=[];
- if(!isAdmin(user.username)||query.mine){conditions.push('json_extract(e.payload,\'$.assigned_to\')=?');params.push(user.username);}
- if(query.pending_sync){check(isAdmin(user.username),'Only admins can synchronise PA tasks.',403);conditions.push('COALESCE(s.acknowledged_revision,0)<e.revision');}
+ if(!isAdmin(user.username)||query.mine){conditions.push("(json_extract(e.payload,'$.assigned_to')=? OR EXISTS (SELECT 1 FROM json_each(e.payload,'$.steps') st WHERE json_extract(st.value,'$.assigned_to')=?))");params.push(user.username,user.username);}
+ if(query.pending_sync){check(isAdmin(user.username),'Only admins can synchronise PA tasks.',403);conditions.push("COALESCE(s.acknowledged_revision,0)<(SELECT MAX(c.revision) FROM v2_task_events c WHERE c.task_id=e.task_id AND c.action NOT IN ('reminder','followup_reminder')) AND (COALESCE(NULLIF(json_extract(e.payload,'$.pa_task_id'),''),s.pa_task_id,NULLIF(json_extract(e.payload,'$.parent_cycle_id'),''),'')<>'' OR json_extract(e.payload,'$.pa_required')=1 OR (COALESCE(json_extract(e.payload,'$.task_type'),'') NOT IN ('workflow','reminder') AND json_extract(e.payload,'$.kind')<>'general'))");}
  const where=conditions.length?' WHERE '+conditions.join(' AND '):'';
  const result=await env.DB.prepare(latestSQL+where+' ORDER BY e.saved_at DESC,e.task_id LIMIT 101 OFFSET ?').bind(...params,offset).all();
  const notifications=await env.DB.prepare(`SELECT n.id,n.username,n.task_id,n.kind,n.created_at,n.read_at,e.payload FROM v2_task_notifications n JOIN v2_task_events e ON e.task_id=n.task_id AND e.revision=(SELECT MAX(revision) FROM v2_task_events WHERE task_id=n.task_id) WHERE n.username=? ORDER BY n.created_at DESC LIMIT 100`).bind(user.username).all();
@@ -71,7 +77,7 @@ function validateReminder(task){
  return t;
 }
 function validateTask(raw,env){
- const t=validateReminder(raw);t.title=text(t.title,180,true);t.details=optionalText(t.details,5000);
+ const t=validateReminder(raw);t.task_type=t.task_type||taskType(t);check(['reminder','workflow','legacy'].includes(t.task_type),'Kies ’n taaksoort.');t.repeat=t.repeat||'none';check(['none','daily','weekly','monthly'].includes(t.repeat),'Kies ’n herhaling.');check(t.task_type==='reminder'||t.repeat==='none','Slegs herinneringe kan herhaal.');if(t.task_type==='reminder')check(!t.pa_task_id&&!t.parent_cycle_id&&t.kind==='general','Gekoppelde werk kan nie ’n gewone herinnering wees nie.');t.pa_required=t.task_type==='reminder'?false:!!t.pa_required;t.title=text(t.title,180,true);t.details=optionalText(t.details,5000);
  check(taskUsers(env).includes(t.assigned_to),'Choose a current app user.');
  check(['general','stocktake','po_dispatch'].includes(t.kind),'Choose a task type.');
  check(['Critical','High','Normal','Low'].includes(t.priority),'Choose a priority.');
@@ -110,6 +116,7 @@ export async function saveTask(env,user,b){
  const old=await getTask(env.DB,b.task_id),admin=isAdmin(user.username),at=new Date().toISOString();
  if(old)visible(user,old);
  check((old?.revision??0)===b.revision,'This task changed. Reload before saving.',409);
+ check(env.TASK_WORKFLOWS_READ_ONLY!=='true'||!old||taskType(old)!=='workflow'||b.action==='restore_task_revision','Stapwysigings is tydelik gesluit vir onderhoud.',503);
  const action=b.action??'create';let task=old?structuredClone(old):null,files=[];
  check(b.files===undefined||action==='create','Task photos can only be supplied when creating a task.');
  if(action==='create'){
@@ -117,6 +124,7 @@ export async function saveTask(env,user,b){
   check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||k==='area'),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat','Personal PA matters cannot be imported into FenMeat.');
   if(!admin){check(!b.data.assigned_to||b.data.assigned_to===user.username,'You can only create tasks for yourself.',403);check(Object.keys(b.data).every(k=>selfEditable.includes(k)||k==='area')&&['general','stocktake'].includes(b.data.kind??'general'),'Only admins can create linked PA or PO tasks.',403);}
   task=validateTask({kind:'general',priority:'Normal',assigned_to:user.username,...b.data,id:b.task_id,area:'Fen Meat',status:'Pending',created_by:user.username,created_at:at,completion:null,waiting_reason:''},env);
+  if(task.task_type==='workflow')task.steps=validateSteps([{id:'step-1',description:task.title,notes:task.details,assigned_to:task.assigned_to,due_date:task.due_date||task.review_date,status:'Pending',requires_evidence:task.requires_evidence}],taskUsers(env));
   if(task.kind==='stocktake'&&!task.required_materials.length){
    const register=await env.DB.prepare('SELECT payload FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();
    const materials=register?JSON.parse(register.payload).materials:[];
@@ -134,12 +142,17 @@ export async function saveTask(env,user,b){
   task.attachments=files.map(f=>f.id);
  }else{
   check(old,'Task not found.',404);
-  if(action==='update'){
+  if(action==='restore_task_revision'){
+   check(admin,'Only admins can restore task history.',403);check(Number.isSafeInteger(b.restore_revision)&&b.restore_revision>0&&b.restore_revision<old.revision,'Choose an earlier saved revision.');text(b.note,2000,true);
+   const row=await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? AND revision=?').bind(old.id,b.restore_revision).first();check(row,'Earlier task not found.',404);const restored=JSON.parse(row.payload);
+   check(restored.id===old.id&&restored.parent_cycle_id===old.parent_cycle_id&&(!restored.pa_task_id||restored.pa_task_id===old.pa_task_id),'Preserve the task and PA identity.');task={...restored,pa_task_id:old.pa_task_id,last_reason:b.note,restored_from:b.restore_revision};
+  }else if(['start_workflow','step_add','step_update','step_complete','step_reopen','status_override'].includes(action)){task=await workflowAction({task,b,user,admin,users:taskUsers(env),at,db:env.DB});
+  }else if(action==='update'){
    check(admin||managesOwnTask(user,old),'Only admins can change tasks assigned by someone else. You can change your reminder.',403);check(b.data&&Object.keys(b.data).every(k=>(admin?editable:selfEditable).includes(k)),'Unknown task field.');
    if(!admin)check(!Object.hasOwn(b.data,'assigned_to')||b.data.assigned_to===user.username,'You can only keep tasks assigned to yourself.',403);
    check(!['Complete','Cancelled'].includes(old.status),'Reopen this task before changing its instructions.');
    task=validateTask({...old,...b.data},env);
-   check(task.kind===old.kind&&task.parent_cycle_id===old.parent_cycle_id&&task.pa_task_id===old.pa_task_id,'Keep the existing task type and PA identity.');
+   check(task.task_type===old.task_type&&task.kind===old.kind&&task.parent_cycle_id===old.parent_cycle_id&&task.pa_task_id===old.pa_task_id,'Keep the existing task type and PA identity.');
   }else if(action==='reminder'){
    check(openTask(old),'Reopen this task before changing its reminder.');
    check(b.data&&Object.keys(b.data).length&&Object.keys(b.data).every(k=>reminderFields.includes(k)),'Only reminder fields can be changed here.');
@@ -153,7 +166,8 @@ export async function saveTask(env,user,b){
    task.followup_reminders={...old.followup_reminders};
    if(when)task.followup_reminders[user.username]=when;else delete task.followup_reminders[user.username];
   }else if(action==='complete'){
-   check(old.status==='Pending'||old.status==='Waiting','This task is already closed.');
+   check(taskType(old)!=='workflow','Merk die individuele stappe klaar.');
+   check(openTask(old),'This task is already closed.');
    const note=optionalText(b.note,2000),proof_url=safeURL(b.proof_url),attachments=Array.isArray(b.attachments)?b.attachments:[];
    check(attachments.length<=12&&new Set(attachments).size===attachments.length&&attachments.every(x=>typeof x==='string'&&ID.test(x)),'Choose up to 12 different attachments.');
    check(attachments.every(id=>!task.attachments?.includes(id)),'Add completion evidence; the task instruction photos are not completion evidence.');
@@ -175,7 +189,7 @@ export async function saveTask(env,user,b){
     check(task.required_materials.length&&task.required_materials.every(id=>counted.includes(id)),'Save all requested material counts together before completing this task.');
     completion.stocktake={request_id:event.request_id,revision:event.revision,date:task.due_date,supplier:task.supplier};
    }
-   task.status='Complete';task.completion=completion;task.waiting_reason='';
+   task.status='Complete';task.completion=completion;task.waiting_reason='';task=completeReminder(task,at);
    if(task.feedback_request?.status==='pending')task.feedback_request={...task.feedback_request,status:'answered',answered_at:at,answer:'complete',note};
   }else if(action==='request_update'){
    check(admin&&old.assigned_to!==user.username,'An admin can request an update from another task owner.',403);
@@ -198,15 +212,19 @@ export async function saveTask(env,user,b){
    const before=await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? AND revision=?').bind(old.id,old.revision-1).first();
    check(before,'The earlier task could not be found.',409);task=JSON.parse(before.payload);task.last_update={by:user.username,at,kind:'undo_complete',text:'Completion undone.'};
   }else if(action==='wait'){
+   check(taskType(task)!=='workflow','Kies die stap wat op iemand wag.');
    check(!['Complete','Cancelled'].includes(task.status),'Reopen this task first.');task.waiting_reason=text(b.note,2000,true);task.review_date=dateKey(b.review_date);task.status='Waiting';
   }else if(action==='reopen'||action==='cancel'){
+   check(action==='cancel'||taskType(task)!=='workflow'||task.status==='Cancelled','Heropen die toepaslike stap.');
    check(admin||managesOwnTask(user,old),'Only admins can reopen or cancel tasks assigned by someone else.',403);text(b.note,2000,true);task.status=action==='reopen'?'Pending':'Cancelled';task.last_reason=b.note;task.completion=null;
   }else throw new UserError('Unsupported task action.');
  }
  if(old?.assigned_to!==task.assigned_to&&task.feedback_request?.status==='pending')task.feedback_request={...task.feedback_request,status:'cancelled',cancelled_at:at};
+ if(task.task_type!=='legacy')task=projectTask(task);
  check(statusSet.has(task.status),'Invalid task status.');
  if(task.reminder_mode==='once'&&(!old||old.reminder_mode!=='once'||old.reminder_at!==task.reminder_at))check(Date.parse(task.reminder_at)>Date.parse(at),'Choose a reminder time in the future.');
- for(const key of ['revision','updated_at','updated_by','pa_sync'])delete task[key];
+ for(const key of ['revision','updated_at','updated_by','pa_sync','progress','next_action','next_action_date','next_assigned_to'])delete task[key];
+ if(task.steps)task.steps=task.steps.map(({blocked,effective_status,...step})=>step);
  const revision=b.revision+1;
  const statements=[env.DB.prepare('INSERT INTO v2_task_events(request_id,fingerprint,task_id,revision,action,payload,actor,saved_at) VALUES(?,?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,task.id,revision,action,JSON.stringify(task),user.username,at)];
  statements.push(...files.map(file=>insertAttachment(env.DB,task.id,user.username,at,file)));
@@ -214,6 +232,7 @@ export async function saveTask(env,user,b){
  if(action==='create'||old?.assigned_to!==task.assigned_to)statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'assigned',at));
  else if(['complete','wait'].includes(action))statements.push(notification(env.DB,b.request_id,task.created_by,task,action==='complete'?'completed':'waiting',at));
  else if(['update','reopen','cancel','undo_complete'].includes(action))statements.push(notification(env.DB,b.request_id,task.assigned_to,task,action,at));
+ if(action.startsWith('step_'))for(const u of new Set([task.assigned_to,...task.steps.map(s=>s.assigned_to)]))if(u!==user.username)statements.push(notification(env.DB,b.request_id,u,task,'step_update',at));
  if(action==='request_update')statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'update_requested',at));
  const recipients=new Set();
  if(['respond','note'].includes(action))recipients.add(task.created_by);
@@ -224,7 +243,7 @@ export async function saveTask(env,user,b){
 }
 export async function acknowledgeTask(env,user,b){
  check(isAdmin(user.username),'Only admins can synchronise PA.',403);
- const t=await getTask(env.DB,b.task_id);check(t&&b.revision===t.revision,'Read the current task before confirming its PA update.',409);
+ const t=await getTask(env.DB,b.task_id);check(t&&syncRequired(t),'Hierdie herinnering bly net in die app.');check(t&&b.revision===t.revision,'Read the current task before confirming its PA update.',409);
  check(PA_ID.test(b.pa_task_id??''),'Provide the existing PA task ID.');const source=safeURL(b.source_url);check(source.startsWith('https://docs.google.com/spreadsheets/'),'Provide the verified PA register row.');
  check(!t.pa_task_id||t.pa_task_id===b.pa_task_id,'Do not replace an existing PA task identity.');
  check(!t.parent_cycle_id||t.parent_cycle_id===b.pa_task_id,'A PO step must remain linked to its existing cycle.');
@@ -264,14 +283,14 @@ export async function tasksApi({request,url,env,user,bodyOf}){
   const task=visible(user,await getTask(env.DB,b.task_id));check(!['Complete','Cancelled'].includes(task.status),'Reopen the task before adding evidence.');
   const file=attachmentData(b);
   const old=await env.DB.prepare('SELECT task_id FROM v2_task_attachments WHERE id=?').bind(b.id).first();if(old){check(old.task_id===task.id,'Attachment identifier already used.',409);return {id:b.id};}
-  const count=await env.DB.prepare('SELECT COUNT(*) n FROM v2_task_attachments WHERE task_id=? AND id NOT IN (SELECT value FROM json_each(?))').bind(task.id,JSON.stringify(task.attachments??[])).first();check(count.n<12,'This task already has twelve completion attachments.');
+  const count=await env.DB.prepare('SELECT COUNT(*) n FROM v2_task_attachments WHERE task_id=? AND id NOT IN (SELECT value FROM json_each(?))').bind(task.id,JSON.stringify(task.attachments??[])).first();check(count.n<(task.task_type==='workflow'?120:12),'Hierdie taak se bewysberging is vol. Gebruik ’n dokumentskakel.');
   await insertAttachment(env.DB,task.id,user.username,new Date().toISOString(),file).run();return {id:b.id};
  }
  if(path==='/api/tasks')return saveTask(env,user,b);
  if(path==='/api/tasks/read'){check(/^[a-zA-Z0-9_-]{8,140}$/.test(b.id??''),'Invalid notification.');await env.DB.prepare('UPDATE v2_task_notifications SET read_at=? WHERE id=? AND username=?').bind(new Date().toISOString(),b.id,user.username).run();return {saved:true};}
  throw new UserError('Task endpoint not found.',404);
 }
-function openTask(task){return ['Pending','Waiting'].includes(task.status);}
+function openTask(task){return ['Pending','Scheduled','Waiting'].includes(task.status);}
 export async function readTasksForPa(env,user,query={}){
  await ensureTaskSchema(env.DB);check(isAdmin(user.username),'Only admins can read PA task integration.',403);
  if(query.resource==='email_requests'||query.resource==='report_contacts')return readTaskMail(env,user,query);

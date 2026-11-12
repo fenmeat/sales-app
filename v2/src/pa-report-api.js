@@ -13,8 +13,8 @@ export const PA_REPORT_SCHEMA=[
 ];
 export const ensurePaReportSchema=db=>db.batch(PA_REPORT_SCHEMA.map(s=>db.prepare(s)));
 const ID=/^[a-zA-Z0-9-]{8,90}$/,TSK=/^TSK-\d{5,}$/;
-const statuses=new Set(['Pending','Waiting','Complete','Cancelled','Archived']);
-const opened=t=>['Pending','Waiting'].includes(t.status);
+const statuses=new Set(['Pending','Scheduled','Waiting','Complete','Cancelled','Archived']);
+const opened=t=>['Pending','Scheduled','Waiting'].includes(t.status);
 const users=env=>Object.keys(keys(env)).filter(u=>!['tapiz','mosa','musa'].includes(u));
 const txt=(v,max,required=false)=>{check(typeof v==='string'&&v.length<=max&&(!required||v.trim()),'Enter the required report details.');return v.trim();};
 const iso=v=>{check(typeof v==='string'&&Number.isFinite(Date.parse(v)),'Provide the source timestamp.');return new Date(v).toISOString();};
@@ -35,7 +35,7 @@ async function subject(env,user,key){
  const report=await latest(env.DB,m[1]),item=report?.sections.flatMap(s=>s.items).find(i=>i.id===m[2]);check(item,'Report item not found.',404);
  return {...item,scope:'private',assigned_to:'alex',subject_key:key,subject_hash:await hash(JSON.stringify(item)),report_date:report.date};
 }
-function summary(rows){const active=rows.filter(opened);return {total:rows.length,open:active.length,pending:active.filter(r=>r.status==='Pending').length,waiting:active.filter(r=>r.status==='Waiting').length,fenmeat:active.filter(r=>r.scope==='fenmeat').length,private:active.filter(r=>r.scope==='private').length};}
+function summary(rows){const active=rows.filter(opened);return {total:rows.length,open:active.length,pending:active.filter(r=>r.status==='Pending').length,scheduled:active.filter(r=>r.status==='Scheduled').length,waiting:active.filter(r=>r.status==='Waiting').length,fenmeat:active.filter(r=>r.scope==='fenmeat').length,private:active.filter(r=>r.scope==='private').length};}
 function feedbackRow(r){return {...JSON.parse(r.payload),id:r.id,subject_key:r.subject_key,subject_hash:r.subject_hash,actor:r.actor,created_at:r.created_at,status:r.acknowledged_at?'processed':'pending',acknowledged_at:r.acknowledged_at,outcome:r.outcome,source_url:r.source_url};}
 export async function readPaReport(env,user,query={}){
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
@@ -112,14 +112,18 @@ export async function savePaReport(env,user,b){
   await env.DB.prepare('UPDATE v2_pa_report_feedback SET acknowledged_at=?,outcome=?,source_url=? WHERE id=? AND acknowledged_at IS NULL').bind(new Date().toISOString(),outcome,url,r.id).run();
   return {saved:true,feedback:feedbackRow(await env.DB.prepare('SELECT * FROM v2_pa_report_feedback WHERE id=?').bind(r.id).first())};
  }
- check(['register','report'].includes(b.operation),'Choose register or report publication.');
- const key=b.operation==='register'?'register':'report-'+dateKey(b.data?.date),fingerprint=await hash(JSON.stringify({...b,actor:user.username}));
+ check(['register','register_patch','report'].includes(b.operation),'Choose register or report publication.');
+ const key=b.operation.startsWith('register')?'register':'report-'+dateKey(b.data?.date),fingerprint=await hash(JSON.stringify({...b,actor:user.username}));
  const prior=await env.DB.prepare('SELECT * FROM v2_pa_report_versions WHERE request_id=?').bind(b.request_id).first();
  if(prior){check(prior.fingerprint===fingerprint,'This request ID was used for different content.',409);return {saved:true,replayed:true,revision:prior.revision,resource_key:prior.resource_key};}
  const old=await latest(env.DB,key);check(Number.isSafeInteger(b.revision)&&b.revision===(old?.revision??0),'This report changed. Read its current revision.',409);
  let payload;
- if(b.operation==='register'){
-  payload=validateRegister(b.data,env);check(!old||Date.parse(payload.source_at)>=Date.parse(old.source_at),'Do not publish an older register.',409);
+ if(b.operation.startsWith('register')){
+  if(b.operation==='register_patch'){
+   check(old,'Publish the initial complete register first.');const patch=validateRegister(b.data,env),changes=new Map(patch.rows.map(r=>[r.id,r]));
+   // IDs omitted from a patch are retained verbatim, including all closed history.
+   payload={...old,source_at:patch.source_at,source_url:patch.source_url,rows:[...old.rows.map(r=>changes.get(r.id)||r),...patch.rows.filter(r=>!old.rows.some(o=>o.id===r.id))]};delete payload.revision;delete payload.saved_at;
+  }else payload=validateRegister(b.data,env);check(!old||Date.parse(payload.source_at)>=Date.parse(old.source_at),'Do not publish an older register.',409);
   check(!old||old.rows.every(r=>payload.rows.some(n=>n.id===r.id)),'Do not silently drop existing PA identities. Preserve closed or archived records.',409);
  }else payload=validateReport(b.data,await latest(env.DB,'register'));
  const at=new Date().toISOString();

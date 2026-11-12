@@ -32,7 +32,7 @@ test('tasks enforce owner privacy, admin assignment, revisions, idempotency, evi
  assert.equal((await call('xalinda','/api/tasks',completion)).status,400);
  assert.equal((await call('xalinda','/api/tasks',{...completion,proof_url:'javascript:alert(1)'})).status,400);
  assert.equal((await call('xalinda','/api/tasks',{...completion,proof_url:'https://example.com/evidence'})).status,200);
- const admin=(await call('alinda','/api/tasks')).data;assert.equal(admin.notifications.filter(n=>n.kind==='completed').length,1);assert.equal(admin.tasks[0].status,'Complete');assert.equal(admin.tasks[0].pa_sync.status,'pending');
+ const admin=(await call('alinda','/api/tasks')).data;assert.equal(admin.notifications.filter(n=>n.kind==='completed').length,1);assert.equal(admin.tasks[0].status,'Complete');assert.equal(admin.tasks[0].pa_sync.status,'app_only');
  assert.equal((await call('xalinda','/api/tasks',{...completion,request_id:crypto.randomUUID(),revision:2,action:'reopen',note:'Retry'})).status,403);
  assert.equal((await call('alinda','/api/tasks',{...completion,request_id:crypto.randomUUID(),revision:2,action:'reopen',note:'Evidence needs correction'})).status,200);
  const history=(await call('alinda','/api/tasks/audit?id='+b.task_id)).data.history;assert.deepEqual(history.map(h=>h.action),['reopen','complete','create']);assert.equal(history[1].task.completion.by,'xalinda');
@@ -106,7 +106,7 @@ test('staff can adjust reminders on assigned work without rewriting admin instru
  assert.equal((await call('xalinda','/api/tasks',body)).status,403);
  assert.equal((await call('xalinda','/api/tasks',{...body,action:'reminder',data:{reminder_mode:'off',requires_evidence:false}})).status,400);
  const reminder={...body,action:'reminder',data:{reminder_mode:'once',reminder_at:'2099-11-02T11:45:00.000Z'}};
- const saved=await call('xalinda','/api/tasks',reminder);assert.equal(saved.status,200);assert.equal(saved.data.task.revision,2);assert.equal(saved.data.task.pa_sync.status,'pending');
+ const saved=await call('xalinda','/api/tasks',reminder);assert.equal(saved.status,200);assert.equal(saved.data.task.revision,2);assert.equal(saved.data.task.pa_sync.status,'app_only');
  for(const key of ['title','details','assigned_to','created_by','due_date','requires_evidence'])assert.equal(saved.data.task[key],original[key]);
  assert.equal((await call('xalinda','/api/tasks',reminder)).data.replayed,true);
  assert.equal((await call('xalinda','/api/tasks',{...reminder,request_id:crypto.randomUUID()})).status,409);
