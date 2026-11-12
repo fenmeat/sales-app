@@ -28,3 +28,5 @@ New details use Zoho modification filters with a two-day overlap and stable sour
 The existing PA Monday automation still creates the PDF and workbook and applies its signature, Sent and duplicate-send checks. It consumes the cached report, not a complete fresh Zoho export. No test mail is sent during rollout.
 
 R02 records whose source modification precedes the checked export boundary by more than two hours reuse the baseline even when their CSV has no API timestamp. New IDs and changed records still load details. App/POS checks use the catalogue’s Zoho item links, reconcile receipts and line totals, and keep opening Zoho-credit receipts visible. Non-Britos native sales do not falsely block the Britos migration check; relevant or unknown lines still require duplicate reconciliation.
+
+Each immutable report page carries separate `lines`, `invoices` and `receipts` arrays (100 rows each). Continue until `has_more` is false. Do not sum whole invoice totals or whole payment amounts across line/allocation rows; use unique invoice/payment IDs and allocated cents. Source hashes and allocation counts remain attached to the snapshot.

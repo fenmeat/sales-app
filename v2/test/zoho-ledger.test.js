@@ -108,6 +108,13 @@ test('checked baseline records without API timestamps reuse R02 and avoid old de
  const r=await advanceLedger(f.env,{maxCalls:4,read:async(_e,_u,path)=>{paths.push(path);assert.ok(['invoices','customerpayments'].includes(path));return {invoices:[{invoice_id:'1',last_modified_time:'2026-11-09T10:00:00Z'}],customer_payments:[{payment_id:'4',last_modified_time:'2026-11-09T10:00:00Z'}],page_context:{page:1,has_more_page:false}};}});
  assert.equal(r.complete,true);assert.equal(r.changed,0);assert.deepEqual(paths,['invoices','customerpayments']);assert.equal((await ledgerStatus(f.DB,{date:'2026-11-06'})).report.total,20000);
 });
+test('cached supporting invoice and receipt evidence is linked once and immutable',async t=>{
+ const f=await bootstrap(t),r=(await ledgerStatus(f.DB,{date:'2026-11-06'})).report;
+ assert.equal(r.invoice_count,1);assert.equal(r.allocation_count,1);assert.equal(r.invoices[0].received,20000);assert.equal(r.receipts[0].allocated,20000);assert.equal(r.receipts[0].payment_id,'4');assert.equal(r.receipts[0].invoice_id,'1');
+ await f.DB.prepare("UPDATE v2_zoho_mirror_records SET payload=json_set(payload,'$.allocations[0].value',10000) WHERE kind='payment'").run();
+ const frozen=(await ledgerStatus(f.DB,{job_id:r.snapshot_id})).report;assert.equal(frozen.receipts[0].allocated,20000);
+ const page2=(await ledgerStatus(f.DB,{job_id:r.snapshot_id,page:2})).report;assert.equal(page2.receipts.length,0);assert.equal(page2.invoices.length,0);assert.equal(page2.has_more,false);
+});
 test('native non-Britos POS is checked separately; opening-credit receipts cannot disappear',async t=>{
  const f=await bootstrap(t);const cfg=JSON.parse((await f.DB.prepare('SELECT config FROM v2_zoho_mirror_control').first()).config);cfg.exceptions=['App/Factory POS migration boundary requires reconciliation'];cfg.mapping['8']={owner:null,code:'barcode'};
  await f.DB.prepare('UPDATE v2_zoho_mirror_control SET config=?').bind(JSON.stringify(cfg)).run();

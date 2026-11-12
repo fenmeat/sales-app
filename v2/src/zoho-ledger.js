@@ -26,6 +26,7 @@ const records=async db=>(await queryRows(db,'SELECT kind,id,payload FROM v2_zoho
 const source=async(db,kind,id)=>{const r=await db.prepare('SELECT payload FROM v2_zoho_mirror_records WHERE kind=? AND id=?').bind(kind,id).first();return r?JSON.parse(r.payload):null;};
 const active=db=>db.prepare("SELECT * FROM v2_zoho_mirror_runs WHERE status='running'").first();
 function safeError(e){return e instanceof UserError?e.message.slice(0,240):'Source validation or database operation failed; the previous successful snapshot is retained.';}
+function reportPage(report,page){return {...report,lines:report.lines.slice((page-1)*100,page*100),invoices:(report.invoices??[]).slice((page-1)*100,page*100),receipts:(report.receipts??[]).slice((page-1)*100,page*100),page,has_more:Math.max(report.lines.length,report.invoices?.length??0,report.receipts?.length??0)>page*100};}
 
 export async function ledgerStatus(db,{date,page=1,job_id}={}){
  await ensureLedger(db);const c=await control(db),job=await active(db);
@@ -36,7 +37,7 @@ export async function ledgerStatus(db,{date,page=1,job_id}={}){
  if(job_id){
   check(Number.isInteger(page)&&page>=1&&page<=200,'Choose a valid report page.');
   const snapshot=await db.prepare('SELECT * FROM v2_zoho_mirror_reports WHERE id=?').bind(job_id).first();check(snapshot,'Report snapshot not found.',404);
-  const report=JSON.parse(snapshot.payload);return {...status,report:{...report,snapshot_id:snapshot.id,lines:report.lines.slice((page-1)*100,page*100),page,has_more:report.lines.length>page*100}};
+  const report=JSON.parse(snapshot.payload);return {...status,report:{...reportPage(report,page),snapshot_id:snapshot.id}};
  }
  if(date&&c){
   check(/^\d{4}-\d\d-\d\d$/.test(date),'Choose a report cutoff date.');check(Number.isInteger(page)&&page>=1&&page<=200,'Choose a valid report page.');
@@ -49,10 +50,12 @@ export async function ledgerStatus(db,{date,page=1,job_id}={}){
   if(!native.available)blockers.push('App/POS ledger coverage is unavailable');
   if(summary.errors.length)blockers.push('Invoice, payment or product exceptions require review');
   if(!cfg.owner_confirmed_through||cfg.owner_confirmed_through<date)blockers.push('Owner transfers since the previous confirmation must be checked');
-  const report={sales_through:date,receipt_asof:c.last_success??cfg.asof,complete:blockers.length===0,can_send_payment_instructions:blockers.length===0,blockers,owners:summary.owners,total:summary.total,errors:summary.errors,error_count:summary.errors.length,native,lines:summary.lines,line_count:summary.lines.length,unit:'integer ZAR cents',source:'Committed Zoho mirror; native app and POS shown separately'};
+  const invoices=[...new Map(summary.lines.map(l=>[l.invoice_id,{id:l.invoice_id,number:l.invoice,date:l.date,customer:l.customer,route:l.route,total:l.invoice_total,received:l.invoice_received,balance:l.invoice_balance,state:l.state}])).values()];
+  const receipts=await queryRows(db,`SELECT p.id AS payment_id,json_extract(p.payload,'$.number') AS payment_number,json_extract(p.payload,'$.date') AS date,json_extract(p.payload,'$.customer_id') AS customer_id,json_extract(p.payload,'$.amount') AS payment_amount,json_extract(p.payload,'$.unused') AS unused,json_extract(p.payload,'$.refunded') AS refunded,json_extract(p.payload,'$.currency') AS currency,json_extract(a.value,'$.id') AS allocation_id,json_extract(a.value,'$.invoice_id') AS invoice_id,json_extract(a.value,'$.value') AS allocated,json_extract(a.value,'$.withheld') AS withheld,p.run_id AS source_version FROM v2_zoho_mirror_records p,json_each(json_extract(p.payload,'$.allocations')) a WHERE p.kind='payment' AND json_extract(a.value,'$.invoice_id') IN (SELECT value FROM json_each(?)) ORDER BY p.id,invoice_id`,json(invoices.map(i=>i.id)));
+  const report={sales_through:date,receipt_asof:c.last_success??cfg.asof,complete:blockers.length===0,can_send_payment_instructions:blockers.length===0,blockers,owners:summary.owners,total:summary.total,errors:summary.errors,error_count:summary.errors.length,native,lines:summary.lines,line_count:summary.lines.length,invoices,invoice_count:invoices.length,receipts,allocation_count:receipts.length,baseline:c.baseline,baseline_sha256:cfg.source_sha256,archive_sha256:cfg.archive_sha256,unit:'integer ZAR cents',source:'Committed Zoho mirror; native app and POS shown separately'};
   const digest=await hash(json(report));await db.prepare('INSERT INTO v2_zoho_mirror_reports VALUES(?,?,?,?,?) ON CONFLICT(digest) DO NOTHING').bind(crypto.randomUUID(),digest,date,json(report),now()).run();
   const snapshot=await db.prepare('SELECT id FROM v2_zoho_mirror_reports WHERE digest=?').bind(digest).first();
-  status.report={...report,snapshot_id:snapshot.id,lines:report.lines.slice((page-1)*100,page*100),page,has_more:report.lines.length>page*100};
+  status.report={...reportPage(report,page),snapshot_id:snapshot.id};
  }
  return status;
 }

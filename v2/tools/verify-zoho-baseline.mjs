@@ -14,6 +14,7 @@ try{
  const result=await command('zoho_import_finish',{import_id:id});
  const read=await ledgerStatus(DB,{date:'2026-11-06'}),expected=JSON.parse(raw).expected;
  for(const [owner,value] of Object.entries(expected))if(read.report.owners[owner].due!==value)throw Error('R02 mismatch: '+owner);
+ if(read.report.line_count!==775||read.report.invoice_count!==500||read.report.allocation_count!==502)throw Error('R02 supporting evidence counts differ');
  const preserved=await DB.prepare("SELECT payload FROM preserved_business_records WHERE id='sentinel'").first();if(preserved.payload!=='unchanged')throw Error('Business record altered');
- console.log(JSON.stringify({passed:true,source_hash:id,counts:result.counts,owners:result.replay,total:result.total,report_send_blocked:!read.report.can_send_payment_instructions,snapshot_id:read.report.snapshot_id,preserved_business_records:true}));
+ console.log(JSON.stringify({passed:true,source_hash:id,counts:result.counts,report_counts:{lines:read.report.line_count,invoices:read.report.invoice_count,allocations:read.report.allocation_count},owners:result.replay,total:result.total,report_send_blocked:!read.report.can_send_payment_instructions,snapshot_id:read.report.snapshot_id,preserved_business_records:true}));
 }finally{await mf.dispose();}
