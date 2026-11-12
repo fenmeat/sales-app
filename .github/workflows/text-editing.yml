@@ -1,0 +1,45 @@
+name: Text editing browser acceptance
+on:
+  push:
+    branches: [fix/text-editing-0382, build/sales-v2-cloudflare]
+    paths:
+      - 'v2/public/input-selection.js'
+      - 'v2/public/invoicing/input-selection.js'
+      - 'v2/scripts/qa-text-editing.mjs'
+      - '.github/workflows/text-editing.yml'
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: v2/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Install isolated browser tools
+        run: npm install --prefix "$RUNNER_TEMP/text-browser" --no-audit --no-fund playwright@1.62.1
+      - name: Install browser
+        run: node "$RUNNER_TEMP/text-browser/node_modules/playwright/cli.js" install --with-deps "${{ matrix.browser }}"
+      - name: Check real text editing and mobile touch profiles
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-text-editing.mjs
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: text-editing-${{ matrix.browser }}
+          path: /tmp/fenmeat-text-editing/
+          retention-days: 7
