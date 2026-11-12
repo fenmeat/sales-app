@@ -43,6 +43,9 @@ try{
    async function frames(){await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));}
    async function caret(field,index){
     await field.scrollIntoViewIfNeeded();
+    // Separate intentional single taps; rapid synthetic taps are a native
+    // double-tap gesture and correctly select a word on mobile browsers.
+    if(device.hasTouch)await page.waitForTimeout(600);
     const point=await field.evaluate((e,index)=>{const s=getComputedStyle(e),r=e.getBoundingClientRect(),c=document.createElement('canvas').getContext('2d');c.font=s.font;return {x:r.x+parseFloat(s.borderLeftWidth)+parseFloat(s.paddingLeft)+c.measureText(e.value.slice(0,index)).width+0.1,y:r.y+parseFloat(s.borderTopWidth)+parseFloat(s.paddingTop)+parseFloat(s.fontSize)/2};},index);
     if(device.hasTouch)await page.touchscreen.tap(point.x,point.y);else await page.mouse.click(point.x,point.y);
     await frames();assert.deepEqual(await field.evaluate(e=>[e.selectionStart,e.selectionEnd]),[index,index],name+' exact caret');
