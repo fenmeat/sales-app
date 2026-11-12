@@ -17,7 +17,7 @@ const server=createServer(async(req,res)=>{
   if(req.method==='POST'){
    assert.equal(url.pathname,'/api/pa-report/feedback');let raw='';for await(const chunk of req)raw+=chunk;const b=JSON.parse(raw);posts.push(b);
    const old=stored.get(b.request_id);if(old)assert.equal(old.note,b.note);else stored.set(b.request_id,{...b,id:b.request_id,actor:'alex',created_at:new Date().toISOString(),status:'pending',answer_status:'awaiting_answer'});
-   if(loseResponse){loseResponse=false;req.socket.destroy();return;}return res.end(JSON.stringify({saved:true,replayed:!!old}));
+   if(loseResponse){req.socket.destroy();return;}return res.end(JSON.stringify({saved:true,replayed:!!old}));
   }
   return res.end(JSON.stringify(url.pathname==='/api/pa-report'?pa():url.pathname==='/api/pa-report/conversation'?{subject:base,feedback:[...history(),...stored.values()],next_offset:null}:app));
  }
@@ -38,7 +38,7 @@ try{for(const [name,engine,options] of [['chromium-phone',chromium,devices['Pixe
  await page.reload();await page.locator('[data-pa-action="respond"]').click();assert.equal(await note.inputValue(),'Skryf vir my die opvolg-e-pos.');
  loseResponse=true;await page.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await page.waitForFunction(()=>document.querySelector('dialog .error').textContent.length>0);
  assert.equal(stored.size,1);const original=posts[0];await page.getByRole('button',{name:'Kanselleer',exact:true}).click();await page.reload();await page.locator('[data-pa-action="respond"]').click();
- await page.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await page.waitForSelector('dialog:not([open])');assert.equal(stored.size,1);assert.deepEqual(posts.at(-1),original);assert.equal(original.reply_to,'fixture-question-3');
+ loseResponse=false;await page.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});assert.equal(stored.size,1);assert.deepEqual(posts.at(-1),original);assert.equal(original.reply_to,'fixture-question-3');
  assert.ok((await page.locator('#app').textContent()).includes('PA se antwoord is nog uitstaande'));
  await page.locator('[data-pa-action="respond"]').click();assert.equal(await note.inputValue(),'');
  await page.screenshot({path:folder+'/'+name+'.png',fullPage:true});assert.deepEqual(errors,[]);
