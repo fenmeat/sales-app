@@ -41,11 +41,11 @@ export async function ledgerStatus(db,{date,page=1,job_id}={}){
  if(date&&c){
   check(/^\d{4}-\d\d-\d\d$/.test(date),'Choose a report cutoff date.');check(Number.isInteger(page)&&page>=1&&page<=200,'Choose a valid report page.');
   const cfg=JSON.parse(c.config),assessments=(await queryRows(db,'SELECT payload FROM v2_zoho_mirror_assessments')).map(r=>JSON.parse(r.payload)),summary=summarize(assessments,date);
-  const native=await nativeCoverage(db,date);const blockers=[...cfg.exceptions];
+  const native=await nativeCoverage(db,date,cfg.mapping);const blockers=cfg.exceptions.filter(x=>!(x==='App/Factory POS migration boundary requires reconciliation'&&native.reconciled_no_britos));
   if(!c.last_success||Date.now()-Date.parse(c.last_success)>36*3600000)blockers.push('Zoho update is not current');
   if(job)blockers.push('Zoho update is still in progress');
   if(!cfg.inventory_verified_at||Date.now()-Date.parse(cfg.inventory_verified_at)>8*86400000)blockers.push('Deletion/inventory audit has not been verified');
-  if(native.app_invoices||native.pos_sales)blockers.push('App and POS sales require migration/duplicate reconciliation before combining totals');
+  if(native.britos_lines?.length||native.opening_receipts?.length||native.errors?.length)blockers.push('App and POS sales require migration/duplicate reconciliation before combining totals');
   if(!native.available)blockers.push('App/POS ledger coverage is unavailable');
   if(summary.errors.length)blockers.push('Invoice, payment or product exceptions require review');
   if(!cfg.owner_confirmed_through||cfg.owner_confirmed_through<date)blockers.push('Owner transfers since the previous confirmation must be checked');
@@ -56,15 +56,27 @@ export async function ledgerStatus(db,{date,page=1,job_id}={}){
  }
  return status;
 }
-async function nativeCoverage(db,date){
+async function nativeCoverage(db,date,mapping){
  const tables=(await queryRows(db,"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('v2_invoice_events','v2_pos_sales')")).map(r=>r.name);
  if(tables.length!==2)return {available:false,app_invoices:null,pos_sales:null};
  const events=await queryRows(db,'SELECT payload FROM v2_invoice_events e WHERE revision=(SELECT MAX(revision) FROM v2_invoice_events x WHERE x.customer_id=e.customer_id)');
  const accounts=events.map(e=>JSON.parse(e.payload));
  const invoices=accounts.flatMap(a=>(a.invoices??[]).filter(i=>i.kind==='app'&&i.date>='2026-10-14'&&i.date<=date).map(i=>({...i,receipts:(a.receipts??[]).filter(r=>r.allocations.some(x=>x.invoice_id===i.id))})));
+ const opening_receipts=accounts.flatMap(a=>(a.receipts??[]).filter(r=>r.date>='2026-10-14'&&r.allocations.some(x=>x.invoice_id.startsWith('zoho:'))).map(r=>({customer_id:a.customer_id,...r})));
  const pos=await db.prepare("SELECT COUNT(*) count,COALESCE(SUM(json_extract(payload,'$.total')),0) total FROM v2_pos_sales WHERE status='paid' AND service_date BETWEEN '2026-10-14' AND ?").bind(date).first();
  const sales=(await queryRows(db,"SELECT payload FROM v2_pos_sales WHERE status='paid' AND service_date BETWEEN '2026-10-14' AND ? ORDER BY service_date,seq",date)).map(r=>JSON.parse(r.payload));
- return {available:true,app_invoices:invoices.length,app_total:invoices.reduce((s,i)=>s+i.total,0),pos_sales:pos.count,pos_total:pos.total,app_details:invoices,pos_details:sales,separate:true};
+ const catalogExists=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='v2_catalog'").first(),catalogRow=catalogExists?await db.prepare('SELECT revision,payload FROM v2_catalog WHERE id=1').first():null;
+ const products=catalogRow?JSON.parse(catalogRow.payload).products:[],britos_lines=[],errors=[];
+ for(const [kind,items] of [['app',invoices],['pos',sales]])for(const sale of items){
+  if(!Array.isArray(sale.lines)){errors.push(kind+':'+sale.id+' missing lines');continue;}
+  if(sale.lines.reduce((s,l)=>s+l.total,0)!==sale.total)errors.push(kind+':'+sale.id+' lines do not reconcile');
+  if(kind==='pos'&&(!sale.payment?.received||sale.payment.cash+sale.payment.card+sale.payment.shop2shop!==sale.total))errors.push('pos:'+sale.id+' payment does not reconcile');
+  for(const line of sale.lines){const product=products.find(p=>p.code===line.code),assigned=product&&mapping[product.zoho_item_id];
+   if(!assigned){errors.push(kind+':'+sale.id+' unknown product '+line.code);continue;}
+   if(assigned.owner)britos_lines.push({source:kind,id:sale.id,number:sale.number,date:sale.date,code:line.code,name:line.name,qty:line.qty,value:line.total,owner:assigned.owner});
+  }
+ }
+ return {available:true,app_invoices:invoices.length,app_total:invoices.reduce((s,i)=>s+i.total,0),pos_sales:pos.count,pos_total:pos.total,app_details:invoices,pos_details:sales,opening_receipts,britos_lines,errors,catalog_revision:catalogRow?.revision??null,reconciled_no_britos:!errors.length&&!britos_lines.length&&!opening_receipts.length,separate:true};
 }
 
 // Financial transport uses its existing admin write grant. Data lives only in
@@ -177,14 +189,18 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4}={}){
   while(used<maxCalls){
    if(state.phase==='finish'&&!state.queue.length){await commitRun(db,job.id,token,state,cfg);return {complete:true,run_id:job.id,calls:state.calls,changed:state.changed,unchanged:state.unchanged};}
    if(state.queue.length){
-    const task=state.queue[0],path=task.kind==='invoice'?'invoices':'customerpayments',response=await read(env,{username:'alex'},path+'/'+task.id,{});used++;state.calls++;
+    const task=state.queue[0],prior=await source(db,task.kind,task.id);
+    // The imported R02 already proves these records. Its exports lack modified
+    // stamps, so keep a two-hour boundary overlap, not repeated old details.
+    if(task.modified&&prior&&!prior.modified&&timestamp(task.modified)<timestamp(cfg.asof)-2*3600000){state.queue.shift();state.unchanged++;await checkpoint([]);continue;}
+    const path=task.kind==='invoice'?'invoices':'customerpayments',response=await read(env,{username:'alex'},path+'/'+task.id,{});used++;state.calls++;
     let refunded;
     if(task.kind==='payment'&&response.payment?.amount_refunded==null){
      const refunds=await read(env,{username:'alex'},path+'/'+task.id+'/refunds',{page:'1',per_page:'200'});used++;state.calls++;
      check(Array.isArray(refunds.payment_refunds)&&Number(refunds.page_context?.page)===1&&refunds.page_context?.has_more_page===false,'Payment refund coverage is incomplete.',502);
      refunded=refunds.payment_refunds.reduce((s,r)=>{check(typeof r.amount_fcy==='number'&&Number.isFinite(r.amount_fcy),'Missing refund amount.',502);return s+r.amount_fcy;},0);
     }
-    const prior=await source(db,task.kind,task.id),value=task.kind==='invoice'?normalInvoice(response.invoice,prior):normalPayment(response.payment,{modified:task.modified,refunded});
+    const value=task.kind==='invoice'?normalInvoice(response.invoice,prior):normalPayment(response.payment,{modified:task.modified,refunded});
     check(value.id===task.id,'Zoho returned a different record.',502);
     const digest=await hash(json(value));const old=await db.prepare('SELECT digest FROM v2_zoho_mirror_records WHERE kind=? AND id=?').bind(task.kind,task.id).first();
     const statements=[];
@@ -207,7 +223,7 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4}={}){
     if(inventory){check(typeof r.date==='string'&&r.date>='2026-10-14','Zoho ignored the inventory date filter.',502);state.inventory_ids[kind].push(id);continue;}
     check(changed>=timestamp(state.since),'Zoho ignored the modification filter; the mirror has not advanced.',502);
     if(changed>timestamp(state.until))continue;
-    const previous=await source(db,kind,id);if(previous?.modified&&timestamp(previous.modified)===changed){state.unchanged++;continue;}
+    const previous=await source(db,kind,id);if(previous&&(previous.modified?timestamp(previous.modified)===changed:changed<timestamp(cfg.asof)-2*3600000)){state.unchanged++;continue;}
     state.queue.push({kind,id,modified:r.last_modified_time});
    }
    if(pg.has_more_page)state.page++;else{state.phase=inventory?(kind==='invoice'?'inventory_payments':'finish'):(kind==='invoice'?'payments':state.inventory?'inventory_invoices':'finish');state.page=1;}

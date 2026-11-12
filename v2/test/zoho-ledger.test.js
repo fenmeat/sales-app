@@ -103,3 +103,18 @@ test('disable cancels pending activation and a failed catch-up never enables sch
  const r=reader();await scheduledLedger(f.env,{cron:'*/5 * * * *'},{read:r.read});assert.equal(r.calls.length,0);
  await advanceLedger(f.env,{read:r.read,maxCalls:20});assert.equal((await ledgerStatus(f.DB)).enabled,false);
 });
+test('checked baseline records without API timestamps reuse R02 and avoid old detail downloads',async t=>{
+ const f=await bootstrap(t);await start(f);const paths=[];
+ const r=await advanceLedger(f.env,{maxCalls:4,read:async(_e,_u,path)=>{paths.push(path);assert.ok(['invoices','customerpayments'].includes(path));return {invoices:[{invoice_id:'1',last_modified_time:'2026-11-09T10:00:00Z'}],customer_payments:[{payment_id:'4',last_modified_time:'2026-11-09T10:00:00Z'}],page_context:{page:1,has_more_page:false}};}});
+ assert.equal(r.complete,true);assert.equal(r.changed,0);assert.deepEqual(paths,['invoices','customerpayments']);assert.equal((await ledgerStatus(f.DB,{date:'2026-11-06'})).report.total,20000);
+});
+test('native non-Britos POS is checked separately; opening-credit receipts cannot disappear',async t=>{
+ const f=await bootstrap(t);const cfg=JSON.parse((await f.DB.prepare('SELECT config FROM v2_zoho_mirror_control').first()).config);cfg.exceptions=['App/Factory POS migration boundary requires reconciliation'];cfg.mapping['8']={owner:null,code:'barcode'};
+ await f.DB.prepare('UPDATE v2_zoho_mirror_control SET config=?').bind(JSON.stringify(cfg)).run();
+ await f.DB.prepare('CREATE TABLE v2_invoice_events(customer_id TEXT,revision INTEGER,payload TEXT)').run();await f.DB.prepare('CREATE TABLE v2_pos_sales(seq INTEGER,status TEXT,service_date TEXT,payload TEXT)').run();await f.DB.prepare('CREATE TABLE v2_catalog(id INTEGER,revision INTEGER,payload TEXT)').run();
+ await f.DB.prepare('INSERT INTO v2_catalog VALUES(1,1,?)').bind(JSON.stringify({products:[{code:'W01',zoho_item_id:'8'}]})).run();
+ const sale={id:'sale',number:'POS-1',date:'2026-11-01',total:10000,lines:[{code:'W01',total:10000}],payment:{received:true,cash:10000,card:0,shop2shop:0}};await f.DB.prepare("INSERT INTO v2_pos_sales VALUES(1,'paid','2026-11-01',?)").bind(JSON.stringify(sale)).run();
+ let r=(await ledgerStatus(f.DB,{date:'2026-11-06'})).report;assert.equal(r.native.pos_total,10000);assert.equal(r.native.reconciled_no_britos,true);assert.equal(r.total,20000);assert.ok(!r.blockers.some(x=>x.includes('migration')));
+ await f.DB.prepare('INSERT INTO v2_invoice_events VALUES(?,?,?)').bind('cust',1,JSON.stringify({customer_id:'cust',invoices:[],receipts:[{id:'receipt',date:'2026-11-10',allocations:[{invoice_id:'zoho:1',amount:10000}]}]})).run();
+ r=(await ledgerStatus(f.DB,{date:'2026-11-06'})).report;assert.equal(r.native.opening_receipts.length,1);assert.equal(r.native.reconciled_no_britos,false);assert.ok(r.blockers.some(x=>x.includes('migration')));
+});
