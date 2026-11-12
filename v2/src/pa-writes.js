@@ -1,4 +1,5 @@
 import {ensureFinanceSchema,readFinance,saveFinance,financeImport} from './finance-api.js';
+import {ledgerCommand} from './zoho-ledger.js';
 import {readPaReport,savePaReport} from './pa-report-api.js';
 import {check,UserError,dateKey} from './domain.js';
 import {hash,isAdmin} from './auth.js';
@@ -86,7 +87,7 @@ export async function getChangeHistory(args,env,username) {
 export async function saveAppData(args,env,username,{fingerprintArgs=args,restore=false}={}) {
   check(isAdmin(username),'Admin access is required.',403);
   if(args.target==='daily_report'){check(!restore,'Read report history and publish an explicit new revision.');return savePaReport(env,{username,via:'pa'},{...args.data,revision:args.revision,request_id:args.request_id,reason:args.reason});}
-  if(args.target==='financial'){check(!restore,'Use the Financial change history for corrections.');await ensureFinanceSchema(env.DB);const b={...args.data,revision:args.revision,request_id:args.request_id,reason:args.reason};return b.operation?.startsWith('import_')?financeImport(env.DB,{username},b):saveFinance(env.DB,{username},b);}
+  if(args.target==='financial'){check(!restore,'Use the Financial change history for corrections.');const b={...args.data,revision:args.revision,request_id:args.request_id,reason:args.reason};if(b.operation?.startsWith('zoho_'))return ledgerCommand(env,{username},b);await ensureFinanceSchema(env.DB);return b.operation?.startsWith('import_')?financeImport(env.DB,{username},b):saveFinance(env.DB,{username},b);}
   if(args.target==='tasks'){
     check(!restore,'Read the task history and reopen or update explicitly.');
     check(typeof args.reason==='string'&&args.reason.trim().length>=5,'Record the authorised instruction.');

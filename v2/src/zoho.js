@@ -1,6 +1,7 @@
 import {check,UserError,dateKey,today} from './domain.js';
 import {hash,keys,randomToken,isAdmin} from './auth.js';
 import {matchZohoInvoice} from './zoho-matching.js';
+import {ledgerStatus} from './zoho-ledger.js';
 
 export const ZOHO_ORIGIN='https://fenmeat-sales-test.alexander-fenwick.workers.dev';
 export const ZOHO_REDIRECT_URI=ZOHO_ORIGIN+'/api/zoho/callback';
@@ -45,7 +46,8 @@ export async function zohoStatus(env,user){
  let config;try{config=settings(env);}catch{return {configured:false,connected:false,can_manage:isAdminUser(user),sync_enabled:false,organisations:[]};}
  const row=await connection(env.DB),matches=row&&row.client_fingerprint===await fingerprint(config);
  const organisations=matches?JSON.parse(row.organisations):[];
- return {configured:true,connected:!!matches,can_manage:isAdminUser(user),sync_enabled:false,reconciliation_enabled:true,credentials_changed:!!row&&!matches,
+ const mirror=await ledgerStatus(env.DB);
+ return {configured:true,connected:!!matches,can_manage:isAdminUser(user),sync_enabled:mirror.enabled,mirror,reconciliation_enabled:true,credentials_changed:!!row&&!matches,
   connected_at:matches?row.connected_at:null,last_checked:matches?row.last_checked:null,api_domain:matches?row.api_domain:null,
   organisations,selected_organisation:organisations.find(o=>o.id===ZOHO_ORGANISATION.id&&o.active&&o.currency==='ZAR')??null,scopes:ZOHO_SCOPES};
 }
@@ -165,9 +167,9 @@ function previewHeader(invoice,date){
   salesperson_id:invoice.salesperson_id?zohoId(invoice.salesperson_id):null,salesperson:textValue(invoice.salesperson_name),currency:textValue(invoice.currency_code,10),
   last_modified:textValue(invoice.last_modified_time,80),total:typeof invoice.total==='number'&&Number.isFinite(invoice.total)&&invoice.total>=0?invoice.total:null};
 }
-async function readFenBooks(env,user,path,params){
+export async function readFenBooks(env,user,path,params){
  check(isAdminUser(user),'Sign in as Alex or Alinda to check Zoho invoices.',403);
- check(/^(?:invoices(?:\/[0-9]{1,40})?|customerpayments(?:\/[0-9]{1,40})?|items|salespersons)$/.test(path),'Invalid read request.');
+ check(/^(?:invoices(?:\/[0-9]{1,40})?|customerpayments(?:\/[0-9]{1,40}(?:\/refunds)?)?|items|salespersons)$/.test(path),'Invalid read request.');
  const saved=await connection(env.DB);
  check(saved&&JSON.parse(saved.organisations).some(o=>o.id===ZOHO_ORGANISATION.id&&o.active&&o.currency==='ZAR'),'FEN is not available in the saved connection. Press Check connection first.',409);
  const {row,tokens}=await authorisedClient(env);
@@ -184,7 +186,7 @@ async function readFenBooks(env,user,path,params){
 export async function readZoho(env,user,input={}) {
  check(isAdminUser(user),'Admin access is required to read Zoho.',403);
  const resource=input.resource??'status';
- if(resource==='status')return {...await zohoStatus(env,user),live_checked:false};
+ if(resource==='status')return {...await zohoStatus(env,user),...((input.date||input.job_id)?{mirror:await ledgerStatus(env.DB,input)}:{}),live_checked:false};
  if(resource==='check')return {...await checkZoho(env,user),live_checked:true};
  if(resource==='customer_balance')return readCustomerBalance(env,user,input.id);
  const allowed=['items','salespersons','invoices','invoice','payments','payment'];
