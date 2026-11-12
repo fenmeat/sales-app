@@ -18,6 +18,7 @@ The existing admin-only Financial transport accepts `save_app_data` with `target
 - `zoho_import_chunk`: `import_id`, zero-based `part`, UTF-8 JSON `payload` (at most 100,000 characters).
 - `zoho_import_finish`: `import_id`. Verifies all hashes and reconciliation before a single atomic promotion. A second baseline cannot overwrite the first.
 - `zoho_run` starts/resumes a bounded source-read job; `zoho_resume` continues it. No Zoho writes.
+- `zoho_arm` explicitly authorises the existing five-minute cron to finish a started initial catch-up and activate the daily schedule only after its atomic validation succeeds. It never starts another run while pending. `zoho_disable` cancels pending activation as well.
 - `zoho_enable` requires a successful delta; `zoho_disable` stops scheduled work. Already staged versions remain available.
 - `zoho_owner_settlement`: only on actual confirmation, supply `evidence` and allocated `lines:[{invoice_id,key,owner,amount}]`. Never infer payment from a report or use guessed FIFO. Partial owner transfers are supported in cents. Uses the existing PA record as evidence, not a competing bank register.
 - `zoho_review`: actual `owner_confirmed_through`, verified `evidence`, and exact `resolved_exceptions` if applicable. This is not a means to suppress unreviewed gaps.

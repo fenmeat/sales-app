@@ -31,7 +31,8 @@ export async function ledgerStatus(db,{date,page=1,job_id}={}){
  await ensureLedger(db);const c=await control(db),job=await active(db);
  const runs=await queryRows(db,'SELECT id,status,started_at,finished_at,error FROM v2_zoho_mirror_runs ORDER BY started_at DESC LIMIT 5');
  const counts=await queryRows(db,'SELECT kind,COUNT(*) count FROM v2_zoho_mirror_records GROUP BY kind');
- const status={available:true,enabled:!!c?.enabled,revision:c?.revision??0,schedule:'22:00 Africa/Johannesburg',last_success:c?.last_success??null,baseline:c?.baseline??null,counts,running:job?{id:job.id,phase:JSON.parse(job.state).phase,error:job.error,retry_at:job.retry_at}:null,runs};
+ const config=c?JSON.parse(c.config):{},progress=job?JSON.parse(job.state):null;
+ const status={available:true,enabled:!!c?.enabled,activation_pending:!!config.activate_after_success,revision:c?.revision??0,schedule:'22:00 Africa/Johannesburg',last_success:c?.last_success??null,baseline:c?.baseline??null,counts,running:job?{id:job.id,phase:progress.phase,page:progress.page,queued:progress.queue.length,calls:progress.calls,changed:progress.changed,error:job.error,retry_at:job.retry_at}:null,runs};
  if(job_id){
   check(Number.isInteger(page)&&page>=1&&page<=200,'Choose a valid report page.');
   const snapshot=await db.prepare('SELECT * FROM v2_zoho_mirror_reports WHERE id=?').bind(job_id).first();check(snapshot,'Report snapshot not found.',404);
@@ -59,9 +60,11 @@ async function nativeCoverage(db,date){
  const tables=(await queryRows(db,"SELECT name FROM sqlite_master WHERE type='table' AND name IN ('v2_invoice_events','v2_pos_sales')")).map(r=>r.name);
  if(tables.length!==2)return {available:false,app_invoices:null,pos_sales:null};
  const events=await queryRows(db,'SELECT payload FROM v2_invoice_events e WHERE revision=(SELECT MAX(revision) FROM v2_invoice_events x WHERE x.customer_id=e.customer_id)');
- const invoices=events.flatMap(e=>JSON.parse(e.payload).invoices??[]).filter(i=>i.kind==='app'&&i.date>='2026-10-14'&&i.date<=date);
+ const accounts=events.map(e=>JSON.parse(e.payload));
+ const invoices=accounts.flatMap(a=>(a.invoices??[]).filter(i=>i.kind==='app'&&i.date>='2026-10-14'&&i.date<=date).map(i=>({...i,receipts:(a.receipts??[]).filter(r=>r.allocations.some(x=>x.invoice_id===i.id))})));
  const pos=await db.prepare("SELECT COUNT(*) count,COALESCE(SUM(json_extract(payload,'$.total')),0) total FROM v2_pos_sales WHERE status='paid' AND service_date BETWEEN '2026-10-14' AND ?").bind(date).first();
- return {available:true,app_invoices:invoices.length,app_total:invoices.reduce((s,i)=>s+i.total,0),pos_sales:pos.count,pos_total:pos.total,separate:true};
+ const sales=(await queryRows(db,"SELECT payload FROM v2_pos_sales WHERE status='paid' AND service_date BETWEEN '2026-10-14' AND ? ORDER BY service_date,seq",date)).map(r=>JSON.parse(r.payload));
+ return {available:true,app_invoices:invoices.length,app_total:invoices.reduce((s,i)=>s+i.total,0),pos_sales:pos.count,pos_total:pos.total,app_details:invoices,pos_details:sales,separate:true};
 }
 
 // Financial transport uses its existing admin write grant. Data lives only in
@@ -121,9 +124,16 @@ export async function ledgerCommand(env,user,b){
   const statements=[];if(affected.size){const payments=(await records(db)).filter(r=>r.kind==='payment').map(r=>r.value);for(const id of affected){const result=assessInvoice(await source(db,'invoice',id),payments,cfg.mapping,cfg.settlements.filter(s=>s.invoice_id===id));check(!result.errors.length,'The settled line needs reconciliation first.');statements.push(db.prepare('UPDATE v2_zoho_mirror_assessments SET payload=? WHERE invoice_id=?').bind(json(result),id));}}
   const result={saved:true,revision:c.revision+1,operation:b.operation};await db.batch([db.prepare('UPDATE v2_zoho_mirror_control SET config=?,revision=revision+1 WHERE id=1 AND revision=?').bind(json(cfg),c.revision),db.prepare('INSERT INTO v2_zoho_mirror_audit VALUES(?,?,?,?,?,?,?,changes())').bind(b.request_id,fingerprint,b.operation,json({result,evidence:b.evidence,lines:b.lines??[],review_date:b.owner_confirmed_through??null}),user.username,b.reason,now()),...statements]);return result;
  }
+ if(b.operation==='zoho_arm'){
+  check(await active(db),'Start the initial source validation first.',409);check(!c.enabled&&!c.last_success,'Use normal enable after a completed validation.',409);
+  const cfg=JSON.parse(c.config);cfg.activate_after_success=true;
+  const result={saved:true,enabled:false,activation_pending:true,revision:c.revision+1};
+  await db.batch([db.prepare('UPDATE v2_zoho_mirror_control SET config=?,revision=revision+1 WHERE id=1 AND revision=?').bind(json(cfg),c.revision),db.prepare('INSERT INTO v2_zoho_mirror_audit VALUES(?,?,?,?,?,?,?,changes())').bind(b.request_id,fingerprint,b.operation,json(result),user.username,b.reason,now())]);return result;
+ }
  if(b.operation==='zoho_enable'||b.operation==='zoho_disable'){
   const enabled=b.operation==='zoho_enable';if(enabled)check(c.last_success&&!await active(db),'Complete a verified initial delta before enabling the schedule.',409);
-  const result={saved:true,enabled,revision:c.revision+1};await db.batch([db.prepare('UPDATE v2_zoho_mirror_control SET enabled=?,revision=revision+1 WHERE id=1 AND revision=?').bind(enabled?1:0,c.revision),db.prepare('INSERT INTO v2_zoho_mirror_audit VALUES(?,?,?,?,?,?,?,changes())').bind(b.request_id,fingerprint,b.operation,json(result),user.username,b.reason,now())]);return result;
+  const cfg=JSON.parse(c.config);cfg.activate_after_success=false;
+  const result={saved:true,enabled,revision:c.revision+1};await db.batch([db.prepare('UPDATE v2_zoho_mirror_control SET enabled=?,config=?,revision=revision+1 WHERE id=1 AND revision=?').bind(enabled?1:0,json(cfg),c.revision),db.prepare('INSERT INTO v2_zoho_mirror_audit VALUES(?,?,?,?,?,?,?,changes())').bind(b.request_id,fingerprint,b.operation,json(result),user.username,b.reason,now())]);return result;
  }
  if(b.operation==='zoho_run'){
   const job=await startRun(db);await audit({started:true,run_id:job.id}).run();return {started:true,run_id:job.id,...await advanceLedger(env)};
@@ -147,10 +157,10 @@ async function startRun(db){
  const state={since,until:stamp,phase:'invoices',page:1,queue:[],affected:[],calls:0,changed:0,unchanged:0,attempts:0,inventory:!cfg.inventory_verified_at||Date.parse(stamp)-Date.parse(cfg.inventory_verified_at)>7*86400000,inventory_ids:{invoice:[],payment:[]}};
  const id=crypto.randomUUID();try{await db.prepare("INSERT INTO v2_zoho_mirror_runs(id,status,started_at,state) VALUES(?,'running',?,?)").bind(id,stamp,json(state)).run();}catch{const running=await active(db);if(running)return running;throw Error('Could not create sync run');}return active(db);
 }
-export async function scheduledLedger(env,event){
- await ensureLedger(env.DB);const c=await control(env.DB);if(!c?.enabled)return;
- if(event.cron==='0 20 * * *')await startRun(env.DB);
- if(await active(env.DB))await advanceLedger(env,{maxCalls:20});
+export async function scheduledLedger(env,event,options={}){
+ await ensureLedger(env.DB);const c=await control(env.DB);if(!c||!c.enabled&&!JSON.parse(c.config).activate_after_success)return;
+ if(c.enabled&&event.cron==='0 20 * * *')await startRun(env.DB);
+ if(await active(env.DB))await advanceLedger(env,{maxCalls:20,...options});
 }
 export async function advanceLedger(env,{read=readFenBooks,maxCalls=4}={}){
  const db=env.DB;await ensureLedger(db);const job=await active(db);if(!job)return {idle:true};
@@ -169,7 +179,7 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4}={}){
    if(state.queue.length){
     const task=state.queue[0],path=task.kind==='invoice'?'invoices':'customerpayments',response=await read(env,{username:'alex'},path+'/'+task.id,{});used++;state.calls++;
     let refunded;
-    if(task.kind==='payment'&&response.payment?.amount_refunded===undefined){
+    if(task.kind==='payment'&&response.payment?.amount_refunded==null){
      const refunds=await read(env,{username:'alex'},path+'/'+task.id+'/refunds',{page:'1',per_page:'200'});used++;state.calls++;
      check(Array.isArray(refunds.payment_refunds)&&Number(refunds.page_context?.page)===1&&refunds.page_context?.has_more_page===false,'Payment refund coverage is incomplete.',502);
      refunded=refunds.payment_refunds.reduce((s,r)=>{check(typeof r.amount_fcy==='number'&&Number.isFinite(r.amount_fcy),'Missing refund amount.',502);return s+r.amount_fcy;},0);
@@ -231,6 +241,8 @@ async function commitRun(db,runId,token,state,cfg){
   db.prepare("UPDATE v2_zoho_mirror_runs SET status='complete',finished_at=?,state=? WHERE id=? AND lease=? AND status='running'").bind(now(),json(state),runId,token),
   db.prepare('INSERT INTO v2_zoho_mirror_audit VALUES(?,?,?,?,?,?,?,changes())').bind('commit-'+runId,await hash(json(state)),'commit',json({until:state.until,changed:state.changed}),'scheduler','Verified source delta',now()),
   db.prepare('INSERT INTO v2_zoho_mirror_records SELECT kind,id,payload,digest,run_id FROM v2_zoho_mirror_versions WHERE run_id=? ON CONFLICT(kind,id) DO UPDATE SET payload=excluded.payload,digest=excluded.digest,run_id=excluded.run_id').bind(runId),...statements,
-  db.prepare('UPDATE v2_zoho_mirror_control SET last_success=?,config=? WHERE id=1').bind(state.until,json(cfg))
+  // Read the current configuration inside the transaction: a concurrent disable
+  // must not be overwritten by an earlier worker's activation decision.
+  db.prepare("UPDATE v2_zoho_mirror_control SET last_success=?,enabled=CASE WHEN json_extract(config,'$.activate_after_success')=1 THEN 1 ELSE enabled END,config=json_set(?, '$.activate_after_success',json('false')) WHERE id=1").bind(state.until,json(cfg))
  ]);
 }

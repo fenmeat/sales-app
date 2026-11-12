@@ -88,3 +88,18 @@ test('weekly header inventory detects missing source IDs without deleting retain
 test('unauthorised staff cannot import or operate the finance mirror',async t=>{
  const DB=database(t);await assert.rejects(ledgerCommand({DB},{username:'musa'},{operation:'zoho_enable'}),/Admin/);
 });
+test('authorised initial catch-up runs on existing cron and activates only after atomic validation',async t=>{
+ const f=await bootstrap(t);await start(f);await f.command('zoho_arm',{},1);
+ assert.equal((await ledgerStatus(f.DB)).enabled,false);assert.equal((await ledgerStatus(f.DB)).activation_pending,true);
+ const r=reader();await scheduledLedger(f.env,{cron:'*/5 * * * *'},{read:r.read,maxCalls:1});
+ assert.equal((await ledgerStatus(f.DB)).enabled,false);
+ await scheduledLedger(f.env,{cron:'*/5 * * * *'},{read:r.read,maxCalls:20});
+ const s=await ledgerStatus(f.DB);assert.equal(s.enabled,true);assert.equal(s.activation_pending,false);assert.ok(s.last_success);
+});
+test('disable cancels pending activation and a failed catch-up never enables schedule',async t=>{
+ const f=await bootstrap(t);await start(f);await f.command('zoho_arm',{},1);
+ const fail=reader({ignored:true});await scheduledLedger(f.env,{cron:'*/5 * * * *'},{read:fail.read});assert.equal((await ledgerStatus(f.DB)).enabled,false);
+ await f.command('zoho_disable',{},2);await f.DB.prepare('UPDATE v2_zoho_mirror_runs SET retry_at=0').run();
+ const r=reader();await scheduledLedger(f.env,{cron:'*/5 * * * *'},{read:r.read});assert.equal(r.calls.length,0);
+ await advanceLedger(f.env,{read:r.read,maxCalls:20});assert.equal((await ledgerStatus(f.DB)).enabled,false);
+});
