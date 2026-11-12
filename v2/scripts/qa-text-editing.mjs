@@ -49,7 +49,8 @@ try{
    }
    async function editWord(field){
     assert.equal(await field.inputValue(),original);
-    await page.getByRole('heading').first().click();
+    const modal=page.locator('dialog[open]');
+    await (await modal.count()?modal.getByRole('heading').first():page.getByRole('heading').first()).click();
     await caret(field,6);
     await field.press('Shift+ArrowRight');await field.press('Shift+ArrowRight');
     assert.deepEqual(await field.evaluate(e=>[e.selectionStart,e.selectionEnd]),[6,8],name+' manual selection');
