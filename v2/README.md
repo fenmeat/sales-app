@@ -1,5 +1,28 @@
 # Customer invoice balances — 0.22.3
 
+## Native text editing — 0.38.2
+
+Ordinary text inputs and textareas now keep native caret placement, selection,
+copy/paste and touch editing. This supersedes the earlier select-all rule for
+ordinary text, including PA replies, task descriptions, notes and searches.
+Automatic select-all remains for native number inputs and text inputs explicitly
+marked with numeric/decimal inputmode. Values, validation and saves are unchanged.
+
+All screens use one idempotent installer in `public/input-selection.js`; the
+invoice entry point re-exports it. Deferred numeric selection is cancelled when
+editing/composition starts or focus leaves the field. The invoice service-worker
+shell is refreshed and includes the shared module for offline use. Existing
+clipboard-copy buttons and search caret restoration are retained.
+
+Validation: 471 Node/DOM/Worker/D1 tests and the Worker deployment dry-run pass.
+`scripts/qa-text-editing.mjs` exercises the shipped PA dialog and shared fields
+against a read-only synthetic server; it covers desktop Chromium/WebKit, Android,
+iPhone and iPad touch profiles, precise caret placement, one-word editing,
+insertion/deletion, manual selection, clipboard and numeric replacement. Its CI
+results are recorded with the source commit. These profiles do not certify a
+physical iPhone/iPad or its native long-press selection menu. No live business
+records are created or changed by the tests or release.
+
 ## Complete private Daily Report — 0.36.0
 
 Alex can read all five sections of the existing PA Daily Report and respond to individual points inside Tasks → Daily Report. A versioned read model keeps the existing PA Tasks identities and source links; the PA spreadsheet remains authoritative. Historical reports retain their original date, source cutoff and counts. Current work combines PA obligations and app stages without double-counting; a completed PO sending step does not close its remaining receipt/payment cycle.

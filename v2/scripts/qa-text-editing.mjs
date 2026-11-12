@@ -11,7 +11,7 @@ const original = 'Dis n ou rekening.';
 const app = {username:'alex',admin:true,today:'2026-11-12',users:['alex'],suppliers:[],tasks:[],notifications:[],next_offset:null};
 const pa = {private_report:true,register_revision:1,source_at:'2026-11-12T12:00:00Z',history:[],alerts:[],reminders:[],users:['alex'],feedback:[],rows:[{id:'TSK-TEST',subject_key:'TSK-TEST',subject_hash:'synthetic',scope:'fenmeat',title:'Synthetic editing check',status:'Pending',assigned_to:'alex',next_action:'Check text editing only.'}]};
 const publicDir = resolve('public'), writes = [];
-const fixture = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font:20px sans-serif;margin:16px}input,textarea{font:20px sans-serif;width:260px;display:block;margin:8px 0;padding:8px}label,button{display:block;margin:12px 0}</style><script type="module">import {installInputSelection} from '/invoicing/input-selection.js';installInputSelection();document.querySelector('button').onclick=()=>document.querySelector('main').insertAdjacentHTML('beforeend','<label>Dynamic note<textarea>Dis n ou rekening.</textarea></label>');</script></head><body><h1>Numeric and text checks</h1><main><label>Amount<input inputmode="decimal" value="1250,75"></label><label>Quantity<input inputmode="numeric" value="27"></label><label>Native number<input type="number" value="12.5"></label><label>Product description<input value="Dis n ou rekening."></label><label>Notes<textarea>Dis n ou rekening.</textarea></label><button>Add field</button></main></body></html>`;
+const fixture = `<!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1"><style>body{font:20px sans-serif;margin:16px}input,textarea{font:20px sans-serif;width:260px;display:block;margin:8px 0;padding:8px}label,button{display:block;margin:12px 0}</style><script type="module">import {installInputSelection} from '/invoicing/input-selection.js';installInputSelection();document.querySelector('button').onclick=()=>document.querySelector('main').insertAdjacentHTML('beforeend','<label>Dynamic note<textarea aria-label="Dynamic note">Dis n ou rekening.</textarea></label>');</script></head><body><h1>Numeric and text checks</h1><main><label>Amount<input inputmode="decimal" value="1250,75"></label><label>Quantity<input inputmode="numeric" value="27"></label><label>Native number<input type="number" value="12.5"></label><label>Product description<input value="Dis n ou rekening."></label><label>Notes<textarea aria-label="Notes">Dis n ou rekening.</textarea></label><button>Add field</button></main></body></html>`;
 const server=createServer(async(req,res)=>{
   const url=new URL(req.url,'http://localhost');
   res.setHeader('Cache-Control','no-store');
@@ -66,7 +66,7 @@ try{
    await page.locator('[data-pa-action="respond"]').click();
    const reply=page.getByLabel('Jou antwoord',{exact:true});
    await reply.fill(original); // Existing, unsaved draft; no save action is used.
-   await editWord(reply);
+   await editWord(reply);console.log(name+': PA answer editing passed');
    assert.deepEqual(writes,[]);
    page.on('dialog',dialog=>dialog.accept());
    await page.goto(origin+'/selection-qa');
