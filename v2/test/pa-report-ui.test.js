@@ -51,7 +51,7 @@ async function screen(username,tasks=[],view='',mailPages=null,paState=null){
 const paState=()=>({private_report:true,register_revision:3,source_at:new Date().toISOString(),history:[{date:'2026-11-05'}],alerts:[],reminders:[],users:['alex','alinda','xavier','xalinda'],feedback:[],rows:[{id:'TSK-00001',subject_key:'TSK-00001',subject_hash:'hash-one',scope:'fenmeat',title:'Invoice follow-up',status:'Waiting',assigned_to:'alinda',review_group:'Supplier — November',next_action:'Confirm receipt and payment.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'},{id:'TSK-00002',subject_key:'TSK-00002',subject_hash:'hash-two',scope:'private',title:'Private matter',status:'Pending',assigned_to:'alex',next_action:'Reply to private letter.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'}],report:{date:'2026-11-05',source_at:'2026-11-05T14:14:12Z',task_summary:{open:141},source_url:'https://mail.google.com/mail/#sent/test',coverage:'One verified mailbox; unavailable sources stated.',sections:['emails','activity','tasks','tomorrow','rabbi'].map((id,n)=>({id,title:id,items:[{id:'report-item-'+n,subject_key:'report-2026-11-05:report-item-'+n,subject_hash:'hash-item-'+n,title:'Section '+id,text:'Practical detail <script>blocked</script>',needs_reply:n===0,question:'Please choose the next step.',links:[],pa_task_ids:n===0?['TSK-00002']:[]}]}))}});
 test('daily report shows four sections with Rabbi in its own menu, dated counts and linked work',async()=>{
  const ui=await screen('alex',[{id:'step',pa_task_id:'TSK-00001',status:'Complete',title:'PO sent',assigned_to:'alinda'}],'?view=report',null,paState());
- ui.document.querySelector('#pa-status').onchange({target:{value:'all'}});const app=ui.document.querySelector('#app');assert.equal(app.querySelector('#report-item-4'),null);assert.equal(app.querySelector('#pa-rabbi').textContent,'Rabbi');assert.equal(app.querySelectorAll('.pa-full-report .pa-section').length,5);assert.match(app.textContent,/task count was 141/);assert.match(app.textContent,/2 All PA open/);assert.match(app.textContent,/remaining PA work above stays open/);assert.match(app.textContent,/Private matter/);assert.equal(app.querySelector('script'),null);
+ ui.document.querySelector('#pa-status').onchange({target:{value:'all'}});const app=ui.document.querySelector('#app');assert.equal(app.querySelector('#report-item-4'),null);assert.equal(app.querySelector('#pa-rabbi').textContent,'Rabbi');assert.equal(app.querySelectorAll('.pa-full-report .pa-section').length,5);assert.match(app.textContent,/task count was 141/);assert.match(app.textContent,/2 Alle onafgehandelde take/);assert.match(app.textContent,/verdere werk hierbo moet nog afgehandel word/);assert.match(app.textContent,/Private matter/);assert.equal(app.querySelector('script'),null);
  app.querySelector('[data-jump-item]').onclick();assert.equal(ui.document.getElementById('report-item-0').parentElement.open,true);
  app.querySelector('[data-open-case]').onclick();assert.match(ui.dialog.textContent,/Private matter/);
 });
@@ -62,7 +62,7 @@ test('reply survives a lost response with the same request and captures form val
 });
 test('staff presentation has no full private report or assignment controls and reminders preserve task ownership',async()=>{
  const p=paState();p.private_report=false;p.report=null;p.history=[];p.rows=[{...p.rows[0],assigned_to:'xavier'}];p.users=['xavier'];
- const ui=await screen('xavier',[],'?view=report',null,p);assert.equal(ui.document.querySelector('.pa-full-report'),null);assert.equal(ui.document.querySelector('[data-pa-action="assign"]'),null);assert.doesNotMatch(ui.document.querySelector('#app').textContent,/Private matter|All PA open/);
+ const ui=await screen('xavier',[],'?view=report',null,p);assert.equal(ui.document.querySelector('.pa-full-report'),null);assert.equal(ui.document.querySelector('[data-pa-action="assign"]'),null);assert.doesNotMatch(ui.document.querySelector('#app').textContent,/Private matter|Alle onafgehandelde take/);
  ui.document.querySelector('#pa-status').onchange({target:{value:'waiting'}});ui.document.querySelector('[data-pa-action="remind"]').onclick();const form=ui.dialog.querySelector('form');form.elements.remind_at.value='2099-11-02T09:45';await form.onsubmit({preventDefault(){}});assert.equal(ui.posts[0].remind_at,'2099-11-02T07:45:00.000Z');assert.equal(ui.posts[0].assigned_to,undefined);
 });
 
@@ -155,7 +155,7 @@ test('Alinda, Xalinda and Xavier can open Rabbi from their workspace, choose dat
   assert.equal(ui.document.querySelector('.pa-rabbi script'),null);
   assert.equal(ui.document.querySelector('.pa-full-report'),null);
   assert.equal(ui.document.querySelector('.pa-register'),null);
-  assert.doesNotMatch(ui.document.querySelector('#app').textContent,/Private matter|All PA open|Replies save immediately|Open original report/);
+  assert.doesNotMatch(ui.document.querySelector('#app').textContent,/Private matter|Alle onafgehandelde take|Replies save immediately|Open original report/);
   await ui.document.querySelector('#pa-report-date').onchange({target:{value:'2026-11-04'}});
   assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-04'));
   assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');

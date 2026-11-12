@@ -103,7 +103,7 @@ test('admin-assigned work offers staff a reminder editor without assignment or i
 
 test('both admins keep Everyone, assignments and reminders while staff manage their own instructions',async()=>{
  for(const username of ['alex','alinda']){
-  const {document,dialog}=await screen(username);assert.match(document.querySelector('#owner').textContent,/Everyone/);
+  const {document,dialog}=await screen(username);assert.match(document.querySelector('#owner').textContent,/Almal/);
   document.querySelector('#new').onclick();const form=dialog.querySelector('form');assert.equal(form.elements.assigned_to.querySelectorAll('option').length,4);assert.equal(form.elements.reminder_mode.value,'daily');
  }
  const own={id:'synthetic-own-task',revision:1,title:'My work',details:'',assigned_to:'xavier',created_by:'xavier',status:'Pending',kind:'general',priority:'Normal',review_date:'2099-11-02',pa_sync:{status:'pending'}};
@@ -256,7 +256,7 @@ test('selection limits and invalid files keep earlier choices and completed task
  closed.document.querySelector('[data-task]').onclick();
  const links=[...closed.dialog.querySelectorAll('a[href^="/api/tasks/file"]')];
  assert.deepEqual(links.map(a=>a.getAttribute('href')),ids.map(id=>'/api/tasks/file?id='+id));
- assert.deepEqual(links.map(a=>a.textContent),['Open attachment 1 of 3','Open attachment 2 of 3','Open attachment 3 of 3']);
+ assert.deepEqual(links.map(a=>a.textContent),['Maak bewysstuk 1 van 3 oop','Maak bewysstuk 2 van 3 oop','Maak bewysstuk 3 van 3 oop']);
 });
 
 function realPhotoTools(ui,t,{failBitmap=false,nullBlob=false}={}){
@@ -325,4 +325,16 @@ test('workflow form adds dependencies and completes only the selected step with 
  const ui=await screen('alex',[task]);ui.document.querySelector('[data-task]').onclick();assert.equal(ui.dialog.querySelectorAll('.step').length,2);assert.ok(ui.dialog.querySelector('[data-step-complete="step-2"]').hasAttribute('disabled'));assert.equal(ui.dialog.querySelector('#complete'),null);
  ui.dialog.querySelector('#add-step').onclick();let f=ui.dialog.querySelector('form');f.elements.description.value='Record proof';f.elements.assigned_to.value='alinda';f.elements.due_date.value='2099-12-01';f.elements.status.value='Scheduled';f.elements.required.checked=true;ui.dialog.querySelector('[name=dependency][value="step-2"]').checked=true;await f.onsubmit({preventDefault(){}});assert.equal(ui.posts[0].action,'step_add');assert.deepEqual(ui.posts[0].data.dependencies,['step-2']);assert.equal(ui.posts[0].data.description,'Record proof');
  ui.document.querySelector('[data-task]').onclick();ui.dialog.querySelector('[data-step-complete="step-1"]').onclick();f=ui.dialog.querySelector('form');f.elements.note.value='Checked';await f.onsubmit({preventDefault(){}});assert.equal(ui.posts[1].action,'step_complete');assert.equal(ui.posts[1].step_id,'step-1');assert.equal(ui.posts[1].note,'Checked');
+});
+
+
+test('converted dispatch workflow shows its steps without obsolete sending instructions',async()=>{
+ const steps=[{id:'sent',description:'Bestelling gestuur',assigned_to:'alinda',status:'Complete',completion:{by:'alinda',at:'2099-11-01T08:00:00Z',note:'Confirmed'}},{id:'pay',description:'Kontroleer die staat',assigned_to:'alinda',status:'Scheduled',due_date:'2099-11-30',dependencies:['sent']}];
+ const ui=await screen('alex',[reportTask({assigned_to:'alex',kind:'po_dispatch',task_type:'workflow',steps,status:'Scheduled'})]);
+ ui.document.querySelector('#filter').onchange({target:{value:'scheduled'}});
+ ui.document.querySelector('[data-task]').onclick();
+ assert.equal(ui.dialog.textContent.includes('Bevestig wanneer jy die goedgekeurde bestelling gestuur het'),false);
+ assert.equal(ui.dialog.querySelector('#complete'),null);
+ assert.ok(ui.dialog.querySelector('[data-step-complete="pay"]'));
+ assert.match(ui.dialog.textContent,/Kontroleer die staat/);
 });
