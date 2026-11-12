@@ -164,3 +164,16 @@ test('conversation pagination keeps more than three messages and rejects private
  const second=await readPaReport(f.env,{username:'alex'},{resource:'summary',id:s.id,offset:first.next_offset});assert.equal(second.feedback.length,2);assert.equal(second.next_offset,null);
  assert.equal((await f.call('xavier','/api/pa-report/conversation?subject_key='+s.id)).status,404);
 });
+
+
+test('a question in an older completion note stays answerable without changing the task',async t=>{
+ const {env,call}=await setup(t),s=(await call('alex','/api/pa-report')).data.rows.find(r=>r.id==='TSK-00003');
+ const b={request_id:crypto.randomUUID(),subject_key:s.id,subject_hash:s.subject_hash,action:'complete',note:'Die eerste stap is klaar. Moet ek wag vir betaling?'};
+ assert.equal((await call('alex','/api/pa-report/feedback',b)).status,200);
+ await env.DB.prepare("UPDATE v2_pa_report_feedback SET acknowledged_at=?,outcome=? WHERE id=?").bind('2026-11-12T12:00:00Z','Vorige ondersoeknota',b.request_id).run();
+ const pending=await readPaReport(env,{username:'alex'},{resource:'pending_feedback'}),f=pending.feedback.find(f=>f.id===b.request_id);
+ assert.equal(f.answer_status,'awaiting_answer');assert.equal(f.outcome,'Vorige ondersoeknota');assert.equal(f.current_subject.status,'Waiting');
+ await assert.rejects(savePaReport(env,{username:'alex',via:'pa'},{operation:'acknowledge',request_id:crypto.randomUUID(),reason:'Synthetic verification',feedback_id:b.request_id,subject_hash:s.subject_hash,outcome:'Processed',source_url:source}),/werklike antwoord/);
+ const conversation=(await call('alex','/api/pa-report/conversation?subject_key='+s.id)).data;
+ assert.equal(conversation.feedback[0].status,'pending');assert.equal(conversation.subject.status,'Waiting');
+});

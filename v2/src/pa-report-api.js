@@ -42,10 +42,11 @@ function summary(rows){const active=rows.filter(opened);return {total:rows.lengt
 const feedbackSelect=`SELECT f.*,a.payload AS answer_payload,a.created_at AS answered_at,
  (SELECT message FROM v2_pa_report_attempts WHERE feedback_id=f.id ORDER BY created_at DESC,request_id DESC LIMIT 1) AS processing_error
  FROM v2_pa_report_feedback f LEFT JOIN v2_pa_report_answers a ON a.feedback_id=f.id`;
+const requiresAnswer=p=>p.action==='respond'||/\?/.test(p.note||'');
 function feedbackRow(r){const payload=JSON.parse(r.payload),answer=r.answer_payload?JSON.parse(r.answer_payload):null;
  return {...payload,id:r.id,subject_key:r.subject_key,subject_hash:r.subject_hash,actor:r.actor,created_at:r.created_at,
- status:answer?'answered':payload.action==='respond'?'pending':r.acknowledged_at?'processed':'pending',
- answer_status:answer?'answered':r.processing_error?'retry':payload.action==='respond'?'awaiting_answer':r.acknowledged_at?'recorded':'pending',
+ status:answer?'answered':requiresAnswer(payload)?'pending':r.acknowledged_at?'processed':'pending',
+ answer_status:answer?'answered':r.processing_error?'retry':requiresAnswer(payload)?'awaiting_answer':r.acknowledged_at?'recorded':'pending',
  acknowledged_at:r.acknowledged_at,outcome:r.outcome,source_url:r.source_url,answer,answered_at:r.answered_at||null,processing_error:answer?null:r.processing_error||null};}
 async function feedbackById(db,id){return db.prepare(feedbackSelect+' WHERE f.id=?').bind(id).first();}
 export async function readConversation(env,user,key,offset=0){
@@ -67,7 +68,7 @@ export async function readPaReport(env,user,query={}){
  if(query.resource==='pending_feedback'){
   check(user.username==='alex','Only Alex can process the private PA feedback queue.',403);
   const offset=Number(query.offset??0);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
-  const list=await env.DB.prepare(feedbackSelect+" WHERE a.feedback_id IS NULL AND (f.acknowledged_at IS NULL OR json_extract(f.payload,'$.action')='respond') ORDER BY f.created_at,f.id LIMIT 51 OFFSET ?").bind(offset).all();
+  const list=await env.DB.prepare(feedbackSelect+" WHERE a.feedback_id IS NULL AND (f.acknowledged_at IS NULL OR json_extract(f.payload,'$.action')='respond' OR instr(COALESCE(json_extract(f.payload,'$.note'),''),'?')>0) ORDER BY f.created_at,f.id LIMIT 51 OFFSET ?").bind(offset).all();
   const feedback=[];for(const r of list.results.slice(0,50)){let current;try{current=await subject(env,user,r.subject_key);}catch{current=null;}feedback.push({...feedbackRow(r),current_subject:current});}
   return {feedback,next_offset:list.results.length>50?offset+50:null};
  }
@@ -133,7 +134,7 @@ export async function savePaReport(env,user,b){
  if(['answer','feedback_error'].includes(b.operation))return saveAnswer(env,user,b);
  if(b.operation==='acknowledge'){
   const r=await env.DB.prepare('SELECT * FROM v2_pa_report_feedback WHERE id=?').bind(b.feedback_id??'').first();check(r,'Feedback not found.',404);
-  check(JSON.parse(r.payload).action!=='respond'&&!/\?/.test(JSON.parse(r.payload).note||''),'Stoor eers PA se werklike antwoord met die volgende stap.');
+  check(!requiresAnswer(JSON.parse(r.payload)),'Stoor eers PA se werklike antwoord met die volgende stap.');
   const outcome=txt(b.outcome,4000,true),url=link(b.source_url);check(url&&b.subject_hash===r.subject_hash,'Read the exact feedback and verify its PA update first.',409);
   if(r.acknowledged_at){check(r.outcome===outcome&&r.source_url===url,'Feedback already processed with a different result.',409);return {saved:true,replayed:true,feedback:feedbackRow(r)};}
   await env.DB.prepare('UPDATE v2_pa_report_feedback SET acknowledged_at=?,outcome=?,source_url=? WHERE id=? AND acknowledged_at IS NULL').bind(new Date().toISOString(),outcome,url,r.id).run();
@@ -258,7 +259,7 @@ export function reportFollowup(rows,feedback,day,since=''){
   const future=date>day,answered=!!f?.answer,reply_in_window=answered&&(!since||f.answered_at>since);
   const category=closed?'completed':future?'scheduled':r.status==='Waiting'&&(!date||date>day)?'waiting':reply_in_window?'answered':'action';
   return {id:r.id,title:r.title,category,status:r.status,assigned_to:r.assigned_to,next_action:r.next_action,follow_up_date:date,
-   waiting_on:r.status==='Waiting'?r.next_action:'',awaiting_answer:f?.action==='respond'&&!answered,
+   waiting_on:r.status==='Waiting'?r.next_action:'',awaiting_answer:!!f&&requiresAnswer(f)&&!answered,
    answer:answered?{feedback_id:f.id,text:f.answer.text,recommendation:f.answer.recommendation,answered_at:f.answered_at}:null,
    include_in_action_list:!closed&&!future&&category!=='waiting',include_answer_update:reply_in_window,
    source_url:r.source_url,app_task_id:r.app_task_id};
