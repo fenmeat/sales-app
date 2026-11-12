@@ -14,3 +14,5 @@
 
 /* Step controls remain comfortable on phones and tablets. */
 .step-list{list-style:none;padding:0;margin:0;display:grid;gap:12px}.step{padding:14px;border:1px solid #aab9b3;border-radius:10px;background:#fff;overflow-wrap:anywhere}.step-heading{display:flex;gap:10px;align-items:flex-start}.step-heading>span{font-size:24px;line-height:1}.step p{margin:8px 0;color:#243b33}.step-done{background:#edf6ef}.step .actions{flex-wrap:wrap}.step button{min-height:44px}.dependencies label{display:flex;gap:8px;align-items:flex-start}dialog{max-height:90dvh;overflow:auto}input[type=checkbox]{width:auto;min-width:22px;min-height:22px}@media(max-width:600px){.step{padding:12px}.step .actions button{flex:1;white-space:normal}.pa-group summary{overflow-wrap:anywhere}}
+
+.pa-message{margin:12px 0;padding:14px;border:1px solid #bfcbd0;border-radius:8px;overflow-wrap:anywhere}.pa-message time{display:block;font-size:.9rem;color:#43555b;margin:4px 0 8px}.pa-answer{background:#edf5ef;border-left:4px solid #296743;padding:12px;margin-top:12px}.pa-answer p{margin:8px 0}.pa-previous-note{margin-top:10px}#pa-conversation{max-height:45vh;overflow:auto}

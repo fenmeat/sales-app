@@ -115,3 +115,52 @@ test('named Rabbi readers receive only the reading, including history, without p
  const other=await readPaReport(otherEnv,{username:'other'});assert.equal(other.rabbi_access,false);assert.equal(other.rabbi,null);assert.deepEqual(other.rabbi_history,[]);
  const after=await call('alex','/api/pa-report');assert.deepEqual(after.data.report,before.data.report);assert.deepEqual(after.data.rows,before.data.rows);assert.equal(after.data.feedback.length,1);
 });
+
+async function ask(f,key='TSK-00003',note='Moet ek dit opvolg of wag?'){
+ const s=(await readPaReport(f.env,{username:'alex'},{resource:'summary',id:key})).subject;
+ const b={request_id:crypto.randomUUID(),subject_key:key,subject_hash:s.subject_hash,action:'respond',note};
+ assert.equal((await f.call('alex','/api/pa-report/feedback',b)).status,200);return {b,s};
+}
+async function answer(f,b){
+ const s=(await readPaReport(f.env,{username:'alex'},{resource:'summary',id:b.subject_key})).subject;
+ return {operation:'answer',request_id:crypto.randomUUID(),reason:'Explicit synthetic PA response',revision:s.register_revision,feedback_id:b.request_id,subject_hash:b.subject_hash,current_subject_hash:s.subject_hash,source_url:source,answer:{kind:'question',text:'Ek beveel ’n kort opvolg aan om ’n antwoorddatum te vra.',recommendation:'Vra wanneer jy ’n antwoord kan verwag.',next_action:s.next_action,responsible:s.assigned_to,follow_up_date:s.review_date,task_status:s.status}};
+}
+test('PA answer is atomic, unique, readable after returning, and never changes the task',async t=>{
+ const f=await setup(t),{b}=await ask(f),before=(await f.call('alex','/api/pa-report')).data.rows;
+ const a=await answer(f,b);const outcomes=await Promise.all([savePaReport(f.env,{username:'alex',via:'pa'},a),savePaReport(f.env,{username:'alex',via:'pa'},a)]);
+ assert.ok(outcomes.every(r=>r.saved));assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM v2_pa_report_answers').first()).n,1);
+ const history=await readPaReport(f.env,{username:'alex'},{resource:'summary',id:b.subject_key});assert.equal(history.feedback[0].note,b.note);assert.equal(history.feedback[0].answer.text,a.answer.text);assert.equal(history.feedback[0].status,'answered');
+ assert.deepEqual((await f.call('alex','/api/pa-report')).data.rows,before);
+ assert.equal((await readPaReport(f.env,{username:'alex'},{resource:'pending_feedback'})).feedback.length,0);
+ assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM v2_pa_report_alerts WHERE kind='pa_answer'").first()).n,1);
+ assert.equal((await f.call('alinda','/api/pa-report/conversation?subject_key='+b.subject_key)).status,404);
+ await assert.rejects(savePaReport(f.env,{username:'alex',via:'pa'},{...a,answer:{...a.answer,text:'A different answer that must not replace the original.'}}),/reeds/);
+});
+test('generic notes, missing next steps, stale sources and failed processing never answer a question',async t=>{
+ const f=await setup(t),{b}=await ask(f),a=await answer(f,b);
+ await assert.rejects(savePaReport(f.env,{username:'alex',via:'pa'},{...a,operation:'acknowledge',outcome:'PA het dit nagegaan'}),/werklike antwoord/);
+ await assert.rejects(savePaReport(f.env,{username:'alex',via:'pa'},{...a,answer:{...a.answer,text:'PA review pending'}}),/werklike antwoord/);
+ await assert.rejects(savePaReport(f.env,{username:'alex',via:'pa'},{...a,answer:{...a.answer,next_action:''}}),/required/);
+ await assert.rejects(savePaReport(f.env,{username:'alex',via:'pa'},{...a,current_subject_hash:'stale'}),/verander/);
+ await assert.rejects(savePaReport(f.env,{username:'alex',via:'pa'},{...a,answer:{...a.answer,follow_up_date:'2099-01-01'}}),/Werk eers/);
+ const fail={operation:'feedback_error',feedback_id:b.request_id,subject_hash:b.subject_hash,request_id:crypto.randomUUID(),reason:'Synthetic unavailable source',message:'Die bron kon nie gelees word nie. PA probeer weer.'};
+ await savePaReport(f.env,{username:'alex',via:'pa'},fail);await savePaReport(f.env,{username:'alex',via:'pa'},fail);
+ let pending=await readPaReport(f.env,{username:'alex'},{resource:'pending_feedback'});assert.equal(pending.feedback[0].answer_status,'retry');assert.equal(pending.feedback[0].note,b.note);
+ await savePaReport(f.env,{username:'alex',via:'pa'},a);await savePaReport(f.env,{username:'alex',via:'pa'},{...fail,request_id:crypto.randomUUID()});
+ assert.equal((await readPaReport(f.env,{username:'alex'},{resource:'pending_feedback'})).feedback.length,0);
+});
+test('legacy review notes remain intact and return for an actual answer; follow-up stays in the same task',async t=>{
+ const f=await setup(t),{b}=await ask(f);
+ await f.db.prepare('UPDATE v2_pa_report_feedback SET acknowledged_at=?,outcome=? WHERE id=?').bind(new Date().toISOString(),'Oorspronklike ondersoeknota',b.request_id).run();
+ const pending=await readPaReport(f.env,{username:'alex'},{resource:'pending_feedback'});assert.equal(pending.feedback.length,1);assert.equal(pending.feedback[0].outcome,'Oorspronklike ondersoeknota');
+ await savePaReport(f.env,{username:'alex',via:'pa'},await answer(f,b));
+ const next={...b,request_id:crypto.randomUUID(),reply_to:b.request_id,note:'Skryf die opvolg-e-pos vir my.'};assert.equal((await f.call('alex','/api/pa-report/feedback',next)).status,200);
+ const history=(await f.call('alex','/api/pa-report/conversation?subject_key='+b.subject_key)).data;assert.equal(history.feedback.length,2);assert.equal(history.feedback[0].outcome,'Oorspronklike ondersoeknota');assert.equal(history.feedback[1].reply_to,b.request_id);assert.equal(history.subject.id,b.subject_key);
+});
+test('conversation pagination keeps more than three messages and rejects private report cross-links',async t=>{
+ const f=await setup(t),s=(await readPaReport(f.env,{username:'alex'},{resource:'summary',id:'TSK-00003'})).subject;
+ for(let n=0;n<52;n++)await f.db.prepare('INSERT INTO v2_pa_report_feedback(id,fingerprint,subject_key,subject_hash,payload,actor,created_at) VALUES(?,?,?,?,?,?,?)').bind('synthetic-message-'+String(n).padStart(3,'0'),'test',s.id,s.subject_hash,JSON.stringify({action:'respond',note:'Question '+n,source_task_ids:[s.id]}),'alex',new Date(n*1000).toISOString()).run();
+ const first=await readPaReport(f.env,{username:'alex'},{resource:'summary',id:s.id});assert.equal(first.feedback.length,50);assert.equal(first.next_offset,50);
+ const second=await readPaReport(f.env,{username:'alex'},{resource:'summary',id:s.id,offset:first.next_offset});assert.equal(second.feedback.length,2);assert.equal(second.next_offset,null);
+ assert.equal((await f.call('xavier','/api/pa-report/conversation?subject_key='+s.id)).status,404);
+});

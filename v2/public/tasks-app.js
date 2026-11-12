@@ -2,7 +2,7 @@ import {taskType,projectTask,statusLabel,localDate} from './task-workflow.js';
 import {stepsHTML,workflowForms} from './task-workflow-ui.js';
 import './input-selection.js';
 import {renderReport} from './tasks-report.js';
-import {renderPaWorkspace} from './pa-report-ui.js';
+import {renderPaWorkspace,conversationHTML} from './pa-report-ui.js';
 import {reminderOptions} from './task-report-model.js';
 import {attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData} from './task-attachments.js';
 const $=s=>document.querySelector(s),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -146,20 +146,42 @@ window.addEventListener('beforeunload',event=>{if(busy||(dialog.open&&dialog.que
 function paFeedback(item,action){
  if(!item)return;
  const labels={respond:'Antwoord',complete:'Merk taak klaar',assign:'Wys taak toe',request_update:'Vra terugvoer',remind:'Herinner my'};
- show(base(labels[action],`<h3>${esc(item.title||'Report item')}</h3><p class="pa-prose">${esc(item.next_action||item.text||'')}</p>${action==='complete'?'<p class="notice">Druk Stoor om te bevestig dat jou werk klaar is. \'n Nota of bewys is opsioneel. Bestellings, betalings en voorraadtellings moet steeds nagegaan word.</p>':''}${action==='assign'?`<label>Verantwoordelik<select name="assigned_to">${pa.users.map(u=>`<option value="${u}" ${u===item.assigned_to?'selected':''}>${esc(name(u))}</option>`).join('')}</select></label>`:''}${action==='remind'?'<label>Herinnering se datum en tyd (Suid-Afrika)<input name="remind_at" type="datetime-local" required></label><p class="help">Hierdie herinnering is vir jou. Die ander persoon se sperdatum bly dieselfde.</p>':''}<label>${action==='complete'?'Kort nota (opsioneel)':action==='request_update'?'Jou vraag':'Jou antwoord'}<textarea name="note" maxlength="5000" ${['remind','complete'].includes(action)?'':'required'} placeholder="Voeg 'n nota by as jy wil"></textarea></label><label>Bewysskakel<input name="proof_url" type="url" placeholder="https://…"></label><label>Voeg foto’s / PDF’s by<input id="attachment" type="file" accept="${TASK_FILE_ACCEPT}" multiple></label><p id="attachment-status" role="status"></p><ul id="attachment-list"></ul>`,action==='complete'?'Stoor voltooiing':'Stoor antwoord'));
+ show(base(labels[action],`<h3>${esc(item.title||'Report item')}</h3><p class="pa-prose">${esc(item.next_action||item.text||'')}</p>${action==='complete'?'<p class="notice">Druk Stoor om te bevestig dat jou werk klaar is. \'n Nota of bewys is opsioneel. Bestellings, betalings en voorraadtellings moet steeds nagegaan word.</p>':''}${action==='assign'?`<label>Verantwoordelik<select name="assigned_to">${pa.users.map(u=>`<option value="${u}" ${u===item.assigned_to?'selected':''}>${esc(name(u))}</option>`).join('')}</select></label>`:''}${action==='remind'?'<label>Herinnering se datum en tyd (Suid-Afrika)<input name="remind_at" type="datetime-local" required></label><p class="help">Hierdie herinnering is vir jou. Die ander persoon se sperdatum bly dieselfde.</p>':''}<section id="pa-conversation" aria-label="Gesprek"></section><button type="button" id="pa-conversation-refresh">Verfris gesprek</button><button type="button" id="pa-more" hidden>Laai meer van die gesprek</button><label>${action==='complete'?'Kort nota (opsioneel)':action==='request_update'?'Jou vraag':'Jou antwoord'}<textarea name="note" maxlength="5000" ${['remind','complete'].includes(action)?'':'required'} placeholder="Voeg 'n nota by as jy wil"></textarea></label><label>Bewysskakel<input name="proof_url" type="url" placeholder="https://…"></label><label>Voeg foto’s / PDF’s by<input id="attachment" type="file" accept="${TASK_FILE_ACCEPT}" multiple></label><p id="attachment-status" role="status"></p><ul id="attachment-list"></ul>`,action==='complete'?'Stoor voltooiing':'Stoor antwoord'));
  const form=dialog.querySelector('form');
+ const historyBox=form.querySelector('#pa-conversation');
+ const related=(pa.feedback||[]).filter(f=>f.subject_key===item.subject_key);
+ historyBox.innerHTML=conversationHTML(related);
+ let conversation=related,conversationOffset=0;
+ const more=form.querySelector('#pa-more');
+ async function historyPage(){try{const page=await api('/api/pa-report/conversation?subject_key='+encodeURIComponent(item.subject_key)+'&offset='+conversationOffset);if(!page.feedback)return;conversation=conversationOffset?[...conversation,...page.feedback]:page.feedback;historyBox.innerHTML=conversationHTML(conversation);conversationOffset=page.next_offset;more.hidden=conversationOffset===null;}catch{more.hidden=false;more.textContent='Probeer gesprek weer laai';}}
+ more.onclick=historyPage;form.querySelector('#pa-conversation-refresh').onclick=()=>{conversationOffset=0;return historyPage();};historyPage();
+ // Drafts and uncertain submissions survive a reload in this tab, scoped to the signed-in user.
+ // Never cache the private report or attachment bytes on a shared phone.
+ const draftKey='fenmeat-pa-draft:'+data.username+':'+item.subject_key+':'+action;
+ const storage=typeof sessionStorage==='undefined'?null:sessionStorage;
+ let draft;try{draft=JSON.parse(storage?.getItem(draftKey)||'null');}catch{}
+ if(draft?.note)form.elements.note.value=draft.note;
+ const saveDraft=extra=>{try{storage?.setItem(draftKey,JSON.stringify({note:form.elements.note.value,proof_url:form.elements.proof_url.value,...extra}));}catch{}};
+ form.elements.note.addEventListener('input',()=>saveDraft());
  if(action==='remind')form.elements.remind_at.value=new Date(Date.now()+10800000).toISOString().slice(0,16);
  if(action==='request_update')form.elements.note.value='Gee asseblief kort terugvoer: wat is klaar, wat kort nog en waarmee het jy hulp nodig?';
- const picker=attachmentPicker(form,{taskId:item.subject_key,prepareFile:fileData,api:(_path,b)=>api('/api/pa-report/file',{id:b.id,subject_key:item.subject_key,subject_hash:item.subject_hash,mime_type:b.mime_type,filename:b.filename,base64:b.base64})});dialogCleanup=()=>picker.dispose();paRetry=null;
+ const picker=attachmentPicker(form,{taskId:item.subject_key,prepareFile:fileData,api:(_path,b)=>api('/api/pa-report/file',{id:b.id,subject_key:item.subject_key,subject_hash:item.subject_hash,mime_type:b.mime_type,filename:b.filename,base64:b.base64})});dialogCleanup=()=>picker.dispose();paRetry=draft?.retry||null;
  form.onsubmit=async e=>{
   e.preventDefault();if(busy)return;const f=new FormData(form);busy=true;form.querySelector('fieldset').disabled=true;form.querySelector('.error').textContent='';
-  try{const payload={subject_key:item.subject_key,subject_hash:item.subject_hash,action,note:f.get('note')||'',proof_url:f.get('proof_url')||'',attachments:await picker.upload(),...(action==='assign'?{assigned_to:f.get('assigned_to')}:{}) ,...(action==='remind'?{remind_at:new Date(f.get('remind_at')+':00+02:00').toISOString()}:{})};
+  try{let payload={subject_key:item.subject_key,subject_hash:item.subject_hash,action,note:f.get('note')||'',proof_url:f.get('proof_url')||'',attachments:await picker.upload(),...(action==='assign'?{assigned_to:f.get('assigned_to')}:{}) ,...(action==='remind'?{remind_at:new Date(f.get('remind_at')+':00+02:00').toISOString()}:{})};
+   const previous=[...conversation].reverse().find(f=>f.answer);if(previous&&action==='respond')payload.reply_to=previous.id;
+   // Retry the exact uncertain request before adopting a newly published task hash.
+   if(draft?.payload&&draft.note===payload.note&&draft.proof_url===payload.proof_url&&!payload.attachments.length)payload=draft.payload;
    const signature=JSON.stringify(payload);if(!paRetry||paRetry.signature!==signature)paRetry={signature,request_id:crypto.randomUUID()};
-   await api('/api/pa-report/feedback',{...payload,request_id:paRetry.request_id});dialog.close();paRetry=null;await load();toast(action==='remind'?'Jou herinnering is gestoor.':action==='complete'?'Voltooiing aangeteken. PA werk die bestaande register by.':'Antwoord gestoor. PA sal dit nagaan.');
-  }catch(err){form.querySelector('.error').textContent=err.message;}finally{busy=false;form.querySelector('fieldset').disabled=false;}
+   saveDraft({payload,retry:paRetry});draft={note:payload.note,proof_url:payload.proof_url,payload,retry:paRetry};
+   await api('/api/pa-report/feedback',{...payload,request_id:paRetry.request_id});try{storage?.removeItem(draftKey);}catch{}dialog.close();paRetry=null;await load();toast(action==='remind'?'Jou herinnering is gestoor.':action==='complete'?'Voltooiing aangeteken. PA werk die bestaande register by.':'Jou boodskap is gestoor. PA se antwoord verskyn hier ná die volgende suksesvolle uurlikse kontrole.');
+  }catch(err){form.querySelector('.error').textContent=err.status===409?'Die taak het verander. Jou teks is behou. Sluit die venster, verfris en hersien jou boodskap voordat jy weer stoor.':err.message;if(err.status===409){draft=null;paRetry=null;saveDraft();}}finally{busy=false;form.querySelector('fieldset').disabled=false;}
  };
 }
 
-window.addEventListener('focus',()=>{if(data&&!dialog.open){data.today=localDate();render();}});
+let lastPaRefresh=0;
+async function refreshPaAnswers(){if(!data||dialog.open||busy||Date.now()-lastPaRefresh<60000)return;lastPaRefresh=Date.now();try{const fresh=await api('/api/pa-report'+(reportDate?'?date='+encodeURIComponent(reportDate):''));if(fresh.register_revision){pa=fresh;data.today=localDate();render();}}catch{/* Keep the last loaded conversation during a temporary outage. */}}
+window.addEventListener('focus',refreshPaAnswers);window.addEventListener('online',refreshPaAnswers);
+if(typeof document.addEventListener==='function')document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshPaAnswers();});
 if(typeof window.setInterval==='function')window.setInterval(()=>{if(data&&!dialog.open&&data.today!==localDate()){data.today=localDate();render();}},60000);
 load();

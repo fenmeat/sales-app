@@ -32,3 +32,55 @@ Named admins manage all work. Existing assignees can act on their steps. A deleg
 ## Validation
 
 Real workerd/D1 tests cover reminder completion/repetition, multi-step work, future follow-up and midnight projection, dependency blocking, waiting, evidence, full closure, assignee privacy, guarded writes/replays, deduplication, PA exclusions, incremental register publication, preserved dispatch history and restoration. UI DOM tests cover actual form actions and submitted values. The browser acceptance script is `scripts/qa-task-workflow.mjs`; Chromium launch was blocked in this environment by its socket restriction, so no physical Safari/iPhone/iPad or rendered-width success is claimed.
+
+## PA conversations 0.39.0
+
+The existing private `v2_pa_report_feedback` remains the question/event source.
+Additive `v2_pa_report_answers` stores one immutable, structured answer per
+feedback ID; `v2_pa_report_attempts` retains retryable processing failures. No
+existing question, investigation outcome, attachment, task event or source row
+is rewritten at deployment. Legacy acknowledged `respond` events without an
+answer return to the bounded PA queue; agents must respect the existing
+PA-REPORT markers and never repeat completed external actions.
+
+`daily_report` writes support `answer` and `feedback_error`. An answer requires
+the original feedback hash, freshly read current subject hash, current register
+revision, verified source and `{kind,text,recommendation,next_action,responsible,
+follow_up_date,task_status}`. For a permanent task the action, person, status and
+review date must match the current read model. Source changes must be reconciled
+first using existing workflow actions and `register_patch`. D1 atomically guards
+the register revision, inserts the unique answer, acknowledges the feedback and
+adds the existing private notification. A reply never changes a business task.
+`acknowledge` cannot resolve a respond event or question-mark-bearing note.
+
+`summary` with `id:<subject_key>` returns the authorised conversation in pages
+of 50; `id:report-context` gives current action/answered/scheduled/waiting/closed
+report categories against the last report cutoff. The browser exposes this at
+`GET /api/pa-report/conversation`. Private report replies linked to a task are
+visible in that conversation only to Alex. All current subject permissions apply.
+
+Cards and dialogs display the actual PA answer, owner, date and next action in
+Afrikaans, with chronological history, preserved earlier investigation notes,
+paging, follow-up links and explicit refresh. Workflows retain their step-list
+button and gain the PA conversation button. On return or reconnection, the page
+refreshes PA data at most once per minute (no timer-based full sync). A draft and
+uncertain request survive reload in the same tab using per-user sessionStorage;
+retry preserves the exact original request ID and body. Private reports and
+attachment bytes are never offline cached. A cold offline app start and recovery
+after closing the tab are not provided. Server-saved questions and answers remain
+durable independently of the device. Existing numeric-only selection is intact.
+
+Processing remains the existing hourly ChatGPT automation; no immediate model
+service or one-hour response guarantee is implied. The daily report must use
+current follow-up categories and recent answers instead of presenting old tasks
+as new work. Original sent reports are retained; current answers appear beside
+linked historical report items without rewriting that historical text.
+
+Validation: Node/DOM/workerd/D1 tests cover answer atomicity, unique retries,
+stale register/source rejection, failed processing recovery, legacy review repair,
+full history paging, same-task follow-ups, private access and report selection.
+`scripts/qa-pa-conversations.mjs` exercises the shipped UI with synthetic HTTP
+fixtures, offline drafting, reload and a lost successful POST response in mobile
+Chromium/WebKit profiles. No synthetic live business data or emails are required.
+Rollback should be a forward fix: old writers allow acknowledgement without an
+answer. Retain all additive tables and original data; never bulk restore D1.
