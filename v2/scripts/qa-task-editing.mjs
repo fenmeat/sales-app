@@ -36,7 +36,7 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  await page.getByRole('button',{name:'Stoor taak',exact:true}).click();await page.waitForSelector('#history');
  let saved=(await api('/api/tasks?id='+taskId)).data.task;assert.equal(saved.requires_evidence,false);assert.equal(saved.revision,2);assert.equal(saved.due_date,'');assert.equal(saved.document_url,'https://example.com/document.pdf');
  await page.locator('#history').click();await page.waitForSelector('.task-changes');assert.match(await page.locator('#history-content').textContent(),/Voor: Ja.*Na: Nee/s);
- await page.locator('#complete').click();await page.getByRole('button',{name:'Merk klaar',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});
+ await page.locator('#complete').click();await page.locator('#dialog').getByRole('button',{name:'Merk klaar',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});
  saved=(await api('/api/tasks?id='+taskId)).data.task;assert.equal(saved.status,'Complete');assert.equal(saved.completion.attachments.length,0);
  await page.locator('#pa-status').selectOption('closed');await page.locator('[data-edit-task="'+taskId+'"]').first().click();assert.equal(await page.getByLabel('Taaktitel',{exact:true}).inputValue(),saved.title);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.ok(await page.locator('dialog').evaluate(e=>e.scrollWidth<=e.clientWidth+1));await page.screenshot({path:folder+'/'+name+'.png'});assert.deepEqual(errors,[]);
