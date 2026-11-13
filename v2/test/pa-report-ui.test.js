@@ -1,0 +1,227 @@
+import {createWorkspaceCache} from '../public/task-workspace-cache.js';
+import {taskType,projectTask,statusLabel,localDate} from '../src/task-workflow.js';
+import {stepsHTML,workflowForms} from '../public/task-workflow-ui.js';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {parseHTML} from 'linkedom';
+import {renderReport} from '../public/tasks-report.js';
+import {reminderOptions} from '../public/task-report-model.js';
+import {attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData} from '../public/task-attachments.js';
+
+import {renderPaWorkspace,conversationHTML} from '../public/pa-report-ui.js';
+async function screen(username,tasks=[],view='',mailPages=null,paState=null){
+ const {document}=parseHTML('<html><body><div id="app"></div><dialog id="dialog"></dialog><div id="message"></div></body></html>');
+ globalThis.document=document;globalThis.CSS={escape:v=>v};globalThis.location={href:'https://ui-test.example/tasks'+view};
+ const dialog=document.querySelector('dialog');dialog.showModal=()=>dialog.open=true;dialog.close=()=>dialog.open=false;
+ const query=document.querySelector.bind(document);
+ const prepare=form=>{
+  if(!form||form.localName!=='form')return form;
+  const controls=[...form.querySelectorAll('[name]')];
+  for(const select of controls.filter(c=>c.localName==='select'))Object.defineProperty(select,'value',{configurable:true,get(){return this.querySelector('option[selected]')?.getAttribute('value')??this.querySelector('option[selected]')?.textContent??this.querySelector('option')?.getAttribute('value')??this.querySelector('option')?.textContent;},set(value){for(const o of this.querySelectorAll('option'))o.toggleAttribute('selected',(o.getAttribute('value')??o.textContent)===value);}});
+  Object.defineProperty(form,'elements',{configurable:true,value:Object.fromEntries(controls.map(c=>[c.name,c]))});return form;
+ };
+ const dq=dialog.querySelector.bind(dialog);dialog.querySelector=s=>prepare(dq(s));
+ document.querySelector=s=>prepare(query(s));
+ class FormData{
+  constructor(form){this.values=(form.querySelector('fieldset')?.disabled?[]:[...form.querySelectorAll('[name]')]).filter(c=>c.type!=='checkbox'||c.checked).map(c=>[c.name,c.type==='checkbox'?'on':c.value]);}
+  get(name){return this.values.find(([key])=>key===name)?.[1]??null;}
+  has(name){return this.values.some(([key])=>key===name);}
+  [Symbol.iterator](){return this.values[Symbol.iterator]();}
+ }
+ const state={username,admin:['alex','alinda'].includes(username),today:'2099-11-02',users:['alex','alinda'].includes(username)?['alex','alinda','xalinda','xavier']:[username],suppliers:['crown'],tasks,notifications:[],next_offset:null};
+ const posts=[],postPaths=[],getPaths=[];let failNext=false,failAt=-1;
+ const fetch=async(path,options={})=>{
+  if(options.method==='POST'){
+   const body=JSON.parse(options.body);posts.push(body);postPaths.push(path);
+   if(failNext||posts.length===failAt){failNext=false;throw Error('Connection interrupted. Please retry.');}
+   return {ok:true,json:async()=>({task:{...body.data,id:body.task_id,revision:1}})};
+  }
+  getPaths.push(path);
+  if(path.startsWith('/api/pa-report'))return {ok:true,json:async()=>structuredClone(paState||{register_revision:0})};
+  if(path.startsWith('/api/tasks?id='))return {ok:true,json:async()=>({task:structuredClone(state.tasks.find(t=>t.id===decodeURIComponent(path.split('=')[1])))})};
+  if(path.startsWith('/api/tasks/emails'))return {ok:true,json:async()=>mailPages?structuredClone(mailPages[path]):({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
+  return {ok:true,json:async()=>structuredClone(state)};
+ };
+ const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
+ const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData','renderPaWorkspace','conversationHTML','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','createWorkspaceCache',source)(document,{addEventListener(){}}, Object.assign(globalThis.location,{origin:'https://ui-test.example'}),{replaceState(_state,_title,url){globalThis.location.href=new URL(url,globalThis.location.href).href;}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData,renderPaWorkspace,conversationHTML,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,createWorkspaceCache);
+ return {document,dialog,posts,postPaths,getPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
+}
+
+
+const paState=()=>({private_report:true,register_revision:3,source_at:new Date().toISOString(),history:[{date:'2026-11-05'}],alerts:[],reminders:[],users:['alex','alinda','xavier','xalinda'],feedback:[],rows:[{id:'TSK-00001',subject_key:'TSK-00001',subject_hash:'hash-one',scope:'fenmeat',title:'Invoice follow-up',status:'Waiting',assigned_to:'alinda',review_group:'Supplier — November',next_action:'Confirm receipt and payment.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'},{id:'TSK-00002',subject_key:'TSK-00002',subject_hash:'hash-two',scope:'private',title:'Private matter',status:'Pending',assigned_to:'alex',next_action:'Reply to private letter.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'}],report:{date:'2026-11-05',source_at:'2026-11-05T14:14:12Z',task_summary:{open:141},source_url:'https://mail.google.com/mail/#sent/test',coverage:'One verified mailbox; unavailable sources stated.',sections:['emails','activity','tasks','tomorrow','rabbi'].map((id,n)=>({id,title:id,items:[{id:'report-item-'+n,subject_key:'report-2026-11-05:report-item-'+n,subject_hash:'hash-item-'+n,title:'Section '+id,text:'Practical detail <script>blocked</script>',needs_reply:n===0,question:'Please choose the next step.',links:[],pa_task_ids:n===0?['TSK-00002']:[]}]}))}});
+test('daily report shows four sections with Rabbi in its own menu, dated counts and linked work',async()=>{
+ const ui=await screen('alex',[{id:'step',pa_task_id:'TSK-00001',status:'Complete',title:'PO sent',assigned_to:'alinda'}],'?view=report',null,paState());
+ ui.document.querySelector('#pa-status').onchange({target:{value:'all'}});const app=ui.document.querySelector('#app');assert.equal(app.querySelector('#report-item-4'),null);assert.equal(app.querySelector('#pa-rabbi').textContent,'Rabbi');assert.equal(app.querySelectorAll('.pa-full-report .pa-section').length,5);assert.match(app.textContent,/task count was 141/);assert.match(app.textContent,/2 Alle onafgehandelde take/);assert.match(app.textContent,/verdere werk hierbo moet nog afgehandel word/);assert.match(app.textContent,/Private matter/);assert.equal(app.querySelector('script'),null);
+ app.querySelector('[data-jump-item]').onclick();assert.equal(ui.document.getElementById('report-item-0').parentElement.open,true);
+ app.querySelector('[data-open-case]').onclick();assert.match(ui.dialog.textContent,/Private matter/);
+});
+test('reply survives a lost response with the same request and captures form values before disabling',async()=>{
+ const ui=await screen('alex',[],'?view=report',null,paState());ui.document.querySelector('[data-pa-action="respond"]').onclick();
+ const form=ui.dialog.querySelector('form');form.elements.note.value='Please prepare the reply for me.';ui.failNext();await form.onsubmit({preventDefault(){}});assert.equal(ui.dialog.open,true);assert.equal(form.elements.note.value,'Please prepare the reply for me.');assert.match(form.querySelector('.error').textContent,/Connection interrupted/);
+ await Promise.all([form.onsubmit({preventDefault(){}}),form.onsubmit({preventDefault(){}})]);assert.equal(ui.posts.length,2);assert.deepEqual(ui.posts[0],ui.posts[1]);assert.equal(ui.posts[0].note,'Please prepare the reply for me.');assert.equal(ui.postPaths[0],'/api/pa-report/feedback');assert.equal(ui.dialog.open,false);
+});
+test('staff presentation has no full private report or assignment controls and reminders preserve task ownership',async()=>{
+ const p=paState();p.private_report=false;p.report=null;p.history=[];p.rows=[{...p.rows[0],assigned_to:'xavier'}];p.users=['xavier'];
+ const ui=await screen('xavier',[],'?view=report',null,p);assert.equal(ui.document.querySelector('.pa-full-report'),null);assert.equal(ui.document.querySelector('[data-pa-action="assign"]'),null);assert.doesNotMatch(ui.document.querySelector('#app').textContent,/Private matter|Alle onafgehandelde take/);
+ ui.document.querySelector('#pa-status').onchange({target:{value:'waiting'}});ui.document.querySelector('[data-pa-action="remind"]').onclick();const form=ui.dialog.querySelector('form');form.elements.remind_at.value='2099-11-02T09:45';await form.onsubmit({preventDefault(){}});assert.equal(ui.posts[0].remind_at,'2099-11-02T07:45:00.000Z');assert.equal(ui.posts[0].assigned_to,undefined);
+});
+
+test('a saved report point opens its own historical date and remains addressable',async()=>{
+ const ui=await screen('alex',[],'?view=report&case=report-2026-11-05:report-item-0',null,paState());
+ assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-05'));
+ assert.ok(ui.document.querySelector('[data-case="report-2026-11-05:report-item-0"]'));
+ assert.equal(ui.document.getElementById('report-item-0').parentElement.open,true);
+});
+
+
+test('Rabbi menu opens the full reading directly, preserves feedback identity and returns to tasks',async()=>{
+ const p=paState();p.report.sections[4].title='5. Rabbi: A fresh start';
+ const ui=await screen('alex',[],'?view=report',null,p);
+ await ui.document.querySelector('#pa-rabbi').onclick();
+ assert.equal(ui.document.querySelector('h1').textContent,'Rabbi');
+ assert.equal(ui.document.querySelector('.pa-rabbi h2').textContent,'Rabbi: A fresh start');
+ assert.equal(ui.document.querySelector('#pa-rabbi').getAttribute('aria-current'),'page');
+ assert.equal(ui.document.querySelector('.pa-register'),null);
+ assert.equal(ui.document.querySelector('.pa-full-report'),null);
+ assert.ok(ui.document.querySelector('#report-item-4 .pa-prose'));
+ assert.equal(ui.document.querySelector('script'),null);
+ assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');
+ ui.document.querySelector('#report-item-4 [data-pa-action="respond"]').onclick();
+ const form=ui.dialog.querySelector('form');form.elements.note.value='Please explain the practical step.';
+ await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.posts[0].subject_key,'report-2026-11-05:report-item-4');
+ assert.equal(ui.posts[0].subject_hash,'hash-item-4');
+ assert.ok(ui.document.querySelector('.pa-rabbi'));
+ await ui.document.querySelector('#pa-tasks').onclick();
+ assert.ok(ui.document.querySelector('.pa-register'));
+ assert.equal(ui.document.querySelector('.pa-rabbi'),null);
+ assert.ok(ui.document.querySelector('#pa-rabbi'));
+});
+
+test('Rabbi date selection and navigation keep the chosen historical date',async()=>{
+ const ui=await screen('alex',[],'?view=rabbi&date=2026-11-05',null,paState());
+ assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-05'));
+ assert.ok(ui.document.querySelector('.pa-rabbi'));
+ await ui.document.querySelector('#pa-report-date').onchange({target:{value:'2026-11-04'}});
+ assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-04'));
+ assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');
+ assert.equal(new URL(location.href).searchParams.get('date'),'2026-11-04');
+ await ui.document.querySelector('#pa-report').onclick();
+ assert.equal(new URL(location.href).searchParams.get('date'),'2026-11-04');
+ assert.ok(ui.document.querySelector('.pa-full-report'));
+ assert.equal(ui.document.querySelector('#report-item-4'),null);
+});
+
+test('existing Rabbi report links open the original reading in its own view',async()=>{
+ const ui=await screen('alex',[],'?view=report&case=report-2026-11-05:report-item-4',null,paState());
+ assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-05'));
+ assert.ok(ui.document.querySelector('.pa-rabbi #report-item-4'));
+ assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');
+ await ui.document.querySelector('#pa-report').onclick();
+ assert.equal(ui.document.querySelector('.pa-rabbi'),null);
+ assert.ok(ui.document.querySelector('.pa-full-report'));
+});
+
+test('Rabbi has an explicit empty state and hides the menu without reading permission',async()=>{
+ const p=paState();p.report=null;
+ const ui=await screen('alex',[],'?view=rabbi',null,p);
+ assert.match(ui.document.querySelector('.pa-rabbi').textContent,/has not been published/);
+ for(const username of ['alinda','xavier']){
+  const staff=paState();staff.private_report=false;staff.report=null;staff.history=[];staff.rows=[];
+  const view=await screen(username,[],'?view=rabbi',null,staff);
+  assert.equal(view.document.querySelector('.pa-rabbi'),null);
+  assert.equal(view.document.querySelector('#pa-rabbi'),null);
+  assert.equal(view.document.querySelector('h1').textContent,'Tasks');
+ }
+});
+
+
+function sharedReading(){
+ const p=paState(),section=p.report.sections[4];
+ p.rabbi_access=true;p.rabbi={date:p.report.date,title:section.title,items:section.items.map(({id,title,text})=>({id,title,text}))};
+ p.rabbi_history=[{date:'2026-11-05'},{date:'2026-11-04'}];p.private_report=false;p.report=null;p.history=[];p.rows=[];return p;
+}
+test('Alinda, Xalinda and Xavier can open Rabbi from their workspace, choose dates and return to their own work',async()=>{
+ for(const username of ['alinda','xalinda','xavier']){
+  const p=sharedReading();p.register_revision=0;
+  const ui=await screen(username,[],'?view=report',null,p);
+  assert.equal(ui.document.querySelector('#pa-rabbi').textContent,'Rabbi');
+  await ui.document.querySelector('#pa-rabbi').onclick();
+  assert.equal(ui.document.querySelector('h1').textContent,'Rabbi');
+  assert.match(ui.document.querySelector('.pa-rabbi').textContent,/Practical detail/);
+  assert.equal(ui.document.querySelector('#pa-rabbi').getAttribute('aria-current'),'page');
+  assert.equal(ui.document.querySelector('.pa-rabbi [data-pa-action]'),null);
+  assert.equal(ui.document.querySelector('.pa-rabbi a'),null);
+  assert.equal(ui.document.querySelector('.pa-rabbi script'),null);
+  assert.equal(ui.document.querySelector('.pa-full-report'),null);
+  assert.equal(ui.document.querySelector('.pa-register'),null);
+  assert.doesNotMatch(ui.document.querySelector('#app').textContent,/Private matter|Alle onafgehandelde take|Replies save immediately|Open original report/);
+  await ui.document.querySelector('#pa-report-date').onchange({target:{value:'2026-11-04'}});
+  assert.ok(ui.getPaths.includes('/api/pa-report?date=2026-11-04'));
+  assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');
+  await ui.document.querySelector('#pa-tasks').onclick();assert.ok(ui.document.querySelector('.pa-register'));
+  await ui.document.querySelector('#pa-report').onclick();assert.equal(ui.document.querySelector('.pa-full-report'),null);
+ }
+});
+test('shared Rabbi deep links retain their original date and show a useful empty state',async()=>{
+ const p=sharedReading();
+ let ui=await screen('xavier',[],'?view=report&case=report-2026-11-05:report-item-4',null,p);
+ assert.equal(new URL(location.href).searchParams.get('view'),'rabbi');assert.ok(ui.document.querySelector('.pa-rabbi #report-item-4'));
+ p.rabbi=null;ui=await screen('xalinda',[],'?view=rabbi&date=2026-11-04',null,p);
+ assert.match(ui.document.querySelector('.pa-rabbi').textContent,/has not been published/);
+ assert.equal(ui.document.querySelector('#pa-report-date option[selected]').value,'2026-11-04');
+});
+
+
+test('normal completed work is immediately separated from open tasks pending PA sync',async()=>{
+ const p=paState();p.rows=[{id:'TSK-00010',subject_key:'TSK-00010',subject_hash:'hash-simple',scope:'fenmeat',title:'Vervang kantoorstoel',status:'Pending',assigned_to:'alex',review_group:'Kantoor',next_action:'Koop die stoel.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'}];
+ p.feedback=[{id:'f1',subject_key:'TSK-00010',subject_hash:'hash-simple',action:'complete',status:'pending',actor:'alex',note:'',created_at:'2026-11-10T12:00:00Z'}];
+ const ui=await screen('alex',[],'',null,p);
+ assert.equal(ui.document.querySelector('.pa-work-row'),null);
+ assert.match(ui.document.querySelector('.counts').textContent,/1 Klaar gemeld/);
+ ui.document.querySelector('#pa-status').onchange({target:{value:'submitted'}});
+ const item=ui.document.querySelector('.pa-work-row');assert.match(item.textContent,/Vervang kantoorstoel/);
+ assert.match(item.textContent,/Jy het die taak klaar gemerk/);
+ assert.equal(item.querySelector('[data-pa-action="complete"]'),null);
+ ui.document.querySelector('#pa-status').onchange({target:{value:'closed'}});
+ assert.equal(ui.document.querySelector('.pa-work-row'),null);
+});
+test('unverified orders stay open despite completion confirmation',async()=>{
+ const p=paState();p.rows=[{id:'TSK-00011',subject_key:'TSK-00011',subject_hash:'hash-po',scope:'fenmeat',title:'Stuur bestelling PO-00480',status:'Pending',assigned_to:'alex',review_group:'Bestelling',next_action:'Bevestig die aflewering.',source_url:'https://docs.google.com/spreadsheets/d/test/edit'}];
+ p.feedback=[{id:'f2',subject_key:'TSK-00011',subject_hash:'hash-po',action:'complete',status:'pending',actor:'alex',note:'',created_at:'2026-11-10T12:00:00Z'}];
+ const ui=await screen('alex',[],'',null,p),item=ui.document.querySelector('.pa-work-row');
+ assert.ok(item);assert.match(item.textContent,/Stuur bestelling PO-00480/);
+ assert.match(item.textContent,/Hierdie taak bly oop totdat PA/);
+ assert.equal(item.querySelector('[data-pa-action="complete"]'),null);
+});
+test('complete form needs no Done text',async()=>{
+ const ui=await screen('alex',[],'',null,paState());
+ ui.document.querySelector('[data-pa-action="complete"]').onclick();
+ const form=ui.dialog.querySelector('form');
+ assert.equal(form.querySelector('[name="note"]').hasAttribute('required'),false);
+ await form.onsubmit({preventDefault(){}});
+ assert.equal(ui.posts[0].action,'complete');
+ assert.equal(ui.posts[0].note,'');
+});
+
+test('admins can open the original task editor from report, conversation and closed work with fresh values',async()=>{
+ for(const username of ['alex','alinda']){
+  const p=paState(),row=p.rows[0];row.status='Complete';row.app_task_id='synthetic-edit-task';p.report.sections[0].items[0].pa_task_ids=[row.id];
+  const task={id:row.app_task_id,pa_task_id:row.id,title:'Existing task title',details:'Keep this original sentence.',assigned_to:'alinda',created_by:'alex',status:'Complete',kind:'general',task_type:'legacy',priority:'High',due_date:'',review_date:'2099-11-02',requires_evidence:true,revision:4,pa_sync:{status:'synced'}};
+  const ui=await screen(username,[task],'?view=report',null,p);
+  ui.document.querySelector('#pa-status').onchange({target:{value:'closed'}});
+  const button=ui.document.querySelector('[data-edit-task]');assert.ok(button);await button.onclick();
+  let form=ui.dialog.querySelector('form');assert.equal(form.elements.title.value,task.title);assert.equal(form.elements.due_date.value,'');assert.equal(form.elements.review_date.value,task.review_date);assert.equal(form.elements.edit_reason.required,true);
+  assert.ok(ui.getPaths.includes('/api/tasks?id='+task.id));
+  ui.dialog.close();ui.document.querySelector('[data-open-case]')?.onclick();
+  if(username==='alex'){const edit=[...ui.dialog.querySelectorAll('button')].find(b=>b.textContent==='Wysig oorspronklike taak');assert.ok(edit);await edit.onclick();assert.equal(ui.dialog.querySelector('form').elements.title.value,task.title);}
+ }
+});
+test('the original task edit action is absent for staff and private PA-only subjects create no task',async()=>{
+ const p=paState();p.private_report=false;p.rows=[{...p.rows[0],assigned_to:'xavier'}];p.report=null;p.history=[];
+ const task={id:'synthetic-restricted-task',pa_task_id:p.rows[0].id,assigned_to:'xavier',created_by:'alex',status:'Pending',kind:'general',revision:1};
+ const ui=await screen('xavier',[task],'',null,p);ui.document.querySelector('#pa-status').onchange({target:{value:'all'}});assert.equal(ui.document.querySelector('[data-edit-task]'),null);
+ ui.document.querySelector('[data-pa-action="respond"]').onclick();assert.doesNotMatch(ui.dialog.textContent,/Wysig oorspronklike taak/);assert.equal(ui.posts.length,0);
+});

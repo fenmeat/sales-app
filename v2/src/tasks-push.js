@@ -1,0 +1,83 @@
+import {projectTask,localDate} from './task-workflow.js';
+import {buildPushPayload} from './webpush-bundle.js';
+import {check,UserError} from './domain.js';
+import {hash} from './auth.js';
+import {ensureTaskSchema,taskUsers,currentTaskNotification} from './tasks-api.js';
+import {ensurePaReportSchema,queuePaReportReminders,reportAlertVisible} from './pa-report-api.js';
+
+const b64=bytes=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
+export function allowedPushEndpoint(value){
+ try{const u=new URL(value);return u.protocol==='https:'&&!u.username&&!u.password&&(!u.port||u.port==='443')&&value.length<2000&&(/^(?:fcm\.googleapis\.com|updates\.push\.services\.mozilla\.com|[a-z0-9-]+\.notify\.windows\.com|[a-z0-9-]+\.push\.apple\.com|web\.push\.apple\.com)$/.test(u.hostname));}catch{return false;}
+}
+async function pushKeys(db){
+ let row=await db.prepare('SELECT payload FROM v2_task_push_keys WHERE id=1').first();
+ if(!row){const pair=await crypto.subtle.generateKey({name:'ECDSA',namedCurve:'P-256'},true,['sign','verify']);const publicKey=b64(await crypto.subtle.exportKey('raw',pair.publicKey)),privateKey=(await crypto.subtle.exportKey('jwk',pair.privateKey)).d;
+  await db.prepare('INSERT OR IGNORE INTO v2_task_push_keys VALUES(1,?)').bind(JSON.stringify({publicKey,privateKey})).run();row=await db.prepare('SELECT payload FROM v2_task_push_keys WHERE id=1').first();}
+ return JSON.parse(row.payload);
+}
+export async function pushApi({request,env,user,bodyOf}){
+ check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
+ if(request.method==='GET')return {public_key:(await pushKeys(env.DB)).publicKey};
+ check(request.method==='POST','Method not allowed.',405);const b=await bodyOf(request);
+ check(allowedPushEndpoint(b.endpoint),'This browser notification service is not supported.');const endpointHash=await hash(b.endpoint);
+ if(b.remove){await env.DB.prepare('DELETE FROM v2_task_push_subscriptions WHERE endpoint_hash=? AND username=?').bind(endpointHash,user.username).run();return {saved:true};}
+ check(b.keys&&/^[A-Za-z0-9_-]{80,100}$/.test(b.keys.p256dh??'')&&/^[A-Za-z0-9_-]{20,30}$/.test(b.keys.auth??''),'Invalid browser notification subscription.');
+ const existing=await env.DB.prepare('SELECT username FROM v2_task_push_subscriptions WHERE endpoint_hash=?').bind(endpointHash).first();
+ if(existing?.username!==user.username){const count=await env.DB.prepare('SELECT COUNT(*) n FROM v2_task_push_subscriptions WHERE username=?').bind(user.username).first();check(count.n<3,'Notifications are already enabled on three browsers. Disable one before adding another.');}
+ // This browser belongs to the person currently signed in. Never retain two owners.
+ await env.DB.prepare('INSERT INTO v2_task_push_subscriptions VALUES(?,?,?,?) ON CONFLICT(endpoint_hash) DO UPDATE SET username=excluded.username,payload=excluded.payload,updated_at=excluded.updated_at').bind(endpointHash,user.username,JSON.stringify({endpoint:b.endpoint,keys:b.keys}),new Date().toISOString()).run();return {saved:true};
+}
+export async function flushTaskPush(env){
+ await ensureTaskSchema(env.DB);
+ await ensurePaReportSchema(env.DB);
+ const now=new Date().toISOString();
+ const due=await env.DB.prepare('SELECT n.* FROM v2_task_notifications n WHERE n.push_sent_at IS NULL AND n.read_at IS NULL AND (n.next_attempt IS NULL OR n.next_attempt<=?) AND EXISTS(SELECT 1 FROM v2_task_push_subscriptions s WHERE s.username=n.username) ORDER BY n.created_at LIMIT 5').bind(now).all();
+ const reportDue=await env.DB.prepare('SELECT n.* FROM v2_pa_report_alerts n WHERE n.push_sent_at IS NULL AND n.read_at IS NULL AND (n.next_attempt IS NULL OR n.next_attempt<=?) AND EXISTS(SELECT 1 FROM v2_task_push_subscriptions s WHERE s.username=n.username) ORDER BY n.created_at LIMIT 5').bind(now).all();
+ due.results.push(...reportDue.results.map(n=>({...n,pa_report:true})));
+ if(!due.results.length)return {sent:0};const vapid=await pushKeys(env.DB);let sent=0;
+ for(const n of due.results){
+  if(!taskUsers(env).includes(n.username))continue;
+  const latest=n.pa_report?null:await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 1').bind(n.task_id).first();
+  const valid=n.pa_report?await reportAlertVisible(env,n):currentTaskNotification(latest?JSON.parse(latest.payload):null,n);
+  const table=n.pa_report?'v2_pa_report_alerts':'v2_task_notifications';
+  if(!valid){
+   // Withdraw an undelivered notification after completion, reassignment or rescheduling.
+   await env.DB.prepare(`DELETE FROM ${table} WHERE id=? AND push_sent_at IS NULL`).bind(n.id).run();continue;
+  }
+  const subscriptions=await env.DB.prepare('SELECT * FROM v2_task_push_subscriptions WHERE username=?').bind(n.username).all();let failed=false;
+  for(const row of subscriptions.results){
+   try{const subscription=JSON.parse(row.payload);if(!allowedPushEndpoint(subscription.endpoint))throw new UserError('Invalid push endpoint.');
+    const payload=await buildPushPayload({data:JSON.stringify({title:'FenMeat Tasks',body:n.pa_report?(n.kind==='remind'?'You have a report follow-up reminder.':n.kind==='request_update'?'Please give a quick task update.':'Your report has new feedback.'):n.kind==='update_requested'?'Please give a quick update on your task.':n.kind==='response'?'A task has new feedback.':n.kind==='follow_up'?'Reminder: follow up this task.':['due','step_due'].includes(n.kind)?'Daar is ’n taakstap om vandag te doen.':n.kind==='completed'?'A task you created is complete.':n.kind==='assigned'?'A task has been assigned to you.':'A task has an update.',tag:n.id,url:n.pa_report?'/tasks?view=report&case='+encodeURIComponent(n.subject_key):'/tasks?task='+encodeURIComponent(n.task_id)}),options:{ttl:86400}},subscription,{...vapid,subject:'https://fenmeat-sales-test.alexander-fenwick.workers.dev'});
+    const response=await fetch(subscription.endpoint,{...payload,redirect:'manual'});
+    if([404,410].includes(response.status))await env.DB.prepare('DELETE FROM v2_task_push_subscriptions WHERE endpoint_hash=?').bind(row.endpoint_hash).run();
+    else if(!response.ok)failed=true;
+   }catch{failed=true;}
+  }
+  const next=new Date(Date.now()+Math.min(3600,60*2**Math.min(n.push_attempts,6))*1000).toISOString();
+  await env.DB.prepare(`UPDATE ${table} SET push_attempts=push_attempts+1,next_attempt=?,push_sent_at=? WHERE id=?`).bind(failed?next:null,failed?null:now,n.id).run();if(!failed)sent++;
+ }
+ return {sent};
+}
+export async function queueTaskReminders(env,now=new Date()){
+ await ensureTaskSchema(env.DB);const local=new Date(now.getTime()+7200000).toISOString(),date=local.slice(0,10),statements=[];
+ if(local.slice(11,16)>='08:00')statements.push(env.DB.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
+ SELECT 'reminder-'||e.task_id||'-'||?,json_extract(e.payload,'$.assigned_to'),e.task_id,'due',?
+ FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision
+ WHERE json_extract(e.payload,'$.status') IN ('Pending','Scheduled','Waiting') AND COALESCE(json_extract(e.payload,'$.reminder_mode'),'daily')='daily' AND
+ (CASE WHEN json_extract(e.payload,'$.status')='Waiting' THEN json_extract(e.payload,'$.review_date') ELSE COALESCE(NULLIF(json_extract(e.payload,'$.due_date'),''),json_extract(e.payload,'$.review_date')) END) BETWEEN '2000-01-01' AND ?`).bind(date,now.toISOString(),date));
+ statements.push(env.DB.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
+ SELECT 'reminder-once-'||e.task_id||'-'||strftime('%s',json_extract(e.payload,'$.reminder_at')),json_extract(e.payload,'$.assigned_to'),e.task_id,'due',?
+ FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision
+ WHERE json_extract(e.payload,'$.status') IN ('Pending','Scheduled','Waiting') AND json_extract(e.payload,'$.reminder_mode')='once' AND json_extract(e.payload,'$.reminder_at')<=?`).bind(now.toISOString(),now.toISOString()));
+ statements.push(env.DB.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
+ SELECT 'followup-'||e.task_id||'-'||f.key||'-'||strftime('%s',f.value),f.key,e.task_id,'follow_up',?
+ FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision, json_each(e.payload,'$.followup_reminders') f
+ WHERE json_extract(e.payload,'$.status') IN ('Pending','Scheduled','Waiting') AND f.key IN ('alex','alinda') AND f.value<=?`).bind(now.toISOString(),now.toISOString()));
+ const latest=(await env.DB.prepare(`SELECT e.task_id,e.payload FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision WHERE json_extract(e.payload,'$.status') NOT IN ('Complete','Cancelled')`).all()).results;
+ if(local.slice(11,16)>='08:00')for(const row of latest){const task=projectTask(JSON.parse(row.payload),date);if(task.reminder_mode==='off'||task.status!=='Pending')continue;
+  if(task.task_type==='workflow')for(const step of task.steps.filter(s=>s.effective_status==='Pending'&&!s.blocked))statements.push(env.DB.prepare('INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind('step-'+task.id+'-'+step.id+'-'+date+'-'+step.assigned_to,step.assigned_to,task.id,'step_due',now.toISOString()));
+  else if(task.task_type==='reminder'&&task.reminder_mode!=='once')statements.push(env.DB.prepare('INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind('reminder-'+task.id+'-'+date,task.assigned_to,task.id,'due',now.toISOString()));
+ }
+ await env.DB.batch(statements);
+ await queuePaReportReminders(env,now);
+}
