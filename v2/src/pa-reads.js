@@ -4,6 +4,7 @@ import {productionApi} from './production-api.js';
 import {orderGuyApi,readRegister} from './order-guy-api.js';
 import {recipeCost} from './order-guy.js';
 import {isAdmin} from './auth.js';
+import {forecastEvidence} from './forecast-evidence.js';
 
 // A second boundary: even a future mistake in a business read cannot write D1.
 export function readOnlyDatabase(db) {
@@ -34,7 +35,7 @@ export async function readPaData(name, args, env, username) {
   if(name==='get_forecast') {
     check(c.routes.some(r=>r.code===args.route),'Choose a route code from get_catalog.');
     const d=date(),[forecast,saved]=await Promise.all([forecastResult(db,d,args.route,c),runResult(db,d,args.route)]);
-    return result({date:d,route:args.route,forecast,saved,saved_plan_changed:false});
+    return result({date:d,route:args.route,forecast,saved,saved_plan_changed:false,evidence:await forecastEvidence(db,d,args.route)});
   }
   if(name==='get_production') {
     const plan=await production(date());return result({...plan,source_kind:plan.revision?'saved_plan':'unsaved_suggestion'});
