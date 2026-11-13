@@ -24,7 +24,7 @@ export function effectiveHistory(imported, events, {from, to, asOf}) {
       if(!isQty(qty)||item.returned===null||item.adjustment!==0){excluded.push({date:run.date,product:item.code,reason:'Incomplete or adjusted stock movement.'});continue;}
       if(run.recon?.complete&&comparison?.variance!==0){excluded.push({date:run.date,product:item.code,reason:'Stock and invoice quantities differ.'});continue;}
       const matched=run.recon?.complete&&comparison?.variance===0;
-      rows.set(key,{date:run.date,product:item.code,qty,quality:matched?'verified':'provisional',source:matched?'v2_stock_matched':'v2_confirmed_returns',constrained:item.sold_out===true||item.returned===0});
+      rows.set(key,{date:run.date,product:item.code,qty,quality:matched?'verified':'provisional',source:matched?'v2_stock_matched':'v2_confirmed_returns',constrained:item.sold_out===true||item.returned===0,loaded:item.loaded,returned:item.returned,stockout_basis:item.sold_out===true?'reported':item.returned===0?'zero_returns':null});
     }
   }
   return {rows:[...rows.values()].sort((a,b)=>a.date.localeCompare(b.date)||a.product.localeCompare(b.product)),excluded};

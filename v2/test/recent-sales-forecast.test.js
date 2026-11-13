@@ -74,7 +74,7 @@ test('compact product details explain the allowance once and distinguish old sav
  for(const name of ['forecastDetails','forecastWarnings']){const start=source.indexOf('function '+name+'('),end=source.indexOf('\nfunction ',start+1);vm.runInContext(source.slice(start,end),context);}
  const item={forecast:forecast(observations([10,10,10,10,30],true),target)};
  assert.match(context.forecastDetails(item),/30 sold \+ 5 safety units = 35/);
- assert.match(context.forecastWarnings(item),/Stockout allowance included · minimum 35/);
+ assert.match(context.forecastWarnings(item),/Stockout allowance included in suggestion/);
  assert.doesNotMatch(context.forecastWarnings(item),/review quantity/);
  assert.match(context.forecastWarnings({forecast:{qty:21,last_qty:30,last_constrained:true}}),/Historical suggestion/);
 });

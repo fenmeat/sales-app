@@ -1,6 +1,6 @@
 {
   "name": "fenmeat-sales-test",
-  "version": "0.39.4",
+  "version": "0.39.5",
   "private": true,
   "type": "module",
   "scripts": {
