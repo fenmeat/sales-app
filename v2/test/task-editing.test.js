@@ -1,0 +1,47 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {fixture} from './helpers/report-fixture.js';
+const write=(call,id,revision,action,extra={},user='alex')=>call(user,'/api/tasks',{task_id:id,revision,action,request_id:crypto.randomUUID(),...extra});
+test('admin evidence edits persist, retain history and allow only the edited task to complete',async t=>{
+ const {call,task,db}=await fixture(t),b=task({requires_evidence:true,pa_task_id:'TSK-00987',details:'Original confirmed instruction',document_url:'https://example.com/doc.pdf'}),other=task({requires_evidence:true});
+ await call('alex','/api/tasks',b);await call('alex','/api/tasks',other);
+ const get=()=>call('alex','/api/tasks?id='+b.task_id);
+ assert.equal((await get()).data.task.requires_evidence,true);
+ assert.equal((await call('xavier','/api/tasks?id='+b.task_id)).status,404);
+ assert.equal((await write(call,b.task_id,1,'update',{data:{requires_evidence:false},note:'Not authorised'},'xalinda')).status,403);
+ assert.equal((await write(call,b.task_id,1,'update',{data:{requires_evidence:false}})).status,400);
+ const edit={task_id:b.task_id,revision:1,request_id:crypto.randomUUID(),action:'update',data:{requires_evidence:false},note:'Owner accepts the recorded confirmation for this task.'};
+ assert.equal((await call('alinda','/api/tasks',edit)).status,200);assert.equal((await call('alinda','/api/tasks',edit)).data.replayed,true);
+ const saved=(await get()).data.task;assert.equal(saved.requires_evidence,false);assert.equal(saved.pa_sync.status,'pending');assert.equal(saved.pa_task_id,'TSK-00987');assert.equal(saved.details,b.data.details);assert.equal(saved.document_url,b.data.document_url);
+ assert.equal((await write(call,b.task_id,1,'update',{data:{title:'Stale'}})).status,409);
+ assert.equal((await write(call,b.task_id,2,'complete',{note:'Both authorised people confirmed receipt.'})).status,200);
+ assert.equal((await write(call,other.task_id,1,'complete')).status,400);
+ const complete=(await get()).data.task.completion;
+ assert.equal((await write(call,b.task_id,3,'update',{data:{title:'Correction'},note:'Correct the title.'},'alinda')).status,200);
+ assert.deepEqual((await get()).data.task.completion,complete);assert.equal((await get()).data.task.status,'Complete');
+ const audit=(await call('alex','/api/tasks/audit?id='+b.task_id)).data.history;
+ assert.equal(audit.length,4);assert.equal(audit[2].actor,'alinda');assert.equal(audit[2].task.last_edit.previous_revision,1);assert.ok(audit[2].changes.some(c=>c.field==='requires_evidence'&&c.before===true&&c.after===false));assert.equal(audit[3].task.requires_evidence,true);
+ assert.equal((await db.prepare('SELECT COUNT(DISTINCT task_id) n FROM v2_task_events').first()).n,2);
+});
+test('step edits preserve completed evidence and cannot skip dependencies or silently remove required work',async t=>{
+ const {call,task}=await fixture(t),b=task({task_type:'workflow',requires_evidence:true,pa_task_id:'TSK-00988'});await call('alex','/api/tasks',b);
+ assert.equal((await write(call,b.task_id,1,'step_update',{step_id:'step-1',data:{requires_evidence:false}})).status,400);
+ assert.equal((await write(call,b.task_id,1,'step_update',{step_id:'step-1',data:{requires_evidence:false},note:'Recorded confirmation is sufficient.'},'alinda')).status,200);
+ assert.equal((await write(call,b.task_id,2,'step_add',{step_id:'pay',data:{description:'Confirm payment',assigned_to:'alinda',status:'Pending',required:true,requires_evidence:true,dependencies:['step-1']}})).status,200);
+ assert.equal((await write(call,b.task_id,3,'step_complete',{step_id:'pay',proof_url:'https://example.com/proof'})).status,400);
+ assert.equal((await write(call,b.task_id,3,'step_complete',{step_id:'step-1',note:'Receipt confirmed.'})).status,200);
+ assert.equal((await write(call,b.task_id,4,'step_complete',{step_id:'pay'})).status,400);
+ assert.equal((await write(call,b.task_id,4,'step_update',{step_id:'pay',data:{required:false}})).status,400);
+ assert.equal((await write(call,b.task_id,4,'step_complete',{step_id:'pay',proof_url:'https://example.com/proof'})).status,200);
+ const before=(await call('alex','/api/tasks?id='+b.task_id)).data.task;
+ assert.equal((await write(call,b.task_id,5,'step_update',{step_id:'pay',data:{description:'Corrected payment description'},note:'Correct wording, keep the payment evidence.'},'alinda')).status,200);
+ const after=(await call('alex','/api/tasks?id='+b.task_id)).data.task;assert.deepEqual(after.steps.map(s=>s.completion),before.steps.map(s=>s.completion));assert.deepEqual(after.completion,before.completion);assert.equal(after.status,'Complete');
+ assert.equal((await write(call,b.task_id,6,'step_update',{step_id:'pay',data:{status:'Pending'},note:'Wrong action'})).status,400);
+ assert.equal((await write(call,b.task_id,6,'step_update',{step_id:'pay',data:{description:'Staff edit'},note:'Attempt'},'xalinda')).status,403);
+});
+test('editing an attachment flag does not disable PO dispatch controls',async t=>{
+ const {call,task}=await fixture(t),b=task({kind:'po_dispatch',assigned_to:'alinda',requires_evidence:true,po_number:'PO-00999',po_revision:'approved',document_url:'https://example.com/po',parent_cycle_id:'TSK-00999'});await call('alex','/api/tasks',b);
+ assert.equal((await write(call,b.task_id,1,'update',{data:{requires_evidence:false},note:'Use dispatch confirmation.'})).status,200);
+ assert.equal((await write(call,b.task_id,2,'complete')).status,409);
+ assert.equal((await write(call,b.task_id,2,'update',{data:{kind:'general'},note:'Bypass'})).status,400);
+});

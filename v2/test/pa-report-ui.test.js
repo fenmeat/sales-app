@@ -38,6 +38,7 @@ async function screen(username,tasks=[],view='',mailPages=null,paState=null){
   }
   getPaths.push(path);
   if(path.startsWith('/api/pa-report'))return {ok:true,json:async()=>structuredClone(paState||{register_revision:0})};
+  if(path.startsWith('/api/tasks?id='))return {ok:true,json:async()=>({task:structuredClone(state.tasks.find(t=>t.id===decodeURIComponent(path.split('=')[1])))})};
   if(path.startsWith('/api/tasks/emails'))return {ok:true,json:async()=>mailPages?structuredClone(mailPages[path]):({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
   return {ok:true,json:async()=>structuredClone(state)};
  };
@@ -202,4 +203,24 @@ test('complete form needs no Done text',async()=>{
  await form.onsubmit({preventDefault(){}});
  assert.equal(ui.posts[0].action,'complete');
  assert.equal(ui.posts[0].note,'');
+});
+
+test('admins can open the original task editor from report, conversation and closed work with fresh values',async()=>{
+ for(const username of ['alex','alinda']){
+  const p=paState(),row=p.rows[0];row.status='Complete';row.app_task_id='synthetic-edit-task';p.report.sections[0].items[0].pa_task_ids=[row.id];
+  const task={id:row.app_task_id,pa_task_id:row.id,title:'Existing task title',details:'Keep this original sentence.',assigned_to:'alinda',created_by:'alex',status:'Complete',kind:'general',task_type:'legacy',priority:'High',due_date:'',review_date:'2099-11-02',requires_evidence:true,revision:4,pa_sync:{status:'synced'}};
+  const ui=await screen(username,[task],'?view=report',null,p);
+  ui.document.querySelector('#pa-status').onchange({target:{value:'closed'}});
+  const button=ui.document.querySelector('[data-edit-task]');assert.ok(button);await button.onclick();
+  let form=ui.dialog.querySelector('form');assert.equal(form.elements.title.value,task.title);assert.equal(form.elements.due_date.value,'');assert.equal(form.elements.review_date.value,task.review_date);assert.equal(form.elements.edit_reason.required,true);
+  assert.ok(ui.getPaths.includes('/api/tasks?id='+task.id));
+  ui.dialog.close();ui.document.querySelector('[data-open-case]')?.onclick();
+  if(username==='alex'){const edit=[...ui.dialog.querySelectorAll('button')].find(b=>b.textContent==='Wysig oorspronklike taak');assert.ok(edit);await edit.onclick();assert.equal(ui.dialog.querySelector('form').elements.title.value,task.title);}
+ }
+});
+test('the original task edit action is absent for staff and private PA-only subjects create no task',async()=>{
+ const p=paState();p.private_report=false;p.rows=[{...p.rows[0],assigned_to:'xavier'}];p.report=null;p.history=[];
+ const task={id:'synthetic-restricted-task',pa_task_id:p.rows[0].id,assigned_to:'xavier',created_by:'alex',status:'Pending',kind:'general',revision:1};
+ const ui=await screen('xavier',[task],'',null,p);ui.document.querySelector('#pa-status').onchange({target:{value:'all'}});assert.equal(ui.document.querySelector('[data-edit-task]'),null);
+ ui.document.querySelector('[data-pa-action="respond"]').onclick();assert.doesNotMatch(ui.dialog.textContent,/Wysig oorspronklike taak/);assert.equal(ui.posts.length,0);
 });

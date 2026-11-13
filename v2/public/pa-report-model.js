@@ -13,9 +13,10 @@ export function unifiedWork(app,pa){
   const completion_requested=paOpen(r)&&f?.action==='complete'&&f.status==='pending';
   const completion_pending=completion_requested&&f.actor===r.assigned_to&&stages.length===0&&!needsReview(r);
   const workflow=stages.find(t=>t.task_type==='workflow');
+  const edited=stages.length===1&&stages[0].last_edit&&stages[0].pa_sync?.status==='pending'&&stages[0].kind==='general'?stages[0]:null;
   const scheduled=['Pending','Scheduled'].includes(r.status)&&r.review_date>day;
-  const status=workflow?.status||(completion_pending?'Klaar gemeld':scheduled?'Scheduled':['Waiting','Scheduled'].includes(r.status)&&r.review_date&&r.review_date<=day?'Pending':r.status);
-  return {...r,...(workflow?{status:workflow.status,next_action:workflow.next_action,next_action_date:workflow.next_action_date,steps:workflow.steps,progress:workflow.progress,workflow_id:workflow.id,assigned_to:workflow.next_assigned_to||workflow.assigned_to}:{}),is_pa:true,details:r.next_action,supplier:r.review_group,stages,source_status:r.status,completion_requested,completion_pending,needs_completion_review:completion_requested&&!completion_pending,status};
+  const status=workflow?.status||edited?.status||(completion_pending?'Klaar gemeld':scheduled?'Scheduled':['Waiting','Scheduled'].includes(r.status)&&r.review_date&&r.review_date<=day?'Pending':r.status);
+  return {...r,...(edited?{title:edited.title,priority:edited.priority,assigned_to:edited.assigned_to,due_date:edited.due_date,review_date:edited.review_date,next_action:edited.status==='Complete'?'Afgehandel. PA werk die bestaande register by.':edited.details,app_edit_pending:true}:{}),...(workflow?{status:workflow.status,next_action:workflow.next_action,next_action_date:workflow.next_action_date,steps:workflow.steps,progress:workflow.progress,workflow_id:workflow.id,assigned_to:workflow.next_assigned_to||workflow.assigned_to}:{}),is_pa:true,details:r.next_action,supplier:r.review_group,stages,source_status:r.status,completion_requested,completion_pending,needs_completion_review:completion_requested&&!completion_pending,status};
  });
  for(const t of app.tasks)if(!knownApp.has(t.id)&&(!t.pa_task_id||!known.has(t.pa_task_id)))rows.push({...t,is_pa:false,scope:'fenmeat',review_group:'New app tasks',subject_key:t.id});
  return rows;

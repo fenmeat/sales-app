@@ -84,3 +84,41 @@ fixtures, offline drafting, reload and a lost successful POST response in mobile
 Chromium/WebKit profiles. No synthetic live business data or emails are required.
 Rollback should be a forward fix: old writers allow acknowledgement without an
 answer. Retain all additive tables and original data; never bulk restore D1.
+
+## Original task editing 0.40.0
+
+Admins Alex and Alinda can open **Wysig oorspronklike taak** from the current
+PA workspace lists, linked Daily Report items, a task conversation and the
+original task dialog, including completed work. The link resolves existing
+app/PA identities only. Unlinked private PA rows never become shared app tasks.
+A targeted authenticated GET reads the latest revision before opening the form.
+Save uses the existing guarded task event API and reads the saved task back.
+
+Admin metadata corrections to closed tasks retain their status, completion,
+attachments, PA identity and immutable prior events. Completed workflow steps
+allow metadata corrections with a reason; changing their status/dependencies
+uses the existing explicit reopen flow. Task-level evidence applies to ordinary
+tasks; workflows edit evidence on the selected step, without changing others.
+A reason is required to reduce an evidence/required-step/dependency control or
+correct completed work. PO sending confirmation, stocktake count receipts and
+workflow completion/dependency checks remain enforced on the server.
+
+Each edit records actor, server time, prior revision, reason and field-level
+before/after values in the existing event payload. History also computes field
+diffs for older events. The optional `evidence_url` is a prospective completion
+link; historical completion evidence is preserved. Existing API clients remain
+supported; no new tables or deployment-time business-data edits are needed.
+
+Meaningful linked edits enter the existing incremental pending_sync queue.
+While waiting for PA, an edited single general app task supplies its current
+view to the task list; PO dispatch remains a distinct step of its parent cycle.
+The PA bridge must update the same source row, preserving notes and confirmed
+answers, publish only the verified row through register_patch, then acknowledge
+the exact revision. No full Zoho/register sync or new automation is introduced.
+
+Regression coverage: task-editing.test.js (Worker/D1 permissions, evidence,
+readback, replays, revisions and retained completions), existing workflow/sync
+and UI suites, and qa-task-editing.mjs (real Worker/D1 saves through shipped
+browser forms on desktop, phone, iPhone and iPad profiles). Device profiles do
+not certify physical Apple hardware. Rollback is a forward fix retaining all
+new events, evidence links and prior data; do not bulk restore the database.

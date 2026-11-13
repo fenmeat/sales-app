@@ -40,6 +40,7 @@ async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={
   }
   if(path==='/api/tasks'&&expired)return {ok:false,status:401,json:async()=>({error:'Enter your PIN again.'})};
   if(path==='/api/invoicing/access/status')return {ok:true,json:async()=>({registered:true,name:username==='tapiz'?'Tapiz':'Musa'})};
+  if(path.startsWith('/api/tasks?id='))return {ok:true,json:async()=>({task:structuredClone(state.tasks.find(t=>t.id===decodeURIComponent(path.split('=')[1])))})};
   if(path.startsWith('/api/tasks/emails'))return {ok:true,json:async()=>mailPages?structuredClone(mailPages[path]):({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
   return {ok:true,json:async()=>structuredClone(state)};
  };
@@ -107,7 +108,7 @@ test('both admins keep Everyone, assignments and reminders while staff manage th
   document.querySelector('#new').onclick();const form=dialog.querySelector('form');assert.equal(form.elements.assigned_to.querySelectorAll('option').length,4);assert.equal(form.elements.reminder_mode.value,'daily');
  }
  const own={id:'synthetic-own-task',revision:1,title:'My work',details:'',assigned_to:'xavier',created_by:'xavier',status:'Pending',kind:'general',priority:'Normal',review_date:'2099-11-02',pa_sync:{status:'pending'}};
- const {document,dialog}=await screen('xavier',[own]);document.querySelector('[data-task]').onclick();assert.ok(document.querySelector('#cancel-task'));document.querySelector('#edit').onclick();assert.equal(dialog.querySelector('form').elements.title.value,'My work');
+ const {document,dialog}=await screen('xavier',[own]);document.querySelector('[data-task]').onclick();assert.ok(document.querySelector('#cancel-task'));await document.querySelector('#edit').onclick();assert.equal(dialog.querySelector('form').elements.title.value,'My work');
 });
 
 const reportTask=(overrides={})=>({id:'synthetic-report-task',revision:2,title:'Example task',details:'Some detail',assigned_to:'xavier',created_by:'alex',status:'Pending',kind:'general',priority:'Normal',due_date:'2099-11-02',review_date:'',pa_sync:{status:'synced'},...overrides});
@@ -205,7 +206,7 @@ test('task instruction photos reopen while pending, survive edits and stay separ
  const links=[...ui.dialog.querySelectorAll('a[href^="/api/tasks/file"]')];
  assert.deepEqual(links.map(a=>a.getAttribute('href')),ids.map(id=>'/api/tasks/file?id='+id));
  assert.match(ui.dialog.textContent,/Foto’s en dokumente/);
- ui.document.querySelector('#edit').onclick();
+ await ui.document.querySelector('#edit').onclick();
  assert.equal(ui.dialog.querySelectorAll('a[href^="/api/tasks/file"]').length,2);
  const form=ui.dialog.querySelector('form');form.elements.title.value='Updated instructions';await form.onsubmit({preventDefault(){}});
  assert.equal(ui.posts[0].action,'update');assert.equal(ui.posts[0].files,undefined);assert.equal(ui.posts[0].data.attachments,undefined);

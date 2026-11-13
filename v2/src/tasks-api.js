@@ -25,14 +25,24 @@ const ID=/^[a-zA-Z0-9-]{8,90}$/,PA_ID=/^TSK-\d{5,}$/;
 const statusSet=new Set(['Pending','Scheduled','Waiting','Complete','Cancelled']);
 const reminderFields=['reminder_mode','reminder_at'];
 const workflowFields=['task_type','repeat','pa_required'];
-const editable=[...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','required_materials','po_number','po_revision','document_url','source_url','parent_cycle_id','pa_task_id','requires_evidence',...reminderFields];
-const selfEditable=[...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','document_url','requires_evidence',...reminderFields];
+const editable=[...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','required_materials','po_number','po_revision','document_url','evidence_url','source_url','parent_cycle_id','pa_task_id','requires_evidence',...reminderFields];
+const selfEditable=[...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','document_url','evidence_url','requires_evidence',...reminderFields];
 export const managesOwnTask=(user,task)=>task.created_by===user.username&&task.assigned_to===user.username&&task.kind!=='po_dispatch';
 const latestSQL=`SELECT e.*,(SELECT MAX(c.revision) FROM v2_task_events c WHERE c.task_id=e.task_id AND c.action NOT IN ('reminder','followup_reminder')) AS pa_revision,s.acknowledged_revision,s.pa_task_id AS synced_pa_task_id,s.source_url AS synced_source_url,s.synced_at,s.last_error FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON e.task_id=l.task_id AND e.revision=l.revision LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`;
 const text=(value,max,required=false)=>{check(typeof value==='string'&&value.length<=max&&(!required||value.trim()),'Enter the required task details.');return value.trim();};
 const optionalText=(v,max)=>v===null||v===undefined?'':text(v,max);
 function safeURL(value){if(!value)return '';let u;try{u=new URL(value);}catch{throw new UserError('Enter a complete secure document link.');}check(u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<=2000,'Use a secure document link.');return u.href;}
 function decode(row){if(!row)return null;const raw=JSON.parse(row.payload);const task=projectTask({...raw,revision:row.revision,updated_at:row.saved_at,updated_by:row.actor,pa_task_id:row.synced_pa_task_id||raw.pa_task_id||''});return {...task,pa_sync:{acknowledged_revision:row.acknowledged_revision??0,status:!syncRequired(task)?'app_only':(row.acknowledged_revision??0)>=(row.pa_revision??row.revision)?'synced':'pending',synced_at:row.synced_at??null,error:row.last_error??null}};}
+
+// Compare stable field/step identities; prior payloads remain the authoritative history.
+export function taskChanges(before,after){
+ const changes=[],fields=[...editable,'status'];
+ const add=(field,a,b)=>{if(JSON.stringify(a??null)!==JSON.stringify(b??null))changes.push({field,before:a??null,after:b??null});};
+ for(const k of fields)add(k,before?.[k],after?.[k]);
+ const ids=new Set([...(before?.steps||[]),...(after?.steps||[])].map(s=>s.id));
+ for(const id of ids){const a=before?.steps?.find(s=>s.id===id),b=after?.steps?.find(s=>s.id===id);if(!a||!b)add('steps.'+id,a,b);else for(const k of ['description','assigned_to','due_date','status','required','dependencies','waiting_reason','notes','document_url','requires_evidence'])add('steps.'+id+'.'+k,a[k],b[k]);}
+ return changes;
+}
 
 export async function getTask(db,id){check(ID.test(id),'Invalid task.');return decode(await db.prepare(latestSQL+' WHERE e.task_id=?').bind(id).first());}
 function canSee(user,task){return isAdmin(user.username)||task.assigned_to===user.username||task.steps?.some(s=>s.assigned_to===user.username);}
@@ -83,7 +93,7 @@ function validateTask(raw,env){
  check(['Critical','High','Normal','Low'].includes(t.priority),'Choose a priority.');
  t.due_date=t.due_date?dateKey(t.due_date):'';t.review_date=t.review_date?dateKey(t.review_date):'';
  check(t.due_date||t.review_date,'Set a due date or a review date.');
- t.document_url=safeURL(t.document_url);t.source_url=safeURL(t.source_url);
+ t.document_url=safeURL(t.document_url);t.evidence_url=safeURL(t.evidence_url);t.source_url=safeURL(t.source_url);
  t.pa_task_id=optionalText(t.pa_task_id,40);t.parent_cycle_id=optionalText(t.parent_cycle_id,40);
  check(!t.pa_task_id||PA_ID.test(t.pa_task_id),'Invalid PA task link.');check(!t.parent_cycle_id||PA_ID.test(t.parent_cycle_id),'Invalid parent cycle.');
  t.requires_evidence=!!t.requires_evidence;t.supplier=optionalText(t.supplier,120).toLowerCase();
@@ -150,7 +160,7 @@ export async function saveTask(env,user,b){
   }else if(action==='update'){
    check(admin||managesOwnTask(user,old),'Only admins can change tasks assigned by someone else. You can change your reminder.',403);check(b.data&&Object.keys(b.data).every(k=>(admin?editable:selfEditable).includes(k)),'Unknown task field.');
    if(!admin)check(!Object.hasOwn(b.data,'assigned_to')||b.data.assigned_to===user.username,'You can only keep tasks assigned to yourself.',403);
-   check(!['Complete','Cancelled'].includes(old.status),'Reopen this task before changing its instructions.');
+   check(admin||!['Complete','Cancelled'].includes(old.status),'Reopen this task before changing its instructions.');
    task=validateTask({...old,...b.data},env);
    check(task.task_type===old.task_type&&task.kind===old.kind&&task.parent_cycle_id===old.parent_cycle_id&&task.pa_task_id===old.pa_task_id,'Keep the existing task type and PA identity.');
   }else if(action==='reminder'){
@@ -168,7 +178,7 @@ export async function saveTask(env,user,b){
   }else if(action==='complete'){
    check(taskType(old)!=='workflow','Merk die individuele stappe klaar.');
    check(openTask(old),'This task is already closed.');
-   const note=optionalText(b.note,2000),proof_url=safeURL(b.proof_url),attachments=Array.isArray(b.attachments)?b.attachments:[];
+   const note=optionalText(b.note,2000),proof_url=safeURL(b.proof_url||task.evidence_url),attachments=Array.isArray(b.attachments)?b.attachments:[];
    check(attachments.length<=12&&new Set(attachments).size===attachments.length&&attachments.every(x=>typeof x==='string'&&ID.test(x)),'Choose up to 12 different attachments.');
    check(attachments.every(id=>!task.attachments?.includes(id)),'Add completion evidence; the task instruction photos are not completion evidence.');
    for(const id of attachments){const file=await env.DB.prepare('SELECT task_id FROM v2_task_attachments WHERE id=?').bind(id).first();check(file?.task_id===task.id,'An attachment belongs to another task.');}
@@ -225,6 +235,14 @@ export async function saveTask(env,user,b){
  if(task.reminder_mode==='once'&&(!old||old.reminder_mode!=='once'||old.reminder_at!==task.reminder_at))check(Date.parse(task.reminder_at)>Date.parse(at),'Choose a reminder time in the future.');
  for(const key of ['revision','updated_at','updated_by','pa_sync','progress','next_action','next_action_date','next_assigned_to'])delete task[key];
  if(task.steps)task.steps=task.steps.map(({blocked,effective_status,...step})=>step);
+ if(old&&['update','step_add','step_update','start_workflow','restore_task_revision','status_override','reminder','followup_reminder'].includes(action)){
+  const reason=optionalText(b.note,2000),changes=taskChanges(old,task);
+  const reduced=old.requires_evidence&&!task.requires_evidence||(old.steps||[]).some(s=>{const n=task.steps?.find(n=>n.id===s.id);return n&&(s.requires_evidence&&!n.requires_evidence||s.required!==false&&n.required===false||(s.dependencies||[]).some(id=>!n.dependencies?.includes(id)));});
+  check(!reduced||reason,'Sê waarom die bewys- of stapvereiste verander.');
+  check(!(['Complete','Cancelled'].includes(old.status)&&['update','step_add','step_update'].includes(action))||reason,'Gee ’n rede wanneer jy ’n afgehandelde taak korrigeer.');
+  task.last_edit={by:user.username,at,reason,previous_revision:old.revision,changes};
+  task.last_reason=reason;
+ }
  const revision=b.revision+1;
  const statements=[env.DB.prepare('INSERT INTO v2_task_events(request_id,fingerprint,task_id,revision,action,payload,actor,saved_at) VALUES(?,?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,task.id,revision,action,JSON.stringify(task),user.username,at)];
  statements.push(...files.map(file=>insertAttachment(env.DB,task.id,user.username,at,file)));
@@ -262,6 +280,7 @@ export async function tasksApi({request,url,env,user,bodyOf}){
  const path=url.pathname;
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
  if(path==='/api/tasks/emails'&&request.method==='GET')return readTaskMail(env,user);
+ if(path==='/api/tasks'&&request.method==='GET'&&url.searchParams.has('id'))return {task:visible(user,await getTask(env.DB,url.searchParams.get('id')))};
  if(path==='/api/tasks'&&request.method==='GET')return listTasks(env,user,{offset:url.searchParams.get('offset')??0,mine:url.searchParams.get('mine')==='1'});
  if(path==='/api/tasks/file'&&request.method==='GET'){
   const id=url.searchParams.get('id');check(ID.test(id??''),'Invalid attachment.');
@@ -270,7 +289,7 @@ export async function tasksApi({request,url,env,user,bodyOf}){
  }
  if(path==='/api/tasks/audit'&&request.method==='GET'){
   const task=visible(user,await getTask(env.DB,url.searchParams.get('id')??''));
-  const rows=await env.DB.prepare('SELECT revision,action,actor,saved_at,payload FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 100').bind(task.id).all();return {task,history:rows.results.map(({payload,...r})=>({...r,task:JSON.parse(payload)}))};
+  const rows=await env.DB.prepare('SELECT revision,action,actor,saved_at,payload FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 101').bind(task.id).all();return {task,history:rows.results.slice(0,100).map(({payload,...r},i)=>{const saved=JSON.parse(payload),prior=rows.results[i+1];return {...r,task:saved,changes:prior?taskChanges(JSON.parse(prior.payload),saved):[],reason:saved.last_edit?.previous_revision===r.revision-1?saved.last_edit.reason:saved.last_reason||''};})};
  }
  check(request.method==='POST','Method not allowed.',405);const b=await bodyOf(request);
  if(path==='/api/tasks/check-count'){

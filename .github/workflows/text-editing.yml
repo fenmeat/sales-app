@@ -1,11 +1,12 @@
 name: Text editing browser acceptance
 on:
   push:
-    branches: [fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
+    branches: [fix/task-editing-20261113, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
     paths:
       - 'v2/public/tasks-app.js'
       - 'v2/public/pa-report-ui.js'
       - 'v2/scripts/qa-pa-conversations.mjs'
+      - 'v2/scripts/qa-task-editing.mjs'
       - 'v2/public/input-selection.js'
       - 'v2/public/invoicing/input-selection.js'
       - 'v2/scripts/qa-text-editing.mjs'
@@ -44,6 +45,10 @@ jobs:
         env:
           TEXT_BROWSER: ${{ matrix.browser }}
         run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-pa-conversations.mjs
+      - name: Check original task editing and real database readback
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-editing.mjs
       - uses: actions/upload-artifact@v5
         if: always()
         with:
@@ -51,4 +56,5 @@ jobs:
           path: |
             /tmp/fenmeat-text-editing/
             /tmp/fenmeat-pa-conversations/
+            /tmp/fenmeat-task-editing/
           retention-days: 7

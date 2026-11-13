@@ -19,6 +19,7 @@ export function validateSteps(steps,users){
  result.forEach(s=>visit(s.id));return result;
 }
 export async function workflowAction({task,b,user,admin,users,at,db}){
+ const originalCompletion=task.completion,originalStatus=task.status;
  const action=b.action,manage=admin||(task.created_by===user.username&&task.assigned_to===user.username);
  if(action==='start_workflow'){
   check(manage,'Net die eienaar of admin kan stappe opstel.',403);check(task.kind!=='stocktake','Behoud die bestaande voorraadtelling se bewysproses.');check(taskType(task)!=='workflow','Hierdie taak het reeds stappe.');check(b.note?.trim(),'Teken aan waarom die taak na stappe omgeskakel word.');
@@ -37,7 +38,12 @@ export async function workflowAction({task,b,user,admin,users,at,db}){
    if(action==='step_add'){check(manage,'Net die eienaar of admin kan stappe byvoeg.',403);check(b.data?.status!=='Complete','Voltooi die nuwe stap afsonderlik.');task.steps.push({...b.data,id:b.step_id,status:b.data?.status||'Pending',completion:null});}
    else{
     check(old,'Stap nie gevind nie.',404);check(admin||old.assigned_to===user.username,'Hierdie stap is aan iemand anders toegeken.',403);
-    if(action==='step_update'){check(manage,'Net die eienaar of admin kan stappe wysig.',403);check(old.status!=='Complete','Heropen hierdie stap om dit te verander.');check(b.data&&Object.keys(b.data).every(k=>['description','assigned_to','due_date','status','dependencies','waiting_reason','notes','document_url','required','requires_evidence'].includes(k)),'Ongeldige stapveld.');check(b.data.status!=='Complete','Gebruik die Klaar-knoppie.');task.steps[index]={...old,...b.data};}
+    if(action==='step_update'){check(manage,'Net die eienaar of admin kan stappe wysig.',403);check(admin||old.status!=='Complete','Heropen hierdie stap om dit te verander.');check(b.data&&Object.keys(b.data).every(k=>['description','assigned_to','due_date','status','dependencies','waiting_reason','notes','document_url','required','requires_evidence'].includes(k)),'Ongeldige stapveld.');check(b.data.status!=='Complete'||old.status==='Complete','Gebruik die Klaar-knoppie.');
+     if(old.status==='Complete'){
+      check(!b.data.status||b.data.status==='Complete','Gebruik Heropen stap om die voltooiing te verander.');
+      check((b.data.required===undefined||b.data.required===old.required)&&(b.data.dependencies===undefined||JSON.stringify(b.data.dependencies)===JSON.stringify(old.dependencies)),'Heropen die stap voordat jy sy afhanklikhede verander.');
+     }
+     task.steps[index]={...old,...b.data};}
     else if(action==='step_complete'){
      check(old.status!=='Complete','Hierdie stap is reeds klaar.',409);check(!projectTask(task).steps[index].blocked,'Voltooi eers die vorige vereiste stap.');
      const attachments=b.attachments||[];check(Array.isArray(attachments)&&attachments.length<=12,'Gebruik hoogstens 12 bewysstukke.');
@@ -49,7 +55,7 @@ export async function workflowAction({task,b,user,admin,users,at,db}){
    task.steps=validateSteps(task.steps,users);task.status_override=null;
   }
  }
- const projected=projectTask(task);task.status=projected.status;task.completion=task.status==='Complete'?{by:user.username,at,note:'Alle vereiste stappe afgehandel.'}:null;return task;
+ const projected=projectTask(task);task.status=projected.status;task.completion=task.status==='Complete'?(originalStatus==='Complete'&&originalCompletion?originalCompletion:{by:user.username,at,note:'Alle vereiste stappe afgehandel.'}):null;return task;
 }
 export function completeReminder(task,at){
  if(taskType(task)!=='reminder'||!task.repeat||task.repeat==='none')return task;
