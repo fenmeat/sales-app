@@ -56,6 +56,7 @@ export async function readConversation(env,user,key,offset=0){
  return {subject:current,feedback:list.results.slice(0,50).map(feedbackRow),next_offset:list.results.length>50?offset+50:null};
 }
 export async function readPaReport(env,user,query={}){
+ if(query.resource==='summary'&&query.id==='tasks-performance')return (await import('./task-performance.js')).taskPerformance(env,user);
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
  if(query.resource==='summary'&&query.id==='report-context'){
   check(user.username==='alex','Only Alex can read report context.',403);const register=await latest(env.DB,'register');
