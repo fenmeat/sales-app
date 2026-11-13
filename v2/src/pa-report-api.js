@@ -7,14 +7,17 @@ export const PA_REPORT_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_pa_report_versions (resource_key TEXT NOT NULL,revision INTEGER NOT NULL,request_id TEXT UNIQUE NOT NULL,fingerprint TEXT NOT NULL,payload TEXT NOT NULL,actor TEXT NOT NULL,saved_at TEXT NOT NULL,PRIMARY KEY(resource_key,revision))`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_feedback (id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,subject_key TEXT NOT NULL,subject_hash TEXT NOT NULL,payload TEXT NOT NULL,actor TEXT NOT NULL,created_at TEXT NOT NULL,acknowledged_at TEXT,outcome TEXT,source_url TEXT)`,
  `CREATE INDEX IF NOT EXISTS v2_pa_report_feedback_subject ON v2_pa_report_feedback(subject_key,created_at)`,
+ `CREATE INDEX IF NOT EXISTS v2_pa_report_feedback_recent ON v2_pa_report_feedback(created_at DESC,id DESC)`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_answers (feedback_id TEXT PRIMARY KEY,request_id TEXT UNIQUE NOT NULL,fingerprint TEXT NOT NULL,payload TEXT NOT NULL,created_at TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_attempts (request_id TEXT PRIMARY KEY,feedback_id TEXT NOT NULL,message TEXT NOT NULL,created_at TEXT NOT NULL)`,
  `CREATE INDEX IF NOT EXISTS v2_pa_report_attempts_feedback ON v2_pa_report_attempts(feedback_id,created_at)`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_files (id TEXT PRIMARY KEY,subject_key TEXT NOT NULL,actor TEXT NOT NULL,fingerprint TEXT NOT NULL,mime_type TEXT NOT NULL,filename TEXT NOT NULL,bytes BLOB NOT NULL,created_at TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_alerts (id TEXT PRIMARY KEY,username TEXT NOT NULL,subject_key TEXT NOT NULL,kind TEXT NOT NULL,created_at TEXT NOT NULL,read_at TEXT,push_sent_at TEXT,push_attempts INTEGER NOT NULL DEFAULT 0,next_attempt TEXT)`,
+ `CREATE INDEX IF NOT EXISTS v2_pa_report_alerts_unread ON v2_pa_report_alerts(username,read_at,created_at DESC)`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_reminders (username TEXT NOT NULL,subject_key TEXT NOT NULL,remind_at TEXT NOT NULL,request_id TEXT NOT NULL,PRIMARY KEY(username,subject_key))`
 ];
-export const ensurePaReportSchema=db=>db.batch(PA_REPORT_SCHEMA.map(s=>db.prepare(s)));
+const reportSchemaReady=new WeakMap();
+export async function ensurePaReportSchema(db){if(!reportSchemaReady.has(db))reportSchemaReady.set(db,db.batch(PA_REPORT_SCHEMA.map(s=>db.prepare(s))).catch(e=>{reportSchemaReady.delete(db);throw e;}));await reportSchemaReady.get(db);}
 const ID=/^[a-zA-Z0-9-]{8,90}$/,TSK=/^TSK-\d{5,}$/;
 const statuses=new Set(['Pending','Scheduled','Waiting','Complete','Cancelled','Archived']);
 const opened=t=>['Pending','Scheduled','Waiting'].includes(t.status);
@@ -49,6 +52,7 @@ function feedbackRow(r){const payload=JSON.parse(r.payload),answer=r.answer_payl
  answer_status:answer?'answered':r.processing_error?'retry':requiresAnswer(payload)?'awaiting_answer':r.acknowledged_at?'recorded':'pending',
  acknowledged_at:r.acknowledged_at,outcome:r.outcome,source_url:r.source_url,answer,answered_at:r.answered_at||null,processing_error:answer?null:r.processing_error||null};}
 async function feedbackById(db,id){return db.prepare(feedbackSelect+' WHERE f.id=?').bind(id).first();}
+export {feedbackSelect,feedbackRow,canSee as canSeePa,summary as paSummary};
 export async function readConversation(env,user,key,offset=0){
  const current=await subject(env,user,key);offset=Number(offset);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  // Private report comments are included in their linked task only for Alex.
@@ -56,6 +60,7 @@ export async function readConversation(env,user,key,offset=0){
  return {subject:current,feedback:list.results.slice(0,50).map(feedbackRow),next_offset:list.results.length>50?offset+50:null};
 }
 export async function readPaReport(env,user,query={}){
+ if(query.resource==='summary'&&/^tasks-workspace(?:-(open|scheduled|closed))?$/.test(query.id||''))return (await import('./task-workspace.js')).workspaceDiagnostic(env,user,{status:query.id.split('-')[2]||'open'});
  if(query.resource==='summary'&&query.id==='tasks-performance')return (await import('./task-performance.js')).taskPerformance(env,user);
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
  if(query.resource==='summary'&&query.id==='report-context'){
@@ -76,24 +81,38 @@ export async function readPaReport(env,user,query={}){
  if(query.resource==='file'){
   check(user.username==='alex','Only Alex can read private report evidence through PA.',403);const f=await file(env,user,query.id),bytes=new Uint8Array(f.bytes);let binary='';for(let n=0;n<bytes.length;n+=8192)binary+=String.fromCharCode(...bytes.slice(n,n+8192));return {id:f.id,filename:f.filename,mime_type:f.mime_type,subject_key:f.subject_key,base64:btoa(binary),byte_length:bytes.length,download_url:'/api/pa-report/file?id='+f.id};
  }
- const register=await latest(env.DB,'register'),rows=register?.rows.filter(r=>canSee(user,r))??[];
+ // One trip for independent reads. Alerts reuse these exact source versions;
+ // validating 100 alerts must not download the register 100 more times.
+ const [reg,all,alertRows,reminderRows,dateRows]=await env.DB.batch([
+  env.DB.prepare("SELECT * FROM v2_pa_report_versions WHERE resource_key='register' ORDER BY revision DESC LIMIT 1"),
+  env.DB.prepare(feedbackSelect+(query.view==='inbox'?' WHERE 0':' ORDER BY f.created_at DESC,f.id DESC LIMIT 2000')),
+  env.DB.prepare('SELECT * FROM v2_pa_report_alerts WHERE username=? AND read_at IS NULL ORDER BY created_at DESC LIMIT 100').bind(user.username),
+  env.DB.prepare('SELECT subject_key,remind_at,request_id FROM v2_pa_report_reminders WHERE username=?').bind(user.username),
+  env.DB.prepare("SELECT resource_key,MAX(revision) revision FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' GROUP BY resource_key ORDER BY resource_key DESC LIMIT 30")
+ ]);
+ const raw=reg.results[0],register=raw?{...JSON.parse(raw.payload),revision:raw.revision,saved_at:raw.saved_at}:null,rows=register?.rows.filter(r=>canSee(user,r))??[];
  const visible=new Set(rows.map(r=>r.id));
- const all=await env.DB.prepare(feedbackSelect+' ORDER BY f.created_at DESC,f.id DESC LIMIT 2000').all();
  const feedback=all.results.filter(r=>visible.has(r.subject_key)||(user.username==='alex'&&r.subject_key.startsWith('report-'))).map(feedbackRow);
- const alerts=(await env.DB.prepare('SELECT * FROM v2_pa_report_alerts WHERE username=? AND read_at IS NULL ORDER BY created_at DESC LIMIT 100').bind(user.username).all()).results;
- const reminders=(await env.DB.prepare('SELECT subject_key,remind_at FROM v2_pa_report_reminders WHERE username=?').bind(user.username).all()).results.filter(r=>visible.has(r.subject_key)||user.username==='alex'&&r.subject_key.startsWith('report-'));
- const currentAlerts=[];for(const a of alerts)if(await reportAlertVisible(env,a))currentAlerts.push(a);
- let report=null,history=[],rabbi=null,rabbi_history=[];
- const rabbi_access=canReadRabbi(user);
- if(rabbi_access){
-  const dates=(await env.DB.prepare("SELECT resource_key,MAX(revision) revision FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' GROUP BY resource_key ORDER BY resource_key DESC LIMIT 30").all()).results.map(r=>({date:r.resource_key.slice(7),revision:r.revision}));
-  const date=query.date?dateKey(query.date):dates[0]?.date,selected=date?await latest(env.DB,'report-'+date):null;
-  rabbi=rabbiReading(selected);rabbi_history=dates.map(({date})=>({date}));
-  if(user.username==='alex'){report=selected;history=dates;}
- }
+ const alerts=alertRows.results,reminders=reminderRows.results.filter(r=>visible.has(r.subject_key)||user.username==='alex'&&r.subject_key.startsWith('report-'));
+ const dates=dateRows.results.map(r=>({date:r.resource_key.slice(7),revision:r.revision}));
+ const rabbi_access=canReadRabbi(user),date=query.date?dateKey(query.date):dates[0]?.date;
+ const reportKeys=new Set(rabbi_access&&date?['report-'+date]:[]);
+ if(user.username==='alex')for(const a of alerts){const m=/^(report-\d{4}-\d{2}-\d{2}):/.exec(a.subject_key);if(m)reportKeys.add(m[1]);}
+ const keysToRead=[...reportKeys],reports=new Map();
+ if(keysToRead.length){const found=await env.DB.prepare(`SELECT v.* FROM v2_pa_report_versions v WHERE resource_key IN (${keysToRead.map(()=>'?').join(',')}) AND revision=(SELECT MAX(revision) FROM v2_pa_report_versions WHERE resource_key=v.resource_key)`).bind(...keysToRead).all();for(const r of found.results)reports.set(r.resource_key,{...JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at});}
+ const byId=new Map(rows.map(r=>[r.id,r])),byReminder=new Map(reminders.map(r=>[r.subject_key,r]));
+ const currentAlerts=alerts.filter(a=>{
+  const match=/^(report-\d{4}-\d{2}-\d{2}):(.+)$/.exec(a.subject_key);
+  const subject=byId.get(a.subject_key)||(user.username==='alex'&&match?reports.get(match[1])?.sections.flatMap(s=>s.items).find(i=>i.id===match[2]):null);
+  if(!subject)return false;if(a.kind==='pa_answer')return true;if(TSK.test(a.subject_key)&&!opened(subject))return false;
+  if(a.kind==='remind'){const r=byReminder.get(a.subject_key);return !!r&&a.id==='remind-'+r.request_id&&Date.parse(r.remind_at)<=Date.now();}return true;
+ });
+ const selected=date?reports.get('report-'+date)||null:null;
+ const report=user.username==='alex'?selected:null,history=user.username==='alex'?dates:[],rabbi=rabbi_access?rabbiReading(selected):null,rabbi_history=rabbi_access?dates.map(({date})=>({date})):[];
+ if(query.view==='inbox')return {alerts:currentAlerts,reminders:reminders.map(({request_id,...r})=>r)};
  for(const r of rows){const fingerprint=await hash(JSON.stringify(r));r.subject_key=r.id;r.subject_hash=fingerprint;}
  if(report)for(const s of report.sections)for(const i of s.items){i.subject_key='report-'+report.date+':'+i.id;i.subject_hash=await hash(JSON.stringify({...i,subject_key:undefined,subject_hash:undefined}));}
- return {username:user.username,admin:isAdmin(user.username),private_report:user.username==='alex',rabbi_access,rabbi,rabbi_history,today:today(),users:isAdmin(user.username)?users(env):[user.username],register_revision:register?.revision??0,source_at:register?.source_at??null,source_url:register?.source_url??null,summary:summary(rows),rows,feedback,report,history,reminders,alerts:currentAlerts};
+ return {username:user.username,admin:isAdmin(user.username),private_report:user.username==='alex',rabbi_access,rabbi,rabbi_history,today:today(),users:isAdmin(user.username)?users(env):[user.username],register_revision:register?.revision??0,source_at:register?.source_at??null,source_url:register?.source_url??null,summary:summary(rows),rows,feedback,report,history,reminders:reminders.map(({request_id,...r})=>r),alerts:currentAlerts};
 }
 function validateRegister(data,env){
  check(data&&Array.isArray(data.rows)&&data.rows.length>0&&data.rows.length<=2000,'Supply the complete bounded PA register.');
@@ -240,7 +259,7 @@ export async function queuePaReportReminders(env,now=new Date()){
 export async function paReportApi({request,url,env,user,bodyOf}){
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
  if(request.method==='GET'&&url.pathname==='/api/pa-report/conversation')return readConversation(env,user,url.searchParams.get('subject_key'),url.searchParams.get('offset')||0);
- if(request.method==='GET'&&url.pathname==='/api/pa-report')return readPaReport(env,user,{date:url.searchParams.get('date')||undefined});
+ if(request.method==='GET'&&url.pathname==='/api/pa-report')return readPaReport(env,user,{date:url.searchParams.get('date')||undefined,view:url.searchParams.get('view')||undefined});
  if(request.method==='GET'&&url.pathname==='/api/pa-report/file'){const f=await file(env,user,url.searchParams.get('id'));return new Response(new Uint8Array(f.bytes),{headers:{'Content-Type':f.mime_type,'Content-Disposition':'inline; filename="'+f.filename+'"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});}
  check(request.method==='POST','Method not allowed.',405);const b=await bodyOf(request);
  if(url.pathname==='/api/pa-report/feedback')return respond(env,user,b);

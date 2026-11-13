@@ -18,7 +18,8 @@ export const TASK_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_task_push_subscriptions (endpoint_hash TEXT PRIMARY KEY, username TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_task_attachments (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, username TEXT NOT NULL, mime_type TEXT NOT NULL, filename TEXT NOT NULL, bytes BLOB NOT NULL, created_at TEXT NOT NULL)`
 ];
-export const ensureTaskSchema=db=>db.batch(TASK_SCHEMA.map(s=>db.prepare(s)));
+const taskSchemaReady=new WeakMap();
+export async function ensureTaskSchema(db){if(!taskSchemaReady.has(db))taskSchemaReady.set(db,db.batch(TASK_SCHEMA.map(s=>db.prepare(s))).catch(e=>{taskSchemaReady.delete(db);throw e;}));await taskSchemaReady.get(db);}
 // Phone registration uses the existing canonical rep IDs, independently of old keys.
 export const taskUsers=env=>[...Object.keys(keys(env)).filter(u=>!isInvoiceRep(u)),'tapiz','mosa'].sort();
 const ID=/^[a-zA-Z0-9-]{8,90}$/,PA_ID=/^TSK-\d{5,}$/;
@@ -28,11 +29,11 @@ const workflowFields=['task_type','repeat','pa_required'];
 const editable=[...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','required_materials','po_number','po_revision','document_url','evidence_url','source_url','parent_cycle_id','pa_task_id','requires_evidence',...reminderFields];
 const selfEditable=[...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','document_url','evidence_url','requires_evidence',...reminderFields];
 export const managesOwnTask=(user,task)=>task.created_by===user.username&&task.assigned_to===user.username&&task.kind!=='po_dispatch';
-const latestSQL=`SELECT e.*,(SELECT MAX(c.revision) FROM v2_task_events c WHERE c.task_id=e.task_id AND c.action NOT IN ('reminder','followup_reminder')) AS pa_revision,s.acknowledged_revision,s.pa_task_id AS synced_pa_task_id,s.source_url AS synced_source_url,s.synced_at,s.last_error FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON e.task_id=l.task_id AND e.revision=l.revision LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`;
+export const latestSQL=`SELECT e.*,(SELECT MAX(c.revision) FROM v2_task_events c WHERE c.task_id=e.task_id AND c.action NOT IN ('reminder','followup_reminder')) AS pa_revision,s.acknowledged_revision,s.pa_task_id AS synced_pa_task_id,s.source_url AS synced_source_url,s.synced_at,s.last_error FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON e.task_id=l.task_id AND e.revision=l.revision LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`;
 const text=(value,max,required=false)=>{check(typeof value==='string'&&value.length<=max&&(!required||value.trim()),'Enter the required task details.');return value.trim();};
 const optionalText=(v,max)=>v===null||v===undefined?'':text(v,max);
 function safeURL(value){if(!value)return '';let u;try{u=new URL(value);}catch{throw new UserError('Enter a complete secure document link.');}check(u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<=2000,'Use a secure document link.');return u.href;}
-function decode(row){if(!row)return null;const raw=JSON.parse(row.payload);const task=projectTask({...raw,revision:row.revision,updated_at:row.saved_at,updated_by:row.actor,pa_task_id:row.synced_pa_task_id||raw.pa_task_id||''});return {...task,pa_sync:{acknowledged_revision:row.acknowledged_revision??0,status:!syncRequired(task)?'app_only':(row.acknowledged_revision??0)>=(row.pa_revision??row.revision)?'synced':'pending',synced_at:row.synced_at??null,error:row.last_error??null}};}
+export function decode(row){if(!row)return null;const raw=JSON.parse(row.payload);const task=projectTask({...raw,revision:row.revision,updated_at:row.saved_at,updated_by:row.actor,pa_task_id:row.synced_pa_task_id||raw.pa_task_id||''});return {...task,pa_sync:{acknowledged_revision:row.acknowledged_revision??0,status:!syncRequired(task)?'app_only':(row.acknowledged_revision??0)>=(row.pa_revision??row.revision)?'synced':'pending',synced_at:row.synced_at??null,error:row.last_error??null}};}
 
 // Compare stable field/step identities; prior payloads remain the authoritative history.
 export function taskChanges(before,after){
@@ -45,10 +46,10 @@ export function taskChanges(before,after){
 }
 
 export async function getTask(db,id){check(ID.test(id),'Invalid task.');return decode(await db.prepare(latestSQL+' WHERE e.task_id=?').bind(id).first());}
-function canSee(user,task){return isAdmin(user.username)||task.assigned_to===user.username||task.steps?.some(s=>s.assigned_to===user.username);}
+export function canSeeTask(user,task){return isAdmin(user.username)||task.assigned_to===user.username||task.steps?.some(s=>s.assigned_to===user.username);}
 export function currentTaskNotification(task,n,now=new Date()){
  if(task)task=projectTask(task,new Date(now.getTime()+7200000).toISOString().slice(0,10));
- if(!task||!canSee({username:n.username},task))return false;
+ if(!task||!canSeeTask({username:n.username},task))return false;
  if(n.kind==='follow_up'){
   const when=task.followup_reminders?.[n.username];
   return openTask(task)&&isAdmin(n.username)&&!!when&&n.id==='followup-'+task.id+'-'+n.username+'-'+Math.floor(Date.parse(when)/1000)&&Date.parse(when)<=now.getTime();
@@ -64,7 +65,7 @@ export function currentTaskNotification(task,n,now=new Date()){
  const due=task.next_action_date||(task.status==='Waiting'?task.review_date:task.due_date||task.review_date);
  return n.id===id&&(mode==='once'?Date.parse(task.reminder_at)<=now.getTime():!!due&&due<=date);
 }
-function visible(user,task){check(task&&canSee(user,task),'Task not found.',404);return task;}
+function visible(user,task){check(task&&canSeeTask(user,task),'Task not found.',404);return task;}
 export async function listTasks(env,user,query={}){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
  const offset=Number(query.offset??0);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
@@ -255,7 +256,7 @@ export async function saveTask(env,user,b){
  const recipients=new Set();
  if(['respond','note'].includes(action))recipients.add(task.created_by);
  if(['respond','note','complete','undo_complete'].includes(action)&&old?.feedback_request)recipients.add(old.feedback_request.by);
- for(const recipient of recipients)if(recipient!==user.username&&!(action==='complete'&&recipient===task.created_by)&&canSee({username:recipient},task))statements.push(notification(env.DB,b.request_id,recipient,task,'response',at));
+ for(const recipient of recipients)if(recipient!==user.username&&!(action==='complete'&&recipient===task.created_by)&&canSeeTask({username:recipient},task))statements.push(notification(env.DB,b.request_id,recipient,task,'response',at));
  try{await env.DB.batch(statements);}catch{throw new UserError('This task changed while saving. Reload; your previous work is safe.',409);}
  return {task:await getTask(env.DB,task.id),replayed:false};
 }
@@ -279,6 +280,14 @@ export async function completeCountTasks(env,user,count){
 export async function tasksApi({request,url,env,user,bodyOf}){
  const path=url.pathname;
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
+ if(request.method==='GET'&&['/api/tasks/workspace','/api/tasks/options','/api/tasks/inbox'].includes(path)){
+  const {readTaskWorkspace,taskOptions,taskInbox}=await import('./task-workspace.js');
+  if(path==='/api/tasks/options')return taskOptions(env,user);
+  if(path==='/api/tasks/inbox')return taskInbox(env,user);
+  const r=await readTaskWorkspace(env,user,Object.fromEntries(url.searchParams));
+  if(request.headers.get('If-None-Match')===r.etag)return new Response(null,{status:304,headers:{ETag:r.etag,'Cache-Control':'private, no-store',Vary:'Cookie, Authorization'}});
+  return Response.json(r,{headers:{ETag:r.etag,'Cache-Control':'private, no-store',Vary:'Cookie, Authorization'}});
+ }
  if(path==='/api/tasks/emails'&&request.method==='GET')return readTaskMail(env,user);
  if(path==='/api/tasks'&&request.method==='GET'&&url.searchParams.has('id'))return {task:visible(user,await getTask(env.DB,url.searchParams.get('id')))};
  if(path==='/api/tasks'&&request.method==='GET')return listTasks(env,user,{offset:url.searchParams.get('offset')??0,mine:url.searchParams.get('mine')==='1'});

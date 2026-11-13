@@ -26,5 +26,5 @@ export async function taskPerformance(env,user){
  const pa=await measure('pa_report',env=>readPaReport(env,user,{}));
  const start=Date.now(),rows=unifiedWork(app,pa),pending=selectWork(rows,{username:user.username,admin:true,scope:'mine',status:'open'});const processing_ms=Date.now()-start;
  const selected=[...plans.entries()].slice(0,12),explain=await env.DB.batch(selected.map(([sql,params])=>env.DB.prepare('EXPLAIN QUERY PLAN '+sql).bind(...params)));
- return {version:'0.40.1',measured_at:new Date().toISOString(),read_only:true,samples,model:{app_tasks:app.tasks.length,pa_rows:pa.rows.length,unified:rows.length,pending:pending.length,processing_ms},query_plans:explain.map((r,i)=>({query:selected[i][0],plan:r.results}))};
+ return {version:'0.41.0',measured_at:new Date().toISOString(),read_only:true,samples,model:{app_tasks:app.tasks.length,pa_rows:pa.rows.length,unified:rows.length,pending:pending.length,processing_ms},query_plans:explain.map((r,i)=>({query:selected[i][0],plan:r.results}))};
 }

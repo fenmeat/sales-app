@@ -17,3 +17,5 @@ src/recipe-fonts.js
 /public/budget-domain.js
 
 /public/task-workflow.js
+
+/public/tasks-bundle.js

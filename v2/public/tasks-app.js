@@ -1,3 +1,4 @@
+import {createWorkspaceCache} from './task-workspace-cache.js';
 import {taskType,projectTask,statusLabel,localDate} from './task-workflow.js';
 import {stepsHTML,workflowForms} from './task-workflow-ui.js';
 import './input-selection.js';
@@ -10,8 +11,12 @@ const names={alex:'Alex',alinda:'Alinda',xavier:'Xavier',xalinda:'Xalinda',tapiz
 const dialog=$('#dialog');let reportMode=new URL(location.href).searchParams.get('view')==='report',rabbiMode=new URL(location.href).searchParams.get('view')==='rabbi',deepLinkHandled=false,mail={requests:[]},quickRetry=null;
 const requestedReport=new URL(location.href).searchParams;
 let pa=null,paError='',paScope='mine',reportDate=/^\d{4}-\d{2}-\d{2}$/.test(requestedReport.get('date')||'')?requestedReport.get('date'):(/^report-(\d{4}-\d{2}-\d{2}):/.exec(requestedReport.get('case')||'')?.[1]||''),paRetry=null;
-let data,filter='open',owner='mine',search='',busy=false,retry=null,dialogCleanup=()=>{};
-async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const result=await r.json();if(!r.ok){const e=Error(result.error||'Kon nie stoor nie. Probeer weer.');e.status=r.status;throw e;}return result;}
+let data,filter=new URL(location.href).searchParams.get('status')||'open',owner='mine',search='',busy=false,retry=null,dialogCleanup=()=>{};
+const workspaceCache=createWorkspaceCache((...args)=>fetch(...args));
+let legacyMode=false,loadSequence=0,inboxAt=0,inboxFlight=null,reportFlight=null,reportCache=null,searchTimer,detailSequence=0;
+const mark=name=>{if(typeof performance!=='undefined'&&performance.mark)performance.mark(name);};
+mark('tasks-module-ready');
+async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const result=await r.json();if(!r.ok){const e=Error(result.error||'Kon nie stoor nie. Probeer weer.');e.status=r.status;throw e;}if(body){workspaceCache.clear();inboxAt=0;reportCache=null;loadSequence++;}return result;}
 function toast(message,undo){const el=$('#message');el.textContent=message;if(undo){const b=document.createElement('button');b.textContent='Maak ongedaan';b.onclick=undo;el.append(' ',b);}el.style.display='block';setTimeout(()=>el.style.display='none',undo?15000:6500);}
 function open(t){return !['Complete','Cancelled'].includes(t.status);}
 function review(t){if(t.next_action_date)return t.next_action_date;return t.status==='Waiting'?t.review_date:t.due_date||t.review_date;}
@@ -21,7 +26,63 @@ function reminderControls(t={}){return `<label>Herinnering<select name="reminder
 function setupReminder(form){const select=form.elements.reminder_mode,input=form.elements.reminder_at;const change=()=>{const once=select.value==='once';$('#reminder-time').hidden=!once;input.required=once;if(once&&!input.value)input.value=new Date(Date.now()+10800000).toISOString().slice(0,16);};select.onchange=change;change();}
 function reminderValues(form){const mode=form.elements.reminder_mode.value;return {reminder_mode:mode,reminder_at:mode==='once'?new Date(form.elements.reminder_at.value+':00+02:00').toISOString():''};}
 function dateLabel(t){const d=review(t);return d?(t.status==='Waiting'||!t.due_date?'Opvolg ':'Datum ')+d:'Geen datum';}
-async function load(){
+function workspaceURL(offset=0){
+ const q=new URLSearchParams({status:filter,scope:paScope,search});
+ if(offset){q.set('offset',offset);q.set('snapshot',pa.workspace.snapshot);}
+ const deep=new URL(location.href).searchParams.get('case')||new URL(location.href).searchParams.get('task');if(deep)q.set('case',deep);
+ return '/api/tasks/workspace?'+q;
+}
+function applyWorkspace(value,append=false){
+ if(data&&data.username!==value.app.username){reportCache=null;pa=null;mail={requests:[]};data=null;}
+ const old=pa,oldTasks=data?.tasks||[],oldNotifications=data?.notifications||[],extra=reportCache?.username===value.app.username?reportCache.data:null;
+ const next=structuredClone(value);data={...next.app,notifications:oldNotifications,workspace_source:true,options_loaded:data?.options_loaded||false,suppliers:data?.suppliers||[]};
+ pa={...next.pa,...(extra?{report:extra.report,history:extra.history,rabbi:extra.rabbi,rabbi_history:extra.rabbi_history,feedback:extra.feedback,context_rows:extra.rows}:{}),alerts:old?.alerts||[],reminders:old?.reminders||[]};
+ if(append&&old?.workspace.snapshot===pa.workspace.snapshot&&!pa.workspace.reset){data.tasks=[...new Map([...oldTasks,...data.tasks].map(t=>[t.id,t])).values()];pa.workspace.rows=[...new Map([...old.workspace.rows,...pa.workspace.rows].map(r=>[r.id,r])).values()];pa.rows=[...new Map([...old.rows,...pa.rows].map(r=>[r.id,r])).values()];}
+ if(data.invoice_rep){reportMode=false;rabbiMode=false;paScope='mine';}
+ data.today=localDate();render();mark('tasks-'+filter+'-ready');
+}
+async function load(options={}){
+ if(legacyMode)return legacyLoad();
+ const offset=options.offset||0,key=workspaceURL(offset),sequence=++loadSequence,cached=workspaceCache.peek(key),hadData=!!data;
+ if(cached)applyWorkspace(cached,!!offset);
+ else if(data){const same=pa.workspace?.scope===paScope&&pa.workspace?.status===filter&&pa.workspace?.search===search;pa.workspace={...pa.workspace,...(same||offset?{}:{rows:[],total:0}),loading:true};render();}
+ try{
+  const result=await workspaceCache.read(key);if(sequence!==loadSequence||result.obsolete)return;
+  if(result.unsupported){legacyMode=true;return legacyLoad();}
+  if(!result.unchanged||!cached)applyWorkspace(result.value,!!offset);
+  if(!hadData&&reportMode&&data.admin&&paScope==='mine'){paScope=data.username==='alex'?'all':'fenmeat';await load();return;}
+  loadInbox();
+  if(reportMode||rabbiMode)await loadReport();
+  const id=new URL(location.href).searchParams.get('task');if(id&&!deepLinkHandled){deepLinkHandled=true;await detailsCurrent({id});}
+ }catch(e){
+  if(sequence!==loadSequence)return;
+  if(e.status===404){legacyMode=true;return legacyLoad();}
+  if([401,403].includes(e.status)){data=null;pa=null;workspaceCache.clear();return login(e);}
+  if(data){if(pa?.workspace)pa.workspace.loading=false;render();toast(e.message);}
+  else{$('#app').innerHTML='<main class="shell"><h1>Tasks</h1><p>'+esc(e.message)+'</p><button id="retry-load">Probeer weer</button></main>';$('#retry-load').onclick=load;}
+ }
+}
+async function loadInbox(){
+ if(!data||inboxFlight||Date.now()-inboxAt<60000)return;inboxAt=Date.now();const username=data.username;
+ inboxFlight=(async()=>{try{const r=await api('/api/tasks/inbox');if(data?.username!==username)return;data.notifications=r.notifications||[];pa.alerts=r.alerts||[];pa.reminders=r.reminders||[];if(!dialog.open)render();}catch{/* Keep the existing list and retry on refresh/focus. */}finally{inboxFlight=null;}})();
+ return inboxFlight;
+}
+async function loadReport(){
+ if(data?.invoice_rep)return;const key=data.username+':'+reportDate;
+ if(reportCache?.key===key){render();return;}
+ if(reportFlight?.key===key)return reportFlight.promise;
+ const username=data.username,selectedDate=reportDate;
+ const promise=(async()=>{try{const fresh=await api('/api/pa-report?view=report'+(selectedDate?'&date='+encodeURIComponent(selectedDate):''));if(data?.username!==username||reportDate!==selectedDate)return;reportCache={key,username,data:fresh};pa={...pa,report:fresh.report,history:fresh.history,rabbi:fresh.rabbi,rabbi_history:fresh.rabbi_history,feedback:fresh.feedback,context_rows:fresh.rows};render();}catch(e){toast(e.message);}finally{if(reportFlight?.key===key)reportFlight=null;}})();reportFlight={key,promise};return promise;
+}
+async function prepareOptions(){if(data?.workspace_source&&!data.options_loaded){const r=await api('/api/tasks/options');data.suppliers=r.suppliers;data.options_loaded=true;}}
+async function newTask(){try{await prepareOptions();edit();}catch(e){toast(e.message);}}
+async function detailsCurrent(t){
+ if(!t)return;const sequence=++detailSequence;show('<h2>'+esc(t.title||'Taak')+'</h2><p>Besonderhede word gelaai…</p><button data-close>Maak toe</button>');
+ try{const r=await api('/api/tasks?id='+encodeURIComponent(t.id));if(sequence!==detailSequence||!dialog.open)return;details(r.task);mark('task-details-ready');}catch(e){if(sequence===detailSequence)toast(e.message);}
+}
+function queryChanged(){return load();}
+function searchChanged(value,pos){search=value;clearTimeout(searchTimer);searchTimer=setTimeout(async()=>{await load();const el=$('#pa-search');if(el){el.focus();try{el.setSelectionRange(pos,pos);}catch{}}},220);}
+async function legacyLoad(){
  try{const first=!data;data=await api('/api/tasks');if(data.invoice_rep){reportMode=false;rabbiMode=false;}if(first&&reportMode&&data.admin)owner='all';let offset=data.next_offset;while(offset!==null){const page=await api('/api/tasks?offset='+offset);data.tasks.push(...page.tasks);offset=page.next_offset;}if(reportMode&&data.username==='alex'){try{mail=await api('/api/tasks/emails');let mailOffset=mail.next_offset;while(mailOffset!=null){const page=await api('/api/tasks/emails?offset='+mailOffset);mail.requests.push(...page.requests);mailOffset=page.next_offset;}}catch{mail={requests:[],error:'Die e-posstatus kon nie laai nie. Verfris en probeer weer.'};}}if(data.invoice_rep){pa=null;paError='';}else try{pa=await api('/api/pa-report'+(reportDate?'?date='+encodeURIComponent(reportDate):''));paError='';if(first&&reportMode)paScope=data.username==='alex'?'all':data.admin?'fenmeat':'mine';}catch(e){pa=null;paError='Die PA-taaklys kon nie laai nie. Hier is die take wat in die app gestoor is. Verfris en probeer weer.';}if(pa?.rabbi_access??pa?.private_report){const key=new URL(location.href).searchParams.get('case');if(key&&(pa.report?.sections.find(s=>s.id==='rabbi')?.items.some(i=>i.subject_key===key)||pa.rabbi?.items.some(i=>'report-'+pa.rabbi.date+':'+i.id===key))){rabbiMode=true;reportMode=false;const url=new URL(location.href);url.searchParams.set('view','rabbi');history.replaceState(null,'',url.pathname+url.search);}}else if(pa){rabbiMode=false;}render();const id=new URL(location.href).searchParams.get('task');if(id&&!deepLinkHandled){deepLinkHandled=true;const t=data.tasks.find(t=>t.id===id);if(t){if(reportMode&&!pa?.register_revision)document.querySelector('[data-report-task="'+t.id+'"]')?.scrollIntoView?.({block:'center'});else details(t);}}
  }catch(e){if(e.status===401||e.status===403)await login(e);else{$('#app').innerHTML='<main class="shell"><h1>Tasks</h1><p>'+esc(e.message)+'</p><button id="retry-load">Probeer weer</button></main>';$('#retry-load').onclick=load;}}
 }
@@ -39,8 +100,8 @@ async function showPaView(view){
  history.replaceState(null,'',paViewURL(view));await load();
 }
 function render(){
- if(data){data.tasks=data.tasks.map(t=>projectTask(t,data.today));}
- if(pa?.register_revision||(pa?.rabbi_access||(rabbiMode&&pa?.private_report)))return renderPaWorkspace({app:data,pa,reportMode,rabbiMode,scope:paScope,status:filter,search,onScope:v=>{paScope=v;render();},onStatus:v=>{filter=v;render();},onSearch:(v,pos)=>{search=v;render();const el=$('#pa-search');el.focus();try{el.setSelectionRange(pos,pos);}catch{}},onReportDate:async v=>{reportDate=v;history.replaceState(null,'',paViewURL(rabbiMode?'rabbi':'report'));await load();},onRefresh:load,onTasks:()=>showPaView('tasks'),onReport:()=>showPaView('report'),onRabbi:()=>showPaView('rabbi'),onNew:()=>edit(),onFeedback:paFeedback,onAppDetails:t=>{if(t)details(t);},onEditTask:editCurrent,onEnablePush:enablePush,onAppNotification:async n=>{try{await api('/api/tasks/read',{id:n.id});n.read_at=new Date().toISOString();render();const t=data.tasks.find(t=>t.id===n.task_id);if(t)details(t);}catch(e){toast(e.message);}},onReadAlert:async a=>{await api('/api/pa-report/read',{id:a.id});pa.alerts=pa.alerts.filter(n=>n.id!==a.id);}});
+ if(data){data.tasks=data.tasks.map(t=>t.brief?t:projectTask(t,data.today));}
+ if(pa?.workspace||pa?.register_revision||(pa?.rabbi_access||(rabbiMode&&pa?.private_report)))return renderPaWorkspace({app:data,pa,reportMode,rabbiMode,scope:paScope,status:filter,search,onScope:v=>{paScope=v;return pa.workspace?queryChanged():render();},onStatus:v=>{filter=v;return pa.workspace?queryChanged():render();},onSearch:(v,pos)=>{if(pa.workspace)return searchChanged(v,pos);search=v;render();const el=$('#pa-search');el.focus();try{el.setSelectionRange(pos,pos);}catch{}},onReportDate:async v=>{reportDate=v;history.replaceState(null,'',paViewURL(rabbiMode?'rabbi':'report'));await load();},onRefresh:()=>{inboxAt=0;reportCache=null;return load();},onMore:()=>load({offset:pa.workspace.next_offset}),onTasks:()=>showPaView('tasks'),onReport:()=>showPaView('report'),onRabbi:()=>showPaView('rabbi'),onNew:()=>pa.workspace?newTask():edit(),onFeedback:paFeedback,onAppDetails:t=>{if(t)return t.brief?detailsCurrent(t):details(t);},onEditTask:editCurrent,onEnablePush:enablePush,onAppNotification:async n=>{try{await api('/api/tasks/read',{id:n.id});n.read_at=new Date().toISOString();render();const t=data.tasks.find(t=>t.id===n.task_id)||{id:n.task_id};if(t)return detailsCurrent(t);}catch(e){toast(e.message);}},onReadAlert:async a=>{await api('/api/pa-report/read',{id:a.id});pa.alerts=pa.alerts.filter(n=>n.id!==a.id);}});
  if(rabbiMode){$('#app').innerHTML='<main class="shell"><div class="top"><h1>Rabbi</h1><div class="actions"><a class="button" href="/tasks">Tasks</a><a class="button" href="/tasks?view=report">Daily Report</a><button id="retry-rabbi">Verfris</button></div></div><p class="notice">The Rabbi reading could not be loaded. Refresh to try again.</p></main>';$('#retry-rabbi').onclick=load;return;}
  if(reportMode)return renderReport({data,owner,search,mail,onOwner:v=>{owner=v;render();},onSearch:(v,pos)=>{search=v;render();const el=$('#report-search');el.focus();try{el.setSelectionRange(pos,pos);}catch{}},onRefresh:load,onTasks:()=>{reportMode=false;history.replaceState(null,'','/tasks');render();},onNew:()=>edit(),onAction:reportAction,onDetails:details,onNote:t=>noteForm(t),onEmail:emailForm,onCancelEmail:cancelEmail});
  const mine=data.tasks.filter(t=>t.assigned_to===data.username||t.steps?.some(s=>s.assigned_to===data.username)),unread=data.notifications.filter(n=>!n.read_at),pool=(data.admin&&owner==='all'?data.tasks:mine);
@@ -65,11 +126,13 @@ function taskAttachments(t){const ids=t?.attachments||[];return ids.length?`<sec
 function createAttachments(){return `<label>Voeg foto’s / PDF’s by (opsioneel)<input id="attachment" type="file" multiple accept="${TASK_FILE_ACCEPT}" aria-describedby="attachment-help attachment-status"></label><p id="attachment-help" class="help">Kies verskeie lêers, of kies weer om meer by te voeg. Hoogstens ${MAX_TASK_ATTACHMENTS} lêers. Groot foto’s word outomaties kleiner gemaak. PDF’s: hoogstens 500 KB.</p><p id="attachment-status" role="status" aria-live="polite"></p><ul id="attachment-list" aria-label="Selected attachments"></ul>`;}
 async function editCurrent(t){
  if(!t)return;
- try{const fresh=await api('/api/tasks?id='+encodeURIComponent(t.id));if(!fresh.task)throw Error('Die oorspronklike taak kon nie laai nie. Verfris en probeer weer.');edit(fresh.task);}catch(e){toast(e.message);}
+ try{const [fresh]=await Promise.all([api('/api/tasks?id='+encodeURIComponent(t.id)),prepareOptions()]);if(!fresh.task)throw Error('Die oorspronklike taak kon nie laai nie. Verfris en probeer weer.');edit(fresh.task);}catch(e){toast(e.message);}
 }
 function linkedTasks(item){
  const ids=new Set([item.id,item.subject_key,...(item.pa_task_ids||[])]);
- return data.tasks.filter(t=>t.id===item.app_task_id||t.id===item.workflow_id||t.id===item.id||ids.has(t.pa_task_id));
+ const linked=data.tasks.filter(t=>t.id===item.app_task_id||t.id===item.workflow_id||t.id===item.id||ids.has(t.pa_task_id));
+ for(const row of [item,...(pa?.context_rows||[]),...(pa?.rows||[])])if(row===item||ids.has(row.id)){const id=row.app_task_id||row.workflow_id;if(id&&!linked.some(t=>t.id===id))linked.push({id,title:row.title});}
+ return linked;
 }
 function edit(t){
  const workflow=t?.task_type==='workflow';
@@ -113,7 +176,7 @@ function details(t){
  workflowForms({FormDataConstructor:FormData,show,base,submit,getData:()=>data,dialog,attachmentPicker,fileData,createAttachments,api,setCleanup:f=>{dialogCleanup=f;}}).bind(t);
  if($('#reply-report'))$('#reply-report').onclick=()=>{dialog.close();reportMode=true;owner='mine';history.replaceState(null,'','/tasks?view=report');render();};
  if($('#check-count'))$('#check-count').onclick=async()=>{try{await api('/api/tasks/check-count',{task_id:t.id});dialog.close();await load();toast('Gestoorde telling bevestig.');}catch(e){toast(e.message);}};
- if($('#complete'))$('#complete').onclick=()=>complete(t);if($('#wait'))$('#wait').onclick=()=>reasonAction(t,'wait');if($('#edit'))$('#edit').onclick=()=>editCurrent(t);if($('#add-note'))$('#add-note').onclick=()=>noteForm(t);if($('#pa-task-conversation'))$('#pa-task-conversation').onclick=()=>paFeedback(pa?.rows.find(r=>r.id===t.pa_task_id),'respond');if($('#reminder'))$('#reminder').onclick=()=>editReminder(t);if($('#cancel-task'))$('#cancel-task').onclick=()=>reasonAction(t,'cancel');if($('#reopen'))$('#reopen').onclick=()=>reasonAction(t,'reopen');$('#history').onclick=async()=>{try{const r=await api('/api/tasks/audit?id='+encodeURIComponent(t.id));$('#history-content').innerHTML=r.history.map(h=>`<div class="history-entry">Wysiging ${h.revision} · ${esc(h.action)} · ${esc(name(h.actor))} · ${esc(h.saved_at)}<br>${esc(h.reason||h.task.completion?.note||h.task.last_occurrence?.note||h.task.waiting_reason||'')}${historyChanges(h.changes)}${h.task.steps?stepsHTML(h.task,false):''}</div>`).join('');}catch(e){toast(e.message);}};
+ if($('#complete'))$('#complete').onclick=()=>complete(t);if($('#wait'))$('#wait').onclick=()=>reasonAction(t,'wait');if($('#edit'))$('#edit').onclick=()=>editCurrent(t);if($('#add-note'))$('#add-note').onclick=()=>noteForm(t);if($('#pa-task-conversation'))$('#pa-task-conversation').onclick=()=>paFeedback(pa?.rows.find(r=>r.id===t.pa_task_id)||{id:t.pa_task_id,subject_key:t.pa_task_id},'respond');if($('#reminder'))$('#reminder').onclick=()=>editReminder(t);if($('#cancel-task'))$('#cancel-task').onclick=()=>reasonAction(t,'cancel');if($('#reopen'))$('#reopen').onclick=()=>reasonAction(t,'reopen');$('#history').onclick=async()=>{try{const r=await api('/api/tasks/audit?id='+encodeURIComponent(t.id));$('#history-content').innerHTML=r.history.map(h=>`<div class="history-entry">Wysiging ${h.revision} · ${esc(h.action)} · ${esc(name(h.actor))} · ${esc(h.saved_at)}<br>${esc(h.reason||h.task.completion?.note||h.task.last_occurrence?.note||h.task.waiting_reason||'')}${historyChanges(h.changes)}${h.task.steps?stepsHTML(h.task,false):''}</div>`).join('');}catch(e){toast(e.message);}};
  if($('#email-task'))$('#email-task').onclick=()=>emailForm(t);
 }
 function historyChanges(changes=[]){
@@ -184,6 +247,7 @@ window.addEventListener('beforeunload',event=>{if(busy||(dialog.open&&dialog.que
 
 function paFeedback(item,action){
  if(!item)return;
+ if(!item.subject_hash){api('/api/pa-report/conversation?subject_key='+encodeURIComponent(item.subject_key||item.id)).then(r=>paFeedback(r.subject,action)).catch(e=>toast(e.message));return;}
  const labels={respond:'Gee terugvoer aan PA',complete:'Merk taak klaar',assign:'Wys taak toe',request_update:'Vra terugvoer',remind:'Herinner my'};
  show(base(labels[action],`<h3>${esc(item.title||'Report item')}</h3><p class="pa-prose">${esc(item.next_action||item.text||'')}</p>${action==='complete'?'<p class="notice">Druk Stoor om te bevestig dat jou werk klaar is. \'n Nota of bewys is opsioneel. Bestellings, betalings en voorraadtellings moet steeds nagegaan word.</p>':''}${action==='assign'?`<label>Verantwoordelik<select name="assigned_to">${pa.users.map(u=>`<option value="${u}" ${u===item.assigned_to?'selected':''}>${esc(name(u))}</option>`).join('')}</select></label>`:''}${action==='remind'?'<label>Herinnering se datum en tyd (Suid-Afrika)<input name="remind_at" type="datetime-local" required></label><p class="help">Hierdie herinnering is vir jou. Die ander persoon se sperdatum bly dieselfde.</p>':''}<section id="pa-conversation" aria-label="Gesprek"></section><button type="button" id="pa-conversation-refresh">Verfris gesprek</button><button type="button" id="pa-more" hidden>Laai meer van die gesprek</button><label>${action==='complete'?'Kort nota (opsioneel)':action==='request_update'?'Jou vraag':'Jou antwoord'}<textarea name="note" maxlength="5000" ${['remind','complete'].includes(action)?'':'required'} placeholder="Voeg 'n nota by as jy wil"></textarea></label><label>Bewysskakel<input name="proof_url" type="url" placeholder="https://…"></label><label>Voeg foto’s / PDF’s by<input id="attachment" type="file" accept="${TASK_FILE_ACCEPT}" multiple></label><p id="attachment-status" role="status"></p><ul id="attachment-list"></ul>`,action==='complete'?'Stoor voltooiing':'Stoor antwoord'));
  const form=dialog.querySelector('form');
@@ -221,7 +285,7 @@ function paFeedback(item,action){
 }
 
 let lastPaRefresh=0;
-async function refreshPaAnswers(){if(!data||dialog.open||busy||Date.now()-lastPaRefresh<60000)return;lastPaRefresh=Date.now();try{const fresh=await api('/api/pa-report'+(reportDate?'?date='+encodeURIComponent(reportDate):''));if(fresh.register_revision){pa=fresh;data.today=localDate();render();}}catch{/* Keep the last loaded conversation during a temporary outage. */}}
+async function refreshPaAnswers(){if(!data||dialog.open||busy||Date.now()-lastPaRefresh<60000)return;lastPaRefresh=Date.now();if(!legacyMode){inboxAt=0;if(reportMode||rabbiMode)reportCache=null;return load();}try{const fresh=await api('/api/pa-report'+(reportDate?'?date='+encodeURIComponent(reportDate):''));if(fresh.register_revision){pa=fresh;data.today=localDate();render();}}catch{/* Keep the last loaded conversation during a temporary outage. */}}
 window.addEventListener('focus',refreshPaAnswers);window.addEventListener('online',refreshPaAnswers);
 if(typeof document.addEventListener==='function')document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')refreshPaAnswers();});
 if(typeof window.setInterval==='function')window.setInterval(()=>{if(data&&!dialog.open&&data.today!==localDate()){data.today=localDate();render();}},60000);

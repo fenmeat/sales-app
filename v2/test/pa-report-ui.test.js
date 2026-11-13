@@ -1,3 +1,4 @@
+import {createWorkspaceCache} from '../public/task-workspace-cache.js';
 import {taskType,projectTask,statusLabel,localDate} from '../src/task-workflow.js';
 import {stepsHTML,workflowForms} from '../public/task-workflow-ui.js';
 import test from 'node:test';
@@ -44,7 +45,7 @@ async function screen(username,tasks=[],view='',mailPages=null,paState=null){
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData','renderPaWorkspace','conversationHTML','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms',source)(document,{addEventListener(){}}, Object.assign(globalThis.location,{origin:'https://ui-test.example'}),{replaceState(_state,_title,url){globalThis.location.href=new URL(url,globalThis.location.href).href;}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData,renderPaWorkspace,conversationHTML,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData','renderPaWorkspace','conversationHTML','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','createWorkspaceCache',source)(document,{addEventListener(){}}, Object.assign(globalThis.location,{origin:'https://ui-test.example'}),{replaceState(_state,_title,url){globalThis.location.href=new URL(url,globalThis.location.href).href;}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData,renderPaWorkspace,conversationHTML,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,createWorkspaceCache);
  return {document,dialog,posts,postPaths,getPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 
