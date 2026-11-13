@@ -30,3 +30,25 @@ The existing PA Monday automation still creates the PDF and workbook and applies
 R02 records whose source modification precedes the checked export boundary by more than two hours reuse the baseline even when their CSV has no API timestamp. New IDs and changed records still load details. App/POS checks use the catalogue’s Zoho item links, reconcile receipts and line totals, and keep opening Zoho-credit receipts visible. Non-Britos native sales do not falsely block the Britos migration check; relevant or unknown lines still require duplicate reconciliation.
 
 Each immutable report page carries separate `lines`, `invoices` and `receipts` arrays (100 rows each). Continue until `has_more` is false. Do not sum whole invoice totals or whole payment amounts across line/allocation rows; use unique invoice/payment IDs and allocated cents. Source hashes and allocation counts remain attached to the snapshot.
+
+## 13 November 2026: nightly watermark repair (0.39.2)
+
+The first catch-up completed, but its millisecond watermark was sent unchanged
+to Zoho by the next nightly run: the earlier conversion only matched `.000Z`.
+Both invoice and payment delta filters now floor to a whole second and emit
+`+0000`; response validation uses that same rounded boundary. Stored checkpoints,
+watermarks, two-day overlap and immutable reports retain their original precision.
+The active run resumes without resetting its ID, pages or previously staged data.
+After a verified repair, the authorised admin may pass `retry_now:true` to
+`zoho_resume` for one audited bounded attempt without waiting for the prior
+error's backoff. The scheduler still honours backoff; leases and checkpoints are
+unchanged, and another failure starts a new backoff normally.
+
+Rollback for this focused release: disable scheduled mirror work with the current
+control revision if required, then revert only this release on the current branch
+(or deploy 40f7adefaf31b93d9386961c18a75d52718ac697 if no later releases exist).
+Do not deploy the original pre-mirror version over newer PA/task features. No
+database migration, source financial write or evidence deletion is involved.
+
+Regression coverage exercises the non-zero millisecond checkpoint, both resource
+filters, a row on the rounded boundary and continuation to a complete run.

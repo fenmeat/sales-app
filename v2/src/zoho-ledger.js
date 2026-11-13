@@ -153,7 +153,7 @@ export async function ledgerCommand(env,user,b){
  if(b.operation==='zoho_run'){
   const job=await startRun(db);await audit({started:true,run_id:job.id}).run();return {started:true,run_id:job.id,...await advanceLedger(env)};
  }
- if(b.operation==='zoho_resume'){const result=await advanceLedger(env);await audit(result).run();return result;}
+ if(b.operation==='zoho_resume'){check(b.retry_now===undefined||typeof b.retry_now==='boolean','Invalid retry option.');const result=await advanceLedger(env,{retryNow:b.retry_now===true});await audit(result).run();return result;}
  throw new UserError('Unknown Zoho mirror operation.');
 }
 export function prepareBaseline(base){
@@ -177,9 +177,9 @@ export async function scheduledLedger(env,event,options={}){
  if(c.enabled&&event.cron==='0 20 * * *')await startRun(env.DB);
  if(await active(env.DB))await advanceLedger(env,{maxCalls:20,...options});
 }
-export async function advanceLedger(env,{read=readFenBooks,maxCalls=4}={}){
+export async function advanceLedger(env,{read=readFenBooks,maxCalls=4,retryNow=false}={}){
  const db=env.DB;await ensureLedger(db);const job=await active(db);if(!job)return {idle:true};
- if(job.retry_at>Date.now())return {waiting:true,retry_at:job.retry_at};
+ if(job.retry_at>Date.now()&&!retryNow)return {waiting:true,retry_at:job.retry_at};
  const token=crypto.randomUUID(),leaseUntil=Date.now()+120000;
  const claimed=await db.prepare("UPDATE v2_zoho_mirror_runs SET lease=?,lease_until=? WHERE id=? AND status='running' AND lease_until<? RETURNING state").bind(token,leaseUntil,job.id,Date.now()).first();if(!claimed)return {busy:true};
  let state=JSON.parse(claimed.state);const c=await control(db),cfg=JSON.parse(c.config);let used=0;
@@ -218,13 +218,17 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4}={}){
    const inventory=state.phase.startsWith('inventory_');
    const kind=state.phase.endsWith('invoices')?'invoice':'payment',path=kind==='invoice'?'invoices':'customerpayments';
    check(state.page<=100,'Delta exceeded 100 pages; review the source filter.',409);
-   const response=await read(env,{username:'alex'},path,{...(inventory?{date_start:'2026-10-14'}:{last_modified_time:state.since.replace('.000Z','+0000')}),page:String(state.page),per_page:'100',sort_column:'created_time',sort_order:'A'});used++;state.calls++;
+   // Zoho expects second precision with a numeric UTC offset. Successful run
+   // watermarks include milliseconds; floor the query only (never advance it),
+   // and validate returned rows against that same boundary on resumed jobs.
+   const filterSince=new Date(Math.floor(timestamp(state.since)/1000)*1000).toISOString().replace('.000Z','+0000');
+   const response=await read(env,{username:'alex'},path,{...(inventory?{date_start:'2026-10-14'}:{last_modified_time:filterSince}),page:String(state.page),per_page:'100',sort_column:'created_time',sort_order:'A'});used++;state.calls++;
    const rows=kind==='invoice'?response.invoices:response.customer_payments??response.customerpayments,pg=response.page_context;
    check(Array.isArray(rows)&&rows.length<=100&&Number(pg?.page)===state.page&&typeof pg.has_more_page==='boolean','Zoho did not confirm complete delta pagination.',502);
    const ids=new Set();for(const r of rows){const id=String(kind==='invoice'?r.invoice_id:r.payment_id);check(/^\d{1,40}$/.test(id)&&!ids.has(id),'Duplicate/invalid source index identity.',502);ids.add(id);
     const changed=timestamp(r.last_modified_time);
     if(inventory){check(typeof r.date==='string'&&r.date>='2026-10-14','Zoho ignored the inventory date filter.',502);state.inventory_ids[kind].push(id);continue;}
-    check(changed>=timestamp(state.since),'Zoho ignored the modification filter; the mirror has not advanced.',502);
+    check(changed>=timestamp(filterSince),'Zoho ignored the modification filter; the mirror has not advanced.',502);
     if(changed>timestamp(state.until))continue;
     const previous=await source(db,kind,id);if(previous&&(previous.modified?timestamp(previous.modified)===changed:changed<timestamp(cfg.asof)-2*3600000)){state.unchanged++;continue;}
     state.queue.push({kind,id,modified:r.last_modified_time});

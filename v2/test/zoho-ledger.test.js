@@ -45,6 +45,37 @@ test('network failure retains checkpoint and previous successful snapshot; safe 
 test('ignored change filters and duplicate source IDs fail closed',async t=>{
  for(const options of [{ignored:true},{duplicate:true}]){const f=await bootstrap(t);await start(f);const r=reader(options);const result=await advanceLedger(f.env,{read:r.read});assert.equal(result.failed,true);assert.equal((await ledgerStatus(f.DB)).last_success,null);}
 });
+test('nightly run resumes a fractional watermark using Zoho whole-second UTC filters',async t=>{
+ const f=await bootstrap(t);await start(f);
+ const row=await f.DB.prepare('SELECT state FROM v2_zoho_mirror_runs').first(),state=JSON.parse(row.state);
+ state.since='2026-11-10T11:28:39.408Z';
+ await f.DB.prepare('UPDATE v2_zoho_mirror_runs SET state=?').bind(JSON.stringify(state)).run();
+ const paths=[];
+ const read=async(_env,_user,path,params)=>{
+  paths.push(path);
+  if(path==='invoices/1')return {invoice:apiInvoice({last_modified_time:'2026-11-10T11:28:39+0000'})};
+  assert.equal(params.last_modified_time,'2026-11-10T11:28:39+0000');
+  // Source precision is seconds: a row at the rounded boundary is valid.
+  const item={invoice_id:'1',payment_id:'4',last_modified_time:'2026-11-10T11:28:39+0000'};
+  return {invoices:[item],customer_payments:[],page_context:{page:1,has_more_page:false}};
+ };
+ // Just consume the invoice header; it must not fail the rounded boundary check.
+ assert.equal((await advanceLedger(f.env,{read,maxCalls:1})).running,true);
+ const stored=JSON.parse((await f.DB.prepare('SELECT state FROM v2_zoho_mirror_runs').first()).state);
+ assert.equal(stored.queue[0].id,'1');assert.equal(stored.since,state.since);
+ assert.equal((await advanceLedger(f.env,{read,maxCalls:3})).complete,true);
+ assert.deepEqual(paths,['invoices','invoices/1','customerpayments']);
+ assert.equal((await ledgerStatus(f.DB)).runs[0].status,'complete');
+});
+test('explicit repair retry bypasses backoff but keeps checkpoint and scheduler backoff intact',async t=>{
+ const f=await bootstrap(t);await start(f);const retryAt=Date.now()+3600000;
+ await f.DB.prepare('UPDATE v2_zoho_mirror_runs SET retry_at=?,error=?').bind(retryAt,'Prior source failure').run();
+ const r=reader();assert.equal((await advanceLedger(f.env,{read:r.read})).waiting,true);assert.equal(r.calls.length,0);
+ const result=await advanceLedger(f.env,{read:r.read,retryNow:true,maxCalls:1});
+ assert.equal(result.running,true);assert.equal(result.run_id,'synthetic-run');
+ const job=await f.DB.prepare('SELECT error,retry_at,state FROM v2_zoho_mirror_runs').first();
+ assert.equal(job.error,null);assert.equal(job.retry_at,0);assert.equal(JSON.parse(job.state).queue.length,1);
+});
 test('partial mixed invoices are held, unknowns are not zero, credits are not cash',()=>{
  const b=baseline(),mapping=b.mapping;
  assert.equal(assessInvoice(invoice({balance:5000}),[payment({amount:15000,allocations:[{invoice_id:'1',value:15000,withheld:0}]})],mapping).lines[0].state,'partial');
