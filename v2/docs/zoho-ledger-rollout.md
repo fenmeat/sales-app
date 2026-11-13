@@ -52,3 +52,20 @@ database migration, source financial write or evidence deletion is involved.
 
 Regression coverage exercises the non-zero millisecond checkpoint, both resource
 filters, a row on the rounded boundary and continuation to a complete run.
+
+## 13 November: source-verified payment links (0.39.3)
+
+A checked baseline payment may name an invoice outside the original invoice
+cutoff while lacking that invoice's source ID. At the end of a delta, inspect
+only local/staged records for such payments naming a known Britos invoice for
+the same customer. Fetch that payment's bounded customer/date header and exact
+detail/refunds from Zoho to restore its source allocation, then reassess affected
+invoices. Never infer an ID, add another receipt, or rewrite the original import.
+The lookup checks account/date/pagination, checkpoints before detail retrieval,
+and cannot promote partial evidence. Unrelated unlinked historic payments are
+not downloaded. Reports and financial sources remain separate.
+
+Rollback this link repair by reverting its commit on the current branch; 0.39.2
+retains the timestamp fix. Keep mirror versions and source evidence. Tests cover
+the missing-link case, old source timestamps, interrupted lookup, ignored account
+filters, no duplicated payment, and the unchanged prior sales cutoff.

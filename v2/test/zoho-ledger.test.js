@@ -76,6 +76,38 @@ test('explicit repair retry bypasses backoff but keeps checkpoint and scheduler 
  const job=await f.DB.prepare('SELECT error,retry_at,state FROM v2_zoho_mirror_runs').first();
  assert.equal(job.error,null);assert.equal(job.retry_at,0);assert.equal(JSON.parse(job.state).queue.length,1);
 });
+test('a baseline payment naming a later invoice is repaired from bounded source evidence without duplicating money',async t=>{
+ const b=baseline();b.payments.push(payment({id:'7',number:'PAY-7',date:'2026-11-09',amount:5000,allocations:[{id:'8',invoice_id:null,number:'INV-2',value:5000,withheld:0}]}));
+ const f=await bootstrap(t,b);await start(f);
+ const i2=apiInvoice({invoice_id:'6',invoice_number:'INV-2',date:'2026-11-09',total:50,last_modified_time:'2026-11-09T10:16:13+0000',line_items:[{line_item_id:'10',item_id:'2',name:'Test product',quantity:1,rate:50,item_total:50,tax_id:''}]});
+ const paths=[];let broken=true;
+ const read=async(_env,_user,path,params)=>{
+  paths.push({path,params});
+  if(path==='invoices/6')return {invoice:i2};
+  if(path==='customerpayments/7'){
+   if(broken)throw Error('Interruption after header checkpoint');
+   return {payment:apiPayment({payment_id:'7',payment_number:'PAY-7',date:'2026-11-09',amount:50,last_modified_time:'',invoices:[{invoice_id:'6',invoice_number:'INV-2',amount_applied:50}]})};
+  }
+  if(path==='customerpayments'&&params.customer_id){
+   assert.equal(params.date,'2026-11-09');assert.equal(params.customer_id,'3');
+   return {customer_payments:[{payment_id:'7',customer_id:'3',date:params.date,last_modified_time:i2.last_modified_time}],page_context:{page:1,has_more_page:false}};
+  }
+  return {invoices:[{invoice_id:'6',last_modified_time:i2.last_modified_time}],customer_payments:[],page_context:{page:1,has_more_page:false}};
+ };
+ assert.equal((await advanceLedger(f.env,{read,maxCalls:20})).failed,true);
+ assert.equal((await ledgerStatus(f.DB)).last_success,null);
+ const current=await f.DB.prepare("SELECT payload FROM v2_zoho_mirror_records WHERE kind='payment' AND id='7'").first();assert.equal(JSON.parse(current.payload).allocations[0].invoice_id,null);
+ broken=false;assert.equal((await advanceLedger(f.env,{read,maxCalls:20,retryNow:true})).complete,true);
+ const s=await ledgerStatus(f.DB,{date:'2026-11-09'});assert.equal(s.report.total,25000);assert.equal(s.report.error_count,0);assert.equal(s.counts.find(r=>r.kind==='payment').count,2);
+ assert.equal(paths.filter(r=>r.path==='customerpayments'&&r.params.customer_id).length,1);
+ assert.equal((await ledgerStatus(f.DB,{date:'2026-11-06'})).report.total,20000);
+});
+test('unlinked payment repair rejects an ignored account filter and preserves the committed baseline',async t=>{
+ const f=await bootstrap(t);await start(f);const row=await f.DB.prepare('SELECT state FROM v2_zoho_mirror_runs').first(),s=JSON.parse(row.state);
+ s.queue=[{kind:'payment_lookup',id:'4',customer_id:'3',date:'2026-11-09',page:1}];await f.DB.prepare('UPDATE v2_zoho_mirror_runs SET state=?').bind(JSON.stringify(s)).run();
+ const r=await advanceLedger(f.env,{read:async()=>({customer_payments:[{payment_id:'4',customer_id:'999',date:'2026-11-09'}],page_context:{page:1,has_more_page:false}})});
+ assert.equal(r.failed,true);assert.match(r.error,/different account/);assert.equal((await ledgerStatus(f.DB)).last_success,null);
+});
 test('partial mixed invoices are held, unknowns are not zero, credits are not cash',()=>{
  const b=baseline(),mapping=b.mapping;
  assert.equal(assessInvoice(invoice({balance:5000}),[payment({amount:15000,allocations:[{invoice_id:'1',value:15000,withheld:0}]})],mapping).lines[0].state,'partial');

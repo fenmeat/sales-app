@@ -25,6 +25,11 @@ const queryRows=async(db,sql,...args)=>(await db.prepare(sql).bind(...args).all(
 const records=async db=>(await queryRows(db,'SELECT kind,id,payload FROM v2_zoho_mirror_records')).map(r=>({...r,value:JSON.parse(r.payload)}));
 const source=async(db,kind,id)=>{const r=await db.prepare('SELECT payload FROM v2_zoho_mirror_records WHERE kind=? AND id=?').bind(kind,id).first();return r?JSON.parse(r.payload):null;};
 const active=db=>db.prepare("SELECT * FROM v2_zoho_mirror_runs WHERE status='running'").first();
+async function generation(db,runId){
+ const all=new Map((await records(db)).map(r=>[r.kind+':'+r.id,r]));
+ for(const r of await queryRows(db,'SELECT kind,id,payload,digest FROM v2_zoho_mirror_versions WHERE run_id=?',runId))all.set(r.kind+':'+r.id,{...r,value:JSON.parse(r.payload)});
+ return all;
+}
 function safeError(e){return e instanceof UserError?e.message.slice(0,240):'Source validation or database operation failed; the previous successful snapshot is retained.';}
 function reportPage(report,page){return {...report,lines:report.lines.slice((page-1)*100,page*100),invoices:(report.invoices??[]).slice((page-1)*100,page*100),receipts:(report.receipts??[]).slice((page-1)*100,page*100),page,has_more:Math.max(report.lines.length,report.invoices?.length??0,report.receipts?.length??0)>page*100};}
 
@@ -190,12 +195,33 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4,retryNow=f
  };
  try{
   while(used<maxCalls){
-   if(state.phase==='finish'&&!state.queue.length){await commitRun(db,job.id,token,state,cfg);return {complete:true,run_id:job.id,calls:state.calls,changed:state.changed,unchanged:state.unchanged};}
+   if(state.phase==='finish'&&!state.queue.length){
+    if(!state.payment_links_checked){
+     // R02 payment exports can name an invoice outside their invoice cutoff
+     // without its source ID. Once that Britos invoice is present, fetch only
+     // the matching payment from Zoho; never infer or write an allocation ID.
+     const all=await generation(db,job.id),invoices=[...all.values()].filter(r=>r.kind==='invoice'&&r.value.lines.some(l=>cfg.mapping[l.item_id]?.owner)).map(r=>r.value);
+     for(const r of all.values())if(r.kind==='payment'&&r.value.allocations.some(a=>!a.invoice_id&&invoices.some(i=>i.number===a.number&&i.customer_id===r.value.customer_id)))state.queue.push({kind:'payment_lookup',id:r.id,customer_id:r.value.customer_id,date:r.value.date,page:1});
+     state.payment_links_checked=true;await checkpoint([]);if(state.queue.length)continue;
+    }
+    await commitRun(db,job.id,token,state,cfg);return {complete:true,run_id:job.id,calls:state.calls,changed:state.changed,unchanged:state.unchanged};
+   }
    if(state.queue.length){
+    if(state.queue[0].kind==='payment_lookup'){
+     const task=state.queue[0];check(task.page<=100,'Payment link lookup exceeded its page limit.',409);
+     const response=await read(env,{username:'alex'},'customerpayments',{customer_id:task.customer_id,date:task.date,page:String(task.page),per_page:'100'});used++;state.calls++;
+     const rows=response.customer_payments??response.customerpayments,pg=response.page_context;
+     check(Array.isArray(rows)&&rows.length<=100&&Number(pg?.page)===task.page&&typeof pg.has_more_page==='boolean','Payment link lookup pagination is incomplete.',502);
+     check(rows.every(r=>r.customer_id===task.customer_id&&r.date===task.date)&&new Set(rows.map(r=>r.payment_id)).size===rows.length,'Payment link lookup returned a different account/date or duplicate ID.',502);
+     const row=rows.find(r=>r.payment_id===task.id);
+     if(row){timestamp(row.last_modified_time);state.queue[0]={kind:'payment',id:task.id,modified:row.last_modified_time,repair_link:true};}
+     else{check(pg.has_more_page,'Payment link source is missing; retain the unresolved evidence.',502);task.page++;}
+     await checkpoint([]);continue;
+    }
     const task=state.queue[0],prior=await source(db,task.kind,task.id);
     // The imported R02 already proves these records. Its exports lack modified
     // stamps, so keep a two-hour boundary overlap, not repeated old details.
-    if(task.modified&&prior&&!prior.modified&&timestamp(task.modified)<timestamp(cfg.asof)-2*3600000){state.queue.shift();state.unchanged++;await checkpoint([]);continue;}
+    if(!task.repair_link&&task.modified&&prior&&!prior.modified&&timestamp(task.modified)<timestamp(cfg.asof)-2*3600000){state.queue.shift();state.unchanged++;await checkpoint([]);continue;}
     const path=task.kind==='invoice'?'invoices':'customerpayments',response=await read(env,{username:'alex'},path+'/'+task.id,{});used++;state.calls++;
     let refunded;
     if(task.kind==='payment'&&response.payment?.amount_refunded==null){
@@ -246,9 +272,7 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4,retryNow=f
  }finally{await db.prepare('UPDATE v2_zoho_mirror_runs SET lease=NULL,lease_until=0 WHERE id=? AND lease=?').bind(job.id,token).run();}
 }
 async function commitRun(db,runId,token,state,cfg){
- const all=new Map((await records(db)).map(r=>[r.kind+':'+r.id,r]));
- const staged=await queryRows(db,'SELECT kind,id,payload,digest FROM v2_zoho_mirror_versions WHERE run_id=?',runId);
- for(const r of staged)all.set(r.kind+':'+r.id,{...r,value:JSON.parse(r.payload)});
+ const all=await generation(db,runId);
  const payments=[...all.values()].filter(r=>r.kind==='payment').map(r=>r.value),statements=[];
  if(state.inventory){
   const missing=[...all.values()].filter(r=>r.value.date>='2026-10-14'&&!state.inventory_ids[r.kind].includes(r.id));
