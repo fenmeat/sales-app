@@ -13,7 +13,7 @@ async function setup(t){
 test('workspace pages only the requested list, authenticates conditional reads and preserves private scope',async t=>{
  const {call,rows}=await setup(t),url='/api/tasks/workspace?scope=all&status=open';
  const r=await call('alex',url);assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(r.data.pa.workspace.total,70);assert.equal(r.data.pa.workspace.rows.length,25);assert.equal(r.data.pa.workspace.next_offset,25);
- assert.equal(r.data.pa.feedback.length,0);assert.equal(r.data.pa.report,null);
+ assert.deepEqual([...r.data.pa.users].sort(),['alex','alinda','xalinda','xavier']);assert.equal(r.data.pa.feedback.length,0);assert.equal(r.data.pa.report,null);
  assert.equal((await call('alex',url,undefined,{'If-None-Match':r.data.etag})).status,304);
  const next=await call('alex',url+'&offset=25&snapshot='+r.data.pa.workspace.snapshot);assert.equal(next.data.pa.workspace.rows.length,25);assert.equal(new Set([...r.data.pa.workspace.rows,...next.data.pa.workspace.rows].map(r=>r.id)).size,50);
  const scheduled=(await call('alex','/api/tasks/workspace?scope=all&status=scheduled')).data;assert.equal(scheduled.pa.workspace.total,5);assert.equal(scheduled.pa.workspace.rows.length,5);

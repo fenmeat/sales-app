@@ -2,7 +2,7 @@ import {check,today} from './domain.js';
 import {hash,isAdmin} from './auth.js';
 import {isInvoiceRep} from './invoice-auth.js';
 import {taskUsers,latestSQL,decode,canSeeTask,currentTaskNotification,ensureTaskSchema,getTask} from './tasks-api.js';
-import {canSeePa,ensurePaReportSchema,readPaReport} from './pa-report-api.js';
+import {canSeePa,paUsers,ensurePaReportSchema,readPaReport} from './pa-report-api.js';
 import {unifiedWork,selectWork,workCounts} from '../public/pa-report-model.js';
 
 const statuses=new Set(['open','scheduled','waiting','closed','submitted','all']);
@@ -32,7 +32,7 @@ export async function readTaskWorkspace(env,user,query={}){
  const register=raw?JSON.parse(raw.payload):null,canonical=register?.rows.filter(r=>canSeePa(user,r))||[],known=new Set(canonical.map(r=>r.id));
  const feedback=(result[2]?.results||[]).filter(f=>known.has(f.subject_key)).map(f=>({...f,status:f.answered?'answered':f.action==='respond'||f.question?'pending':f.acknowledged_at?'processed':'pending'}));
  const app={username:user.username,admin,invoice_rep:rep,today:today(),users:admin?taskUsers(env):[user.username],suppliers:[],tasks,notifications:[],next_offset:null};
- const pa={username:user.username,admin,private_report:user.username==='alex',rabbi_access:!rep&&['alex','alinda','xalinda','xavier'].includes(user.username),register_revision:raw?.revision||0,source_at:register?.source_at||null,source_url:register?.source_url||null,rows:canonical,feedback};
+ const pa={username:user.username,admin,users:admin?paUsers(env):[user.username],today:app.today,private_report:user.username==='alex',rabbi_access:!rep&&['alex','alinda','xalinda','xavier'].includes(user.username),register_revision:raw?.revision||0,source_at:register?.source_at||null,source_url:register?.source_url||null,rows:canonical,feedback};
  const rows=unifiedWork(app,pa),selected=selectWork(rows,{username:user.username,admin,scope,status,search}),counts=workCounts(rows,user.username);
  const snapshot=await hash(JSON.stringify({username:user.username,date:app.today,register:raw?.revision||0,tasks:tasks.map(t=>[t.id,t.revision,t.pa_sync]),feedback,scope,status,search}));
  const reset=!!query.snapshot&&query.snapshot!==snapshot,pageOffset=reset?0:offset,items=selected.slice(pageOffset,pageOffset+size);

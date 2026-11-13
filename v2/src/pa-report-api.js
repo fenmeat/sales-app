@@ -52,7 +52,7 @@ function feedbackRow(r){const payload=JSON.parse(r.payload),answer=r.answer_payl
  answer_status:answer?'answered':r.processing_error?'retry':requiresAnswer(payload)?'awaiting_answer':r.acknowledged_at?'recorded':'pending',
  acknowledged_at:r.acknowledged_at,outcome:r.outcome,source_url:r.source_url,answer,answered_at:r.answered_at||null,processing_error:answer?null:r.processing_error||null};}
 async function feedbackById(db,id){return db.prepare(feedbackSelect+' WHERE f.id=?').bind(id).first();}
-export {feedbackSelect,feedbackRow,canSee as canSeePa,summary as paSummary};
+export {canSee as canSeePa,users as paUsers};
 export async function readConversation(env,user,key,offset=0){
  const current=await subject(env,user,key);offset=Number(offset);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  // Private report comments are included in their linked task only for Alex.
