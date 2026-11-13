@@ -31,7 +31,7 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
  await page.goto(origin+'/tasks?view=report');await page.locator('[data-edit-task="'+taskId+'"]').first().click();
  assert.equal(await page.getByLabel('Taaktitel',{exact:true}).inputValue(),'Synthetic original task');assert.equal(await page.getByLabel('Sperdatum / teldatum',{exact:true}).inputValue(),'');
- const description=page.getByLabel('Beskrywing',{exact:true});await description.click();assert.equal(await description.evaluate(e=>e.selectionEnd-e.selectionStart),0);
+ const description=page.locator('textarea[name=details]');await description.click();assert.equal(await description.evaluate(e=>e.selectionEnd-e.selectionStart),0);
  await page.getByLabel('Vra foto’s, PDF’s of ’n bewysstuk wanneer dit klaar is',{exact:true}).uncheck();await page.locator('[name=edit_reason]').fill('Owner accepts the confirmation for this synthetic task.');
  await page.getByRole('button',{name:'Stoor taak',exact:true}).click();await page.waitForSelector('#history');
  let saved=(await api('/api/tasks?id='+taskId)).data.task;assert.equal(saved.requires_evidence,false);assert.equal(saved.revision,2);assert.equal(saved.due_date,'');assert.equal(saved.document_url,'https://example.com/document.pdf');
