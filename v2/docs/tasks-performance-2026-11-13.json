@@ -1,0 +1,158 @@
+{
+  "version": "0.41.0",
+  "date": "2026-11-13",
+  "code_commit": "6147530e84acf5a729946d0de2923d94bafdb6ad",
+  "baseline": {
+    "measured_at": "2026-11-13T12:07:48.152Z",
+    "app_tasks": 66,
+    "pa_rows": 222,
+    "task_read_ms": 1393,
+    "pa_read_ms": 14300,
+    "pa_database_round_trips": 55,
+    "pa_response_bytes": 299689
+  },
+  "local_real_data_cpu": {
+    "app_tasks": 65,
+    "pa_rows": 222,
+    "runs": 1000,
+    "p50_ms": 0.796152,
+    "p95_ms": 2.613069,
+    "max_ms": 24.508965
+  },
+  "browser_profiles": [
+    {
+      "profile": "chromium-desktop",
+      "synthetic_volume": {
+        "app_tasks": 66,
+        "pa_rows": 222
+      },
+      "added_api_delay_ms": 250,
+      "shell_ms": 73,
+      "pending_ms": 354,
+      "scheduled_ms": 283,
+      "completed_ms": 277,
+      "cached_ms": 17,
+      "details_ms": 317
+    },
+    {
+      "profile": "chromium-android",
+      "synthetic_volume": {
+        "app_tasks": 66,
+        "pa_rows": 222
+      },
+      "added_api_delay_ms": 250,
+      "shell_ms": 57,
+      "pending_ms": 323,
+      "scheduled_ms": 284,
+      "completed_ms": 280,
+      "cached_ms": 16,
+      "details_ms": 818
+    },
+    {
+      "profile": "webkit-iphone",
+      "synthetic_volume": {
+        "app_tasks": 66,
+        "pa_rows": 222
+      },
+      "added_api_delay_ms": 250,
+      "shell_ms": 79,
+      "pending_ms": 368,
+      "scheduled_ms": 290,
+      "completed_ms": 288,
+      "cached_ms": 27,
+      "details_ms": 340
+    },
+    {
+      "profile": "webkit-ipad",
+      "synthetic_volume": {
+        "app_tasks": 66,
+        "pa_rows": 222
+      },
+      "added_api_delay_ms": 250,
+      "shell_ms": 78,
+      "pending_ms": 354,
+      "scheduled_ms": 286,
+      "completed_ms": 291,
+      "cached_ms": 32,
+      "details_ms": 349
+    }
+  ],
+  "validation": {
+    "unit_tests": 500,
+    "unit_failed": 0,
+    "browser_run": "https://github.com/fenmeat/sales-app/actions/runs/43425490824",
+    "note": "Synthetic Worker/D1 test fixtures only; no production business writes. Profiles are emulated, not physical devices. Each API call adds 250 ms."
+  },
+  "live_after": {
+    "version": "0.41.0",
+    "code_commit": "6147530e84acf5a729946d0de2923d94bafdb6ad",
+    "deployment_check": "success",
+    "deployment_completed_at": "2026-11-13T12:35:59Z",
+    "measured_at": "2026-11-13T12:36:34.264Z",
+    "app_tasks": 66,
+    "pa_rows": 224,
+    "pa_read_ms": 1117,
+    "pa_database_round_trips": 3,
+    "workspace_samples": [
+      {
+        "status": "open",
+        "service_read_ms": 368,
+        "records": 25,
+        "total": 42,
+        "bytes": 72725,
+        "detail_ms": 181,
+        "connector_wall_ms": 2678
+      },
+      {
+        "status": "scheduled",
+        "service_read_ms": 568,
+        "records": 1,
+        "total": 1,
+        "bytes": 6919,
+        "detail_ms": 183,
+        "connector_wall_ms": 3191
+      },
+      {
+        "status": "closed",
+        "service_read_ms": 894,
+        "records": 25,
+        "total": 184,
+        "bytes": 38445,
+        "detail_ms": 186,
+        "connector_wall_ms": 3803
+      },
+      {
+        "status": "open",
+        "service_read_ms": 874,
+        "records": 25,
+        "total": 42,
+        "bytes": 72725,
+        "detail_ms": 179,
+        "connector_wall_ms": 3852
+      },
+      {
+        "status": "scheduled",
+        "service_read_ms": 574,
+        "records": 1,
+        "total": 1,
+        "bytes": 6919,
+        "detail_ms": 191,
+        "connector_wall_ms": 2780
+      },
+      {
+        "status": "closed",
+        "service_read_ms": 571,
+        "records": 25,
+        "total": 184,
+        "bytes": 38445,
+        "detail_ms": 181,
+        "connector_wall_ms": 2761
+      }
+    ],
+    "app_record_count": 66,
+    "distinct_app_ids": 66,
+    "changed_app_revisions": 0,
+    "note": "Workspace service times exclude outer connector/OAuth overhead and schema initialization; detail reads are timed separately. Production register increased from 222 to 224 rows through other activity; this optimization issued no register/task writes. No authenticated production browser timing is claimed.",
+    "production_browser_run": "https://github.com/fenmeat/sales-app/actions/runs/43425925937"
+  }
+}
