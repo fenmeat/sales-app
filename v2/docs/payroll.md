@@ -6,7 +6,35 @@ confirmed on 23 October 2026 that Friday covers Monday through Friday and that
 auditors provide the PAYE amount. Fen calculates UIF; Alex pays the auditors;
 the auditors submit. No payment or filing API is called.
 
-## First use
+## Begin vars — operational payroll from 16 November 2026
+
+Alex or Alinda selects **Begin vars** in Payroll and saves once. This appends a
+settings revision with a Monday start and Friday 20 November payday. Earlier
+payroll remains with the auditors. No openings, pay runs or payments are created
+by activation. Earlier saved wages and payslips are available for reference.
+
+Use **Week wages → Refresh draft from clock → Review pay**. For a standard full
+week with no adjustments, select **SARS weekly table** and confirm the treatment.
+The Worker applies the 2027 weekly table and age at tax year end. For a directive,
+non-standard or partial employment period, annual bonus, special payment,
+commission, medical credit or pension adjustment, use auditor-confirmed PAYE for
+this week. The SARS weekly table is valid through 28 February 2027.
+
+In November, where earlier remuneration can affect the monthly UIF ceiling,
+confirm the full weekly share only when the evidence supports both contributions.
+Otherwise enter the current employee and employer UIF amounts confirmed by the
+auditors and identify the source in the review note. No historic wages or
+deductions are imported. The month resets in December. November's screen, print
+and CSV cover only approved app weeks from the 16th.
+
+**Approve week** freezes payslips. **Record payment** is used only after paying
+outside the app. **Next Friday** loads the next week. Future approvals remain blocked.
+
+Sources: [SARS weekly PAYE tables](https://www.sars.gov.za/tax-rates/employers/tax-deduction-tables/),
+[2027 employer guide](https://www.sars.gov.za/guide-for-employers-in-respect-of-employees-tax-2027/),
+[SARS UIF](https://www.sars.gov.za/types-of-tax/unemployment-insurance-fund/).
+
+## Original setup before activating Begin vars
 
 1. Pay setup: confirm legal employer name/address and the first Fen Friday.
 2. Confirm each employee's rate, effective date, occupation, pay basis,

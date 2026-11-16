@@ -4,6 +4,7 @@ import {text,uuid,periodHours,dayStart} from './staff-domain.js';
 // All posted amounts are integer cents; hours are integer seconds. Round each
 // earnings line once, then add. Never derive historical pay from current rates.
 export const PAYROLL_RULES={version:'2026-10-23.1',uif_bps:100,uif_monthly_ceiling_cents:1771200,ordinary_week_seconds:45*3600,overtime_bps:15000};
+export const FRESH_START = {start_date:'2026-11-16', first_pay_date:'2026-11-20'};
 export const MONEY_KEYS=['ordinary_cents','overtime_cents','leave_cents','special_cents','bonus_cents','commission_cents','gross_cents','uif_base_cents','uif_employee_cents','uif_employer_cents','paye_cents','meat_cents','other_deduction_cents','net_cents'];
 export const HOUR_KEYS=['ordinary_seconds','overtime_seconds','leave_seconds','sunday_seconds','holiday_seconds'];
 export const integer=(n,label,max=100000000)=>{check(Number.isSafeInteger(n)&&n>=0&&n<=max,'Enter a valid '+label+'.');return n;};
@@ -38,7 +39,7 @@ export function priorFor(id,date,runs,openings){
  const rows=[...openings.filter(o=>o.employee_id===id&&o.month===date.slice(0,7)),...runs.filter(r=>['Approved','Paid'].includes(r.status)&&r.pay_date<date&&r.pay_date.slice(0,7)===date.slice(0,7)).flatMap(r=>r.rows.filter(x=>x.employee_id===id&&x.included))];
  return rows.reduce((a,r)=>{for(const k of MONEY_KEYS)a[k]+=r[k]??0;return a;},zeroTotals());
 }
-export function calculateRow(raw,profile,prior=zeroTotals()){
+export function calculateRow(raw,profile,prior=zeroTotals(),options={}){
  const r={};for(const k of HOUR_KEYS)r[k]=integer(raw[k],k.replaceAll('_',' '),7*24*3600);
  check(r.ordinary_seconds+r.overtime_seconds+r.sunday_seconds+r.holiday_seconds<=7*24*3600,'Worked hours exceed the period.');
  for(const k of ['bonus_cents','commission_cents','special_cents','paye_cents','meat_cents','other_deduction_cents'])r[k]=raw[k]===null&&k==='paye_cents'?null:integer(raw[k],k.replaceAll('_',' '));
@@ -59,6 +60,28 @@ export function calculateRow(raw,profile,prior=zeroTotals()){
  // Do not silently recover prior under-deductions from this week's employee.
  r.uif_employee_cents=Math.min(r.uif_employee_cents,Math.ceil(r.uif_base_cents/100));
  r.uif_employer_cents=Math.min(r.uif_employer_cents,Math.ceil(r.uif_base_cents/100));
+ if(options.weeklyTax){
+  check(!r.commission_cents && !r.special_cents, 'Use auditor-confirmed PAYE for commission or special pay.');
+  check(raw.standard_week_confirmed===true, 'Confirm standard weekly taxable pay and any bonus earned for this same week.');
+  r.paye_cents=options.weeklyTax(r.gross_cents);
+  r.paye_method='SARS weekly table';r.standard_week_confirmed=true;
+ }
+ if(options.externalHistory && r.uif_base_cents>0){
+  // Only this week's contribution is captured. Prior wages and contributions remain unknown.
+  const cap=Math.round(PAYROLL_RULES.uif_monthly_ceiling_cents/100);
+  const full=Math.round(r.uif_base_cents/100);
+  const knownLimit=side=>Math.min(Math.ceil(r.uif_base_cents/100),cap-prior['uif_'+side+'_cents']);
+  check(['Full weekly share','Confirmed current amounts'].includes(raw.cutover_uif),
+   'Check whether earlier November pay leaves room for both full UIF shares. If the ceiling or rounding affects this week, enter the two current amounts confirmed by the auditors.');
+  r.cutover_uif=raw.cutover_uif;
+  for(const side of ['employee','employer']){
+   const key='current_'+side+'_cents';
+   const amount=raw.cutover_uif==='Full weekly share'?full:integer(raw[key], 'confirmed current '+side+' UIF');
+   check(amount<=knownLimit(side),'This UIF share exceeds the weekly amount or the remaining monthly ceiling. Check the current amounts with the auditors.');
+   if(raw.cutover_uif==='Confirmed current amounts')r[key]=amount;
+   r['uif_'+side+'_cents']=amount;
+  }
+ }
  r.net_cents=r.paye_cents===null?null:r.gross_cents-r.uif_employee_cents-r.paye_cents-r.meat_cents-r.other_deduction_cents;
  check(r.net_cents===null||r.net_cents>=0,'Deductions exceed gross pay.');return r;
 }
@@ -81,10 +104,22 @@ export function suggestRows(staff,shifts,settings,payDate){
  });
 }
 export function totalRows(rows){const out=zeroTotals();for(const r of rows.filter(x=>x.included!==false))for(const k of Object.keys(out))out[k]+=r[k]??0;return out;}
-export function monthlyReport(month,runs,openings,company,people){
- monthKey(month);const selected=runs.filter(r=>r.pay_date.slice(0,7)===month&&['Approved','Paid'].includes(r.status));
+export function monthlyReport(month,runs,openings,company,people,fresh=null){
+ monthKey(month);
+ const startMonth=fresh?.start_date.slice(0,7);
+ const partialStart=month===startMonth;
+ const historical=!!fresh && month<startMonth;
+ if(fresh){
+  runs=runs.filter(r=>r.pay_date>=fresh.first_pay_date);
+  openings=[];
+ }
+ const selected=runs.filter(r=>r.pay_date.slice(0,7)===month&&['Approved','Paid'].includes(r.status));
  const ids=new Set([...selected.flatMap(r=>r.rows.filter(x=>x.included).map(x=>x.employee_id)),...openings.filter(o=>o.month===month).map(o=>o.employee_id)]);
- const rows=[...ids].map(id=>{const native=selected.flatMap(r=>r.rows.filter(x=>x.employee_id===id&&x.included).map(x=>({...x,status:r.status}))),opening=openings.find(o=>o.employee_id===id&&o.month===month),p=people.find(p=>p.id===id),totals=totalRows([...native,...(opening?[opening]:[])]);return {employee_id:id,name:native.at(-1)?.name??p?.name??id,code:native.at(-1)?.code??p?.code??'',...totals,paid_net_cents:native.filter(r=>r.status==='Paid').reduce((s,r)=>s+r.net_cents,0)+(opening?.net_cents??0),opening:!!opening,uif_total_cents:totals.uif_employee_cents+totals.uif_employer_cents,uif_expected_cents:Math.round(Math.min(totals.uif_base_cents,1771200)/100),exemption_review:native.some(r=>r.uif==='Exempt')};});
- const approvedDates=selected.map(r=>r.pay_date),missing=[];for(let d=nextFriday(month+'-01');d.slice(0,7)===month;d=addDays(d,7)){if(d>today())continue;if(company&&d<company.first_pay_date)continue;if(!approvedDates.includes(d))missing.push(d);}
- return {month,company,rows,totals:totalRows(rows),approved_dates:approvedDates,missing_fridays:missing,drafts:runs.filter(r=>r.pay_date.slice(0,7)===month&&r.status==='Draft').map(r=>r.pay_date),opening_through:month===company?.first_pay_date.slice(0,7)?addDays(company.first_pay_date,-1):null,opening_missing:month===company?.first_pay_date.slice(0,7)?people.filter(p=>p.active&&!openings.some(o=>o.employee_id===p.id&&o.month===month)).map(p=>p.name):[],coverage:'Approved Fen runs by Friday pay date, plus verified opening amounts. Drafts excluded.'};
+ const rows=[...ids].map(id=>{const native=selected.flatMap(r=>r.rows.filter(x=>x.employee_id===id&&x.included).map(x=>({...x,status:r.status}))),opening=openings.find(o=>o.employee_id===id&&o.month===month),p=people.find(p=>p.id===id),totals=totalRows([...native,...(opening?[opening]:[])]);return {employee_id:id,name:native.at(-1)?.name??p?.name??id,code:native.at(-1)?.code??p?.code??'',...totals,paid_net_cents:native.filter(r=>r.status==='Paid').reduce((s,r)=>s+r.net_cents,0)+(opening?.net_cents??0),opening:!!opening,uif_total_cents:totals.uif_employee_cents+totals.uif_employer_cents,uif_expected_cents:partialStart?null:Math.round(Math.min(totals.uif_base_cents,1771200)/100),exemption_review:native.some(r=>r.uif==='Exempt')};});
+ const approvedDates=selected.map(r=>r.pay_date),missing=[];for(let d=nextFriday(month+'-01');d.slice(0,7)===month;d=addDays(d,7)){if(!fresh && d>today())continue;if(company&&d<company.first_pay_date)continue;if(!approvedDates.includes(d))missing.push(d);}
+ let coverage='Approved Fen runs by Friday pay date, plus verified opening amounts. Drafts excluded.';
+ if(historical)coverage='Historical payroll is held by the auditors. See Employee history and Imported records.';
+ else if(partialStart)coverage='Incomplete November report. App payroll from 16 November only. Earlier payments are held by the auditors and excluded. This is not a full statutory report.';
+ else if(fresh)coverage=missing.length?'Partial month. Only approved app payroll is included.':'All scheduled Fridays are included. Approved app payroll by Friday pay date.';
+ return {month,company,rows,coverage,historical,partial:historical||partialStart||missing.length>0,totals:totalRows(rows),approved_dates:approvedDates,missing_fridays:missing,drafts:runs.filter(r=>r.pay_date.slice(0,7)===month&&r.status==='Draft').map(r=>r.pay_date),opening_through:!fresh&&month===company?.first_pay_date.slice(0,7)?addDays(company.first_pay_date,-1):null,opening_missing:!fresh&&month===company?.first_pay_date.slice(0,7)?people.filter(p=>p.active&&!openings.some(o=>o.employee_id===p.id&&o.month===month)).map(p=>p.name):[]};
 }

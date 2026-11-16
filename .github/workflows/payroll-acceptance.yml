@@ -1,0 +1,29 @@
+name: Payroll browser acceptance
+on:
+  push:
+    branches: [payroll/fresh-start-20261116]
+    paths:
+      - 'v2/**'
+      - '.github/workflows/payroll-acceptance.yml'
+permissions:
+  contents: read
+jobs:
+  payroll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: v2/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm install --prefix "$RUNNER_TEMP/payroll-browser" playwright@1.62.1 --no-audit --no-fund
+      - run: node "$RUNNER_TEMP/payroll-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Exercise both Friday screens, payslip PDF, CSV and printed month report
+        run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-payroll.mjs

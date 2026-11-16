@@ -3,6 +3,7 @@ import {isAdmin} from './auth.js';
 import {readOnlyDatabase} from './pa-reads.js';
 import {staffState,staffApi} from './staff-api.js';
 import {loadBundle,deriveImport,staffImportApi} from './staff-import.js';
+import {FRESH_START,profileAt} from './payroll-domain.js';
 import {LEAVE_TYPES,balance} from './staff-domain.js';
 
 export const STAFF_READ_SCOPE='fenmeat:staff:read';
@@ -11,7 +12,7 @@ const warnings=[
  'Imported source records are a dated snapshot; later Google Sheet changes are not synchronized.',
  'Source rates, employment dates and leave balances are evidence awaiting reconciliation, not approved payroll inputs.',
  'Historical source clock and leave rows are separate from native shifts and the approved leave ledger.',
- 'Payroll is available in Staff administration. Confirm pay setup and opening amounts and approve each week; source records alone are not payroll-ready. Fen calculates UIF; Alex pays the auditors; the auditors submit it.'
+ 'Payroll is available in Staff administration. Confirm pay setup and current deductions and approve each week; source records alone are not payroll-ready. Fen calculates UIF; Alex pays the auditors; the auditors submit it.'
 ];
 
 // This adapter has no schema initializer, write action, credential query or raw SQL input.
@@ -50,7 +51,18 @@ export async function readStaffData(args,env,username,scopes){
    check(register?.action==='source_history_import'&&JSON.parse(register.payload).source_history_imports?.includes(state.latest_history_import),'The history import revision is missing.',409);
    latestHistory={...saved,checksum_verified:true,completed_at:latest.batch.completed_at};
   }
-  return result({initialized:true,import_verified:!!verified?.linked_to_current_register,verified_import:verified,latest_history:latestHistory,imports,
+  const payrollTable=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='v2_staff_payroll'").first();
+  const latestSettings=payrollTable?await db.prepare("SELECT payload,revision FROM v2_staff_payroll WHERE entity_key='settings' ORDER BY revision DESC LIMIT 1").first():null;
+  const settings=JSON.parse(latestSettings?.payload??'{}');
+  const active=state.people.filter(p=>p.active && (!p.start_date||p.start_date<=FRESH_START.first_pay_date));
+  const setup={
+   week_start:FRESH_START.start_date, first_friday_configured:settings.company?.first_pay_date??null,
+   fresh_start_active:!!settings.fresh_start, settings_revision:latestSettings?.revision??null,
+   saved_profiles:settings.profiles?.length??0, active_people:active.length,
+   active_with_effective_profile:active.filter(p=>profileAt(settings,p.id,FRESH_START.start_date)).length,
+   active_needing_employment_check:active.filter(p=>!p.start_date||p.employment_verified===false).length
+  };
+  return result({initialized:true,first_week_setup:setup,import_verified:!!verified?.linked_to_current_register,verified_import:verified,latest_history:latestHistory,imports,
    current:{people:state.people.length,active:state.people.filter(p=>p.active).length,inactive:state.people.filter(p=>!p.active).length,
     employment_dates_unconfirmed:state.people.filter(p=>p.employment_verified===false).length,missing_start_dates:state.people.filter(p=>!p.start_date).length,
     without_schedules:state.people.filter(p=>p.active&&!p.schedules.length).length,leave_requests:state.leave.length,leave_ledger_entries:state.ledger.length},
