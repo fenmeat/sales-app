@@ -34,10 +34,14 @@ function approvalPreview(e,digest) {
 }
 const directConsent = s => /^(?:(?:ja|dis reg|yes)[,!. ]+)?(?:stuur (?:dit|die e-pos|die email|e-pos|email)|send (?:it|the email))[.! ]*$/i.test(String(s).trim());
 async function approvalPair(db,key,data){
- const proof=await db.prepare(`SELECT f.actor,f.subject_key,f.payload,f.created_at,p.subject_key proposal_key,a.payload answer,a.created_at answered_at
+ const proof=await db.prepare(`SELECT f.actor,f.subject_key,f.payload,f.created_at,p.subject_key proposal_key,p.payload proposal_payload,a.payload answer,a.created_at answered_at
  FROM v2_pa_report_feedback f JOIN v2_pa_report_feedback p ON p.id=json_extract(f.payload,'$.reply_to')
  JOIN v2_pa_report_answers a ON a.feedback_id=p.id WHERE f.id=? AND p.id=?`).bind(data.approval_feedback_id,data.proposal_feedback_id).first();
- check(proof?.actor==='alex'&&proof.subject_key===key&&proof.proposal_key===key&&proof.created_at>=proof.answered_at&&directConsent(JSON.parse(proof.payload).note),'Lees Alex se oorspronklike stuurinstruksie en die presiese konsep.',409);
+ // A private report item can display several tasks. Only a single explicit
+ // task link may carry consent across the report and task screens.
+ const belongs=(subject,payload)=>subject===key || (subject?.startsWith('report-') &&
+  JSON.stringify(JSON.parse(payload).source_task_ids)===JSON.stringify([key]));
+ check(proof?.actor==='alex'&&belongs(proof.subject_key,proof.payload)&&belongs(proof.proposal_key,proof.proposal_payload)&&proof.created_at>=proof.answered_at&&directConsent(JSON.parse(proof.payload).note),'Lees Alex se oorspronklike stuurinstruksie en die presiese konsep.',409);
  return proof;
 }
 function instant(v) {

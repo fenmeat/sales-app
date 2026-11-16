@@ -69,17 +69,21 @@ test('a direct human reply can reuse only its exact reviewed draft and reply att
  const env={DB:db,APP_ACCESS_KEYS:JSON.stringify({alex:'a'.repeat(40)})},url='https://docs.google.com/spreadsheets/d/example/edit';
  const ids=['TSK-00004','TSK-00005'],rows=ids.map(id=>({id,title:'Follow-up',area:'Legal',scope:'private',assigned_to:'alex',status:'Waiting',review_date:today(),source_url:url}));
  await savePaReport(env,user,{operation:'register',revision:0,data:{source_at:new Date().toISOString(),source_url:url,rows},request_id:crypto.randomUUID(),reason:'Synthetic register'});
+ const sections=['emails','activity','tasks','tomorrow','rabbi'].map(id=>({id,title:id,items:[{id,text:'Synthetic report item',title:'Status',pa_task_ids:id==='tasks'?[ids[0]]:[]}]}));
+ await savePaReport(env,user,{operation:'report',revision:0,request_id:crypto.randomUUID(),reason:'Synthetic linked report',data:{date:today(),source_at:new Date().toISOString(),source_url:url,register_revision:1,sections}});
  const write=(id,action,revision,data)=>savePaReport(env,user,{operation:'email_followup',subject_key:id,action,revision,data,request_id:crypto.randomUUID(),reason:'Synthetic evidence'});
  const thread_id='ffee332211',parent_id='abcd0123';
  for(const [i,key] of ids.entries()){
   const data={envelope:{from:'a@example.com',to:['law@example.com'],subject:'Case',body:'Confirm item '+i,scope:'Check item '+i,thread_id,parent_id},review_date:today(),next_action:'Gaan die antwoord na.'};
   await write(key,'draft',0,data);await write(key,'submit',1);
   const m=await readMail(db,key),subject=(await readPaReport(env,user,{resource:'summary',id:key})).subject;
-  const ask={action:'respond',request_id:crypto.randomUUID(),subject_key:key,subject_hash:subject.subject_hash,note:'Skryf die opvolg.'};
+  const originalKey=i===0?'report-'+today()+':tasks':key;
+  const original=(await readPaReport(env,user,{resource:'summary',id:originalKey})).subject;
+  const ask={action:'respond',request_id:crypto.randomUUID(),subject_key:originalKey,subject_hash:original.subject_hash,note:'Skryf die opvolg.'};
   assert.equal((await call('alex','/api/pa-report/feedback',ask)).status,200);
   const a={kind:'instruction',text:m.approval_preview,recommendation:'Lees die konsep.',next_action:subject.next_action,responsible:'alex',follow_up_date:subject.review_date,task_status:subject.status};
-  await savePaReport(env,user,{operation:'answer',request_id:crypto.randomUUID(),reason:'Synthetic draft reply',feedback_id:ask.request_id,subject_hash:subject.subject_hash,current_subject_hash:subject.subject_hash,revision:1,source_url:url,answer:a});
-  const reply={...ask,request_id:crypto.randomUUID(),reply_to:ask.request_id,note:'Dis reg, stuur email.'};
+  await savePaReport(env,user,{operation:'answer',request_id:crypto.randomUUID(),reason:'Synthetic draft reply',feedback_id:ask.request_id,subject_hash:original.subject_hash,current_subject_hash:original.subject_hash,revision:1,source_url:url,answer:a});
+  const reply={...ask,subject_key:key,subject_hash:subject.subject_hash,request_id:crypto.randomUUID(),reply_to:ask.request_id,note:'Dis reg, stuur email.'};
   assert.equal((await call('alex','/api/pa-report/feedback',reply)).status,200);
   await assert.rejects(write(key,'adopt',2,{approval_feedback_id:ask.request_id,proposal_feedback_id:reply.request_id}),/stuurinstruksie/);
   await write(key,'adopt',2,{approval_feedback_id:reply.request_id,proposal_feedback_id:ask.request_id});
