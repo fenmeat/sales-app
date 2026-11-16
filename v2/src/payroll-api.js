@@ -21,7 +21,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
   const from=fresh && date===fresh.first_pay_date?fresh.start_date:addDays(date,-6);
   const shifts=await shiftsBetween(db,from,date),rows=suggestRows(current.state,shifts,state.settings,date);
   for(const row of rows)row.suggested_hours={ordinary_seconds:row.ordinary_seconds,overtime_seconds:row.overtime_seconds,leave_seconds:row.leave_seconds};
-  return {key:'run:'+date,pay_date:date,from:addDays(date,-4),to:date,status:'Draft',source,rules:PAYROLL_RULES,company:state.settings.company,rows,totals:totalRows([])};
+  return {key:'run:'+date,pay_date:date,from:addDays(date,-4),to:date,status:'Draft',source,rules:fresh?{...PAYROLL_RULES,version:'2026-11-16.1'}:PAYROLL_RULES,company:state.settings.company,rows,totals:totalRows([])};
  };
  const reviewedAmounts=async(raw,profile,person,date)=>{
   const operational=!!fresh && date>=fresh.first_pay_date;
@@ -38,7 +38,9 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
  const payDate=friday(url.searchParams.get('pay_date')??nextFriday());
  if(request.method==='GET'){
   if(url.pathname.endsWith('/history'))return {events:(await db.prepare('SELECT revision,entity_key,action,actor,saved_at FROM v2_staff_payroll ORDER BY revision DESC LIMIT 100').all()).results};
-  const run=state.runs.find(r=>r.pay_date===payDate)??await preview(payDate);
+  const historical=fresh && payDate<fresh.first_pay_date;
+  const stored=state.runs.find(r=>r.pay_date===payDate);
+  const run=stored??(historical?{status:'Reference',pay_date:payDate,from:addDays(payDate,-4),to:payDate,rows:[],totals:null}:await preview(payDate));
   return {can_start_fresh:isAdmin(user.username),revision:state.revision,source,settings:state.settings,openings:state.openings,run,stale:stale(run),saved:!!run.saved_revision,runs:state.runs.map(({pay_date,status,totals,saved_at})=>({pay_date,status,totals,saved_at})).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)),month:monthlyReport(url.searchParams.get('month')??payDate.slice(0,7),state.runs,state.openings,state.settings.company,current.state.people,fresh)};
  }
  check(request.method==='POST','Not found.',404);
