@@ -1,4 +1,5 @@
 import {check,today} from './domain.js';
+import {mailSummaries,projectMail} from './pa-email.js';
 import {hash,isAdmin} from './auth.js';
 import {isInvoiceRep} from './invoice-auth.js';
 import {taskUsers,latestSQL,decode,canSeeTask,currentTaskNotification,ensureTaskSchema,getTask} from './tasks-api.js';
@@ -29,12 +30,14 @@ export async function readTaskWorkspace(env,user,query={}){
  WHERE json_extract(f.payload,'$.action') IN ('respond','complete') AND NOT EXISTS
  (SELECT 1 FROM v2_pa_report_feedback n WHERE n.subject_key=f.subject_key AND json_extract(n.payload,'$.action') IN ('respond','complete') AND (n.created_at>f.created_at OR (n.created_at=f.created_at AND n.id>f.id))) ORDER BY f.created_at DESC,f.id DESC`));
  const result=await env.DB.batch(statements),tasks=result[0].results.map(decode).filter(t=>canSeeTask(user,t)),raw=result[1]?.results[0];
- const register=raw?JSON.parse(raw.payload):null,canonical=register?.rows.filter(r=>canSeePa(user,r))||[],known=new Set(canonical.map(r=>r.id));
+ const register=raw?JSON.parse(raw.payload):null,visibleRows=register?.rows.filter(r=>canSeePa(user,r))||[];
+ const mails=user.username==='alex'?await mailSummaries(env.DB):new Map();
+ const canonical=visibleRows.map(r=>projectMail(r,mails.get(r.id),today())),known=new Set(canonical.map(r=>r.id));
  const feedback=(result[2]?.results||[]).filter(f=>known.has(f.subject_key)).map(f=>({...f,status:f.answered?'answered':f.action==='respond'||f.question?'pending':f.acknowledged_at?'processed':'pending'}));
  const app={username:user.username,admin,invoice_rep:rep,today:today(),users:admin?taskUsers(env):[user.username],suppliers:[],tasks,notifications:[],next_offset:null};
  const pa={username:user.username,admin,users:admin?paUsers(env):[user.username],today:app.today,private_report:user.username==='alex',rabbi_access:!rep&&['alex','alinda','xalinda','xavier'].includes(user.username),register_revision:raw?.revision||0,source_at:register?.source_at||null,source_url:register?.source_url||null,rows:canonical,feedback};
  const rows=unifiedWork(app,pa),selected=selectWork(rows,{username:user.username,admin,scope,status,search}),counts=workCounts(rows,user.username);
- const snapshot=await hash(JSON.stringify({username:user.username,date:app.today,register:raw?.revision||0,tasks:tasks.map(t=>[t.id,t.revision,t.pa_sync]),feedback,scope,status,search}));
+ const snapshot=await hash(JSON.stringify({username:user.username,date:app.today,register:raw?.revision||0,tasks:tasks.map(t=>[t.id,t.revision,t.pa_sync]),feedback,mail:[...mails].map(([id,m])=>[id,m.revision]),scope,status,search}));
  const reset=!!query.snapshot&&query.snapshot!==snapshot,pageOffset=reset?0:offset,items=selected.slice(pageOffset,pageOffset+size);
  const deep=query.case&&rows.find(r=>r.subject_key===query.case||r.id===query.case||r.app_task_id===query.case);
  if(deep&&!items.some(r=>r.id===deep.id))items.push(deep);

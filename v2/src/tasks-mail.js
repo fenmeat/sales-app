@@ -68,7 +68,11 @@ export async function mailAction(env,user,b,getTask){
    check(/^[a-f0-9]{8,40}$/.test(b.message_id??'')&&typeof b.sent_url==='string'&&/^https:\/\/mail\.google\.com\//.test(b.sent_url),'Provide the verified Gmail Sent message.');message_id=b.message_id;sent_url=b.sent_url;
   }else if(status==='failed'||status==='cancelled'){check(clean(b.error,500),'Record why this request was stopped.');error=b.error;}
  }
- const value={...old,status,updated_at:at,...(error?{error}:{}),...(status==='sent'?{message_id,sent_url,sent_at:at,error:''}:{}),history:[...old.history,{request_id:b.request_id,fingerprint,at,status,actor:user.username}]};delete value.revision;
+ if(status==='sent'){
+  if(b.thread_id!==undefined)check(/^[a-f0-9]{8,40}$/.test(b.thread_id),'Provide the verified Gmail thread.');
+  if(b.sent_at!==undefined)check(typeof b.sent_at==='string'&&Number.isFinite(Date.parse(b.sent_at))&&Date.parse(b.sent_at)<=Date.now()+60000,'Provide the verified Gmail send time.');
+ }
+ const value={...old,status,updated_at:at,...(error?{error}:{}),...(status==='sent'?{message_id,sent_url,sent_at:b.sent_at?new Date(b.sent_at).toISOString():at,sent_at_source:b.sent_at?'gmail':'recorded',...(b.thread_id?{thread_id:b.thread_id}:{}),error:''}:{}),history:[...old.history,{request_id:b.request_id,fingerprint,at,status,actor:user.username}]};delete value.revision;
  const result=await env.DB.prepare('UPDATE v2_task_mail SET revision=revision+1,status=?,payload=?,updated_at=? WHERE id=? AND revision=?').bind(status,JSON.stringify(value),at,id,b.revision).run();
  check(result.meta.changes===1,'The email status changed. Read it again.',409);return {email:{...value,revision:b.revision+1},replayed:false};
 }

@@ -1,9 +1,11 @@
 import {check,UserError,dateKey,today} from './domain.js';
+import {EMAIL_SCHEMA,changeMail,readMail,mailSummaries,mailWork,projectMail} from './pa-email.js';
 import {hash,isAdmin,keys} from './auth.js';
 
 // A versioned read model of the existing PA register, never a second master.
 // Private records and the complete email report are filtered on the server.
 export const PA_REPORT_SCHEMA=[
+ ...EMAIL_SCHEMA,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_versions (resource_key TEXT NOT NULL,revision INTEGER NOT NULL,request_id TEXT UNIQUE NOT NULL,fingerprint TEXT NOT NULL,payload TEXT NOT NULL,actor TEXT NOT NULL,saved_at TEXT NOT NULL,PRIMARY KEY(resource_key,revision))`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_feedback (id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,subject_key TEXT NOT NULL,subject_hash TEXT NOT NULL,payload TEXT NOT NULL,actor TEXT NOT NULL,created_at TEXT NOT NULL,acknowledged_at TEXT,outcome TEXT,source_url TEXT)`,
  `CREATE INDEX IF NOT EXISTS v2_pa_report_feedback_subject ON v2_pa_report_feedback(subject_key,created_at)`,
@@ -35,7 +37,7 @@ function rabbiReading(report){
 async function latest(db,key){const r=await db.prepare('SELECT * FROM v2_pa_report_versions WHERE resource_key=? ORDER BY revision DESC LIMIT 1').bind(key).first();return r?{...JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at}:null;}
 async function subject(env,user,key){
  const register=await latest(env.DB,'register');
- if(TSK.test(key)){const r=register?.rows.find(r=>r.id===key);check(r&&canSee(user,r),'Report item not found.',404);return {...r,subject_key:r.id,subject_hash:await hash(JSON.stringify(r)),register_revision:register.revision};}
+ if(TSK.test(key)){const r=register?.rows.find(r=>r.id===key);check(r&&canSee(user,r),'Report item not found.',404);const mail=user.username==='alex'?await env.DB.prepare('SELECT summary FROM v2_pa_followup_mail WHERE subject_key=? ORDER BY revision DESC LIMIT 1').bind(key).first():null;const current=projectMail(r,mail&&JSON.parse(mail.summary));return {...current,subject_key:r.id,subject_hash:await hash(JSON.stringify(current)),register_revision:register.revision};}
  check(user.username==='alex','Report item not found.',404);
  const m=/^(report-\d{4}-\d{2}-\d{2}):([a-zA-Z0-9-]{1,90})$/.exec(key??'');check(m,'Invalid report item.');
  const report=await latest(env.DB,m[1]),item=report?.sections.flatMap(s=>s.items).find(i=>i.id===m[2]);check(item,'Report item not found.',404);
@@ -63,12 +65,19 @@ export async function readPaReport(env,user,query={}){
  if(query.resource==='summary'&&/^tasks-workspace(?:-(open|scheduled|closed))?$/.test(query.id||''))return (await import('./task-workspace.js')).workspaceDiagnostic(env,user,{status:query.id.split('-')[2]||'open'});
  if(query.resource==='summary'&&query.id==='tasks-performance')return (await import('./task-performance.js')).taskPerformance(env,user);
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
+ if(query.resource==='summary' && (query.id==='email-work'||query.id?.startsWith('email-TSK-'))){
+  check(user.username==='alex','Slegs Alex kan e-posopvolging bestuur.',403);
+  if(query.id==='email-work')return mailWork(env.DB,query.offset);
+  const key=query.id.slice(6);await subject(env,user,key);
+  return {email:await readMail(env.DB,key)};
+ }
  if(query.resource==='summary'&&query.id==='report-context'){
   check(user.username==='alex','Only Alex can read report context.',403);const register=await latest(env.DB,'register');
   const feedback=(await env.DB.prepare(feedbackSelect+' ORDER BY f.created_at DESC,f.id DESC LIMIT 2000').all()).results.map(feedbackRow);
   const lastReport=await env.DB.prepare("SELECT resource_key FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' ORDER BY resource_key DESC,revision DESC LIMIT 1").first();
   const previous=lastReport?await latest(env.DB,lastReport.resource_key):null;
-  return {register_revision:register?.revision||0,source_at:register?.source_at,previous_cutoff:previous?.source_at||null,followup:reportFollowup(register?.rows||[],feedback,today(),previous?.source_at||'')};
+  const mails=await mailSummaries(env.DB);
+  return {register_revision:register?.revision||0,source_at:register?.source_at,previous_cutoff:previous?.source_at||null,followup:reportFollowup((register?.rows||[]).map(r=>projectMail(r,mails.get(r.id))),feedback,today(),previous?.source_at||'')};
  }
  if(query.resource==='summary'&&query.id)return readConversation(env,user,query.id,query.offset);
  if(query.resource==='pending_feedback'){
@@ -90,7 +99,9 @@ export async function readPaReport(env,user,query={}){
   env.DB.prepare('SELECT subject_key,remind_at,request_id FROM v2_pa_report_reminders WHERE username=?').bind(user.username),
   env.DB.prepare("SELECT resource_key,MAX(revision) revision FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' GROUP BY resource_key ORDER BY resource_key DESC LIMIT 30")
  ]);
- const raw=reg.results[0],register=raw?{...JSON.parse(raw.payload),revision:raw.revision,saved_at:raw.saved_at}:null,rows=register?.rows.filter(r=>canSee(user,r))??[];
+ const raw=reg.results[0],register=raw?{...JSON.parse(raw.payload),revision:raw.revision,saved_at:raw.saved_at}:null,rawRows=register?.rows.filter(r=>canSee(user,r))??[];
+ const mails=user.username==='alex'&&query.view!=='inbox'?await mailSummaries(env.DB):new Map();
+ const rows=rawRows.map(r=>projectMail(r,mails.get(r.id)));
  const visible=new Set(rows.map(r=>r.id));
  const feedback=all.results.filter(r=>visible.has(r.subject_key)||(user.username==='alex'&&r.subject_key.startsWith('report-'))).map(feedbackRow);
  const alerts=alertRows.results,reminders=reminderRows.results.filter(r=>visible.has(r.subject_key)||user.username==='alex'&&r.subject_key.startsWith('report-'));
@@ -151,6 +162,7 @@ function validateReport(data,register){
 export async function savePaReport(env,user,b){
  check(user.username==='alex'&&user.via==='pa','Only the authorised Alex PA connection can publish or acknowledge reports.',403);await ensurePaReportSchema(env.DB);
  check(ID.test(b.request_id??'')&&typeof b.reason==='string'&&b.reason.trim().length>=5,'Record the authorised instruction and a unique save ID.');
+ if(b.operation==='email_followup')return changeMail(env.DB,user,b,await subject(env,user,b.subject_key));
  if(['answer','feedback_error'].includes(b.operation))return saveAnswer(env,user,b);
  if(b.operation==='acknowledge'){
   const r=await env.DB.prepare('SELECT * FROM v2_pa_report_feedback WHERE id=?').bind(b.feedback_id??'').first();check(r,'Feedback not found.',404);
@@ -173,7 +185,20 @@ export async function savePaReport(env,user,b){
    payload={...old,source_at:patch.source_at,source_url:patch.source_url,rows:[...old.rows.map(r=>changes.get(r.id)||r),...patch.rows.filter(r=>!old.rows.some(o=>o.id===r.id))]};delete payload.revision;delete payload.saved_at;
   }else payload=validateRegister(b.data,env);check(!old||Date.parse(payload.source_at)>=Date.parse(old.source_at),'Do not publish an older register.',409);
   check(!old||old.rows.every(r=>payload.rows.some(n=>n.id===r.id)),'Do not silently drop existing PA identities. Preserve closed or archived records.',409);
- }else payload=validateReport(b.data,await latest(env.DB,'register'));
+ }else {
+  const register=await latest(env.DB,'register');
+  payload=validateReport(b.data,register);
+  if(!payload.historical){
+   const mails=await mailSummaries(env.DB),byId=new Map(register.rows.map(r=>[r.id,r]));
+   for(const section of payload.sections)for(const item of section.items){
+    const updates=item.pa_task_ids.filter(id=>mails.has(id)).map(id=>{
+     const row=projectMail(byId.get(id),mails.get(id));
+     return {id,label:row.email.label,recipient:row.email.recipient,sent_at:row.email.sent_at||'',reply_at:row.email.reply_at||'',review_date:row.review_date,next_action:row.next_action};
+    });
+    if(updates.length&&section.id!=='rabbi')item.email_updates=updates;
+   }
+  }
+ }
  const at=new Date().toISOString();
  try{await env.DB.prepare('INSERT INTO v2_pa_report_versions VALUES(?,?,?,?,?,?,?)').bind(key,b.revision+1,b.request_id,fingerprint,JSON.stringify(payload),user.username,at).run();}catch{throw new UserError('The report changed while publishing. Reload before retrying.',409);}
  return {saved:true,revision:b.revision+1,resource_key:key,source_at:payload.source_at};
@@ -258,6 +283,12 @@ export async function queuePaReportReminders(env,now=new Date()){
 }
 export async function paReportApi({request,url,env,user,bodyOf}){
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
+ if(url.pathname==='/api/pa-report/email'){
+  check(user.username==='alex','Slegs Alex kan hierdie e-pos hersien.',403);
+  if(request.method==='GET'){const key=url.searchParams.get('subject_key');await subject(env,user,key);return {email:await readMail(env.DB,key)};}
+  check(request.method==='POST','Gebruik die goedkeurknoppie.',405);
+  const b=await bodyOf(request);return changeMail(env.DB,user,b,await subject(env,user,b.subject_key));
+ }
  if(request.method==='GET'&&url.pathname==='/api/pa-report/conversation')return readConversation(env,user,url.searchParams.get('subject_key'),url.searchParams.get('offset')||0);
  if(request.method==='GET'&&url.pathname==='/api/pa-report')return readPaReport(env,user,{date:url.searchParams.get('date')||undefined,view:url.searchParams.get('view')||undefined});
  if(request.method==='GET'&&url.pathname==='/api/pa-report/file'){const f=await file(env,user,url.searchParams.get('id'));return new Response(new Uint8Array(f.bytes),{headers:{'Content-Type':f.mime_type,'Content-Disposition':'inline; filename="'+f.filename+'"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});}
@@ -278,7 +309,7 @@ export function reportFollowup(rows,feedback,day,since=''){
   const f=latest.get(r.id),date=r.review_date||r.due_date||'',closed=['Complete','Cancelled','Archived'].includes(r.status);
   const future=date>day,answered=!!f?.answer,reply_in_window=answered&&(!since||f.answered_at>since);
   const category=closed?'completed':future?'scheduled':r.status==='Waiting'&&(!date||date>day)?'waiting':reply_in_window?'answered':'action';
-  return {id:r.id,title:r.title,category,status:r.status,assigned_to:r.assigned_to,next_action:r.next_action,follow_up_date:date,
+  return {id:r.id,title:r.title,...(r.email?{email:r.email}:{}),category,status:r.status,assigned_to:r.assigned_to,next_action:r.next_action,follow_up_date:date,
    waiting_on:r.status==='Waiting'?r.next_action:'',awaiting_answer:!!f&&requiresAnswer(f)&&!answered,
    answer:answered?{feedback_id:f.id,text:f.answer.text,recommendation:f.answer.recommendation,answered_at:f.answered_at}:null,
    include_in_action_list:!closed&&!future&&category!=='waiting',include_answer_update:reply_in_window,

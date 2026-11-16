@@ -101,7 +101,7 @@ async function showPaView(view){
 }
 function render(){
  if(data){data.tasks=data.tasks.map(t=>t.brief?t:projectTask(t,data.today));}
- if(pa?.workspace||pa?.register_revision||(pa?.rabbi_access||(rabbiMode&&pa?.private_report)))return renderPaWorkspace({app:data,pa,reportMode,rabbiMode,scope:paScope,status:filter,search,onScope:v=>{paScope=v;return pa.workspace?queryChanged():render();},onStatus:v=>{filter=v;return pa.workspace?queryChanged():render();},onSearch:(v,pos)=>{if(pa.workspace)return searchChanged(v,pos);search=v;render();const el=$('#pa-search');el.focus();try{el.setSelectionRange(pos,pos);}catch{}},onReportDate:async v=>{reportDate=v;history.replaceState(null,'',paViewURL(rabbiMode?'rabbi':'report'));await load();},onRefresh:()=>{inboxAt=0;reportCache=null;return load();},onMore:()=>load({offset:pa.workspace.next_offset}),onTasks:()=>showPaView('tasks'),onReport:()=>showPaView('report'),onRabbi:()=>showPaView('rabbi'),onNew:()=>pa.workspace?newTask():edit(),onFeedback:paFeedback,onAppDetails:t=>{if(t)return t.brief?detailsCurrent(t):details(t);},onEditTask:editCurrent,onEnablePush:enablePush,onAppNotification:async n=>{try{await api('/api/tasks/read',{id:n.id});n.read_at=new Date().toISOString();render();const t=data.tasks.find(t=>t.id===n.task_id)||{id:n.task_id};if(t)return detailsCurrent(t);}catch(e){toast(e.message);}},onReadAlert:async a=>{await api('/api/pa-report/read',{id:a.id});pa.alerts=pa.alerts.filter(n=>n.id!==a.id);}});
+ if(pa?.workspace||pa?.register_revision||(pa?.rabbi_access||(rabbiMode&&pa?.private_report)))return renderPaWorkspace({app:data,pa,reportMode,rabbiMode,scope:paScope,status:filter,search,onScope:v=>{paScope=v;return pa.workspace?queryChanged():render();},onStatus:v=>{filter=v;return pa.workspace?queryChanged():render();},onSearch:(v,pos)=>{if(pa.workspace)return searchChanged(v,pos);search=v;render();const el=$('#pa-search');el.focus();try{el.setSelectionRange(pos,pos);}catch{}},onReportDate:async v=>{reportDate=v;history.replaceState(null,'',paViewURL(rabbiMode?'rabbi':'report'));await load();},onRefresh:()=>{inboxAt=0;reportCache=null;return load();},onMore:()=>load({offset:pa.workspace.next_offset}),onTasks:()=>showPaView('tasks'),onReport:()=>showPaView('report'),onRabbi:()=>showPaView('rabbi'),onNew:()=>pa.workspace?newTask():edit(),onFeedback:paFeedback,onMail:reviewMail,onAppDetails:t=>{if(t)return t.brief?detailsCurrent(t):details(t);},onEditTask:editCurrent,onEnablePush:enablePush,onAppNotification:async n=>{try{await api('/api/tasks/read',{id:n.id});n.read_at=new Date().toISOString();render();const t=data.tasks.find(t=>t.id===n.task_id)||{id:n.task_id};if(t)return detailsCurrent(t);}catch(e){toast(e.message);}},onReadAlert:async a=>{await api('/api/pa-report/read',{id:a.id});pa.alerts=pa.alerts.filter(n=>n.id!==a.id);}});
  if(rabbiMode){$('#app').innerHTML='<main class="shell"><div class="top"><h1>Rabbi</h1><div class="actions"><a class="button" href="/tasks">Tasks</a><a class="button" href="/tasks?view=report">Daily Report</a><button id="retry-rabbi">Verfris</button></div></div><p class="notice">The Rabbi reading could not be loaded. Refresh to try again.</p></main>';$('#retry-rabbi').onclick=load;return;}
  if(reportMode)return renderReport({data,owner,search,mail,onOwner:v=>{owner=v;render();},onSearch:(v,pos)=>{search=v;render();const el=$('#report-search');el.focus();try{el.setSelectionRange(pos,pos);}catch{}},onRefresh:load,onTasks:()=>{reportMode=false;history.replaceState(null,'','/tasks');render();},onNew:()=>edit(),onAction:reportAction,onDetails:details,onNote:t=>noteForm(t),onEmail:emailForm,onCancelEmail:cancelEmail});
  const mine=data.tasks.filter(t=>t.assigned_to===data.username||t.steps?.some(s=>s.assigned_to===data.username)),unread=data.notifications.filter(n=>!n.read_at),pool=(data.admin&&owner==='all'?data.tasks:mine);
@@ -283,6 +283,23 @@ function paFeedback(item,action){
    await api('/api/pa-report/feedback',{...payload,request_id:paRetry.request_id});try{storage?.removeItem(draftKey);}catch{}dialog.close();paRetry=null;await load();toast(action==='remind'?'Jou herinnering is gestoor.':action==='complete'?'Voltooiing aangeteken. PA werk die bestaande register by.':'Jou boodskap is gestoor. PA se antwoord verskyn hier ná die volgende suksesvolle uurlikse kontrole.');
   }catch(err){form.querySelector('.error').textContent=err.status===409?'Die taak het verander. Jou teks is behou. Sluit die venster, verfris en hersien jou boodskap voordat jy weer stoor.':err.message;if(err.status===409){draft=null;paRetry=null;saveDraft();}}finally{busy=false;form.querySelector('fieldset').disabled=false;}
  };
+}
+
+async function reviewMail(key){
+ try{
+  const {email}=await api('/api/pa-report/email?subject_key='+encodeURIComponent(key));
+  if(email?.phase!=='approval'){toast('Die e-pos het verander. Lees die taak weer.');return load();}
+  const d=email.envelope,dialog=document.createElement('dialog'),heading=document.createElement('h3'),details=document.createElement('div');
+  heading.textContent='Hersien hierdie e-pos';details.className='pa-prose';
+  details.textContent=['Van: '+d.from,'Aan: '+d.to.join(', '),'Cc: '+(d.cc.join(', ')||'Geen'),'Bcc: '+(d.bcc.join(', ')||'Geen'),'Onderwerp: '+d.subject,'Doel: '+d.scope,'Geen aanhegsels.', '',d.body].join('\n');
+  const approve=document.createElement('button'),close=document.createElement('button');
+  approve.textContent='Keur hierdie versending goed';close.textContent='Maak toe';
+  dialog.append(heading,details);
+  if(d.html){const frame=document.createElement('iframe');frame.setAttribute('sandbox','');frame.title='Goedgekeurde e-posuitleg';frame.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; form-action 'none'">`+d.html;dialog.append(frame);}
+  dialog.append(approve,close);document.body.append(dialog);dialog.onclose=()=>dialog.remove();close.onclick=()=>dialog.close();
+  approve.onclick=async()=>{approve.disabled=true;try{await api('/api/pa-report/email',{action:'approve',subject_key:key,revision:email.revision,request_id:crypto.randomUUID(),data:{envelope_hash:email.envelope_hash}});dialog.close();await load();}catch(e){toast(e.message);dialog.close();}};
+  dialog.showModal();
+ }catch(e){toast(e.message);}
 }
 
 let lastPaRefresh=0;
