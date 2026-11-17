@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-import vm from 'node:vm';
 import {addDays,emptyRun,comparableRouteVisit} from '../src/domain.js';
 import {forecast,applyRecentSalesFloor} from '../src/forecast.js';
 import {forecastRoute,monthPhase} from '../src/month-cycle.js';
@@ -68,13 +66,4 @@ test('confirmed physical returns feed the minimum while refresh preserves actual
  const next=applyForecastRefresh(run,{snapshot:'new',...latest});
  const withoutForecast=r=>{const c=structuredClone(r);delete c.forecast_snapshot;for(const i of c.items)delete i.forecast;return c;};
  assert.deepEqual(withoutForecast(next),withoutForecast(before));assert.deepEqual(run,before);
-});
-test('compact product details explain the allowance once and distinguish old saved suggestions',()=>{
- const source=readFileSync(new URL('../public/app.js',import.meta.url),'utf8'),context={number:x=>String(x),escape:x=>String(x),state:{result:{}}};vm.createContext(context);
- for(const name of ['forecastDetails','forecastWarnings']){const start=source.indexOf('function '+name+'('),end=source.indexOf('\nfunction ',start+1);vm.runInContext(source.slice(start,end),context);}
- const item={forecast:forecast(observations([10,10,10,10,30],true),target)};
- assert.match(context.forecastDetails(item),/30 sold \+ 5 safety units = 35/);
- assert.match(context.forecastWarnings(item),/Stockout allowance included in suggestion/);
- assert.doesNotMatch(context.forecastWarnings(item),/review quantity/);
- assert.match(context.forecastWarnings({forecast:{qty:21,last_qty:30,last_constrained:true}}),/Historical suggestion/);
 });

@@ -282,12 +282,12 @@ footer p{margin:7px 0}
 @media screen and (max-width:1100px){
  .capture-table tbody{gap:8px}
  .capture-table tr{padding:8px 10px 10px;gap:6px 8px;border-radius:10px}
- .capture-table.morning-table tr{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 44px minmax(0,1fr)}
+ .capture-table.morning-table tr{grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr)}
  .capture-table.morning-table .forecast-cell{grid-column:auto;display:block}
  .capture-table td[data-label]::before{font-size:13px;line-height:18px;min-height:0;margin:0 0 4px}
  .capture-table td input:is([type=number],[inputmode=decimal]){font-size:18px;min-height:44px;height:44px;padding:6px 3px}
  .capture-table .forecast-cell .forecast{display:flex;align-items:center;justify-content:center;min-height:44px;font-size:20px;line-height:1.2}
- .capture-table .load-cell{grid-column:3/5;display:grid;grid-template-columns:44px minmax(0,1fr);column-gap:8px;align-items:end;white-space:normal}
+ .capture-table .load-cell{grid-column:2/4;display:grid;grid-template-columns:44px minmax(0,1fr);column-gap:8px;align-items:end;white-space:normal}
  .capture-table .load-cell::before{grid-column:2;grid-row:1}
  .capture-table .load-cell .copy-product-plan{grid-column:1;grid-row:2;margin:0}
  .capture-table .load-cell input{grid-column:2;grid-row:2}
@@ -316,11 +316,21 @@ footer p{margin:7px 0}
 
 .print-link{display:inline-flex;align-items:center;justify-content:center;padding:7px 11px;border:1px solid var(--line);border-radius:9px;background:white;color:var(--blue);font:inherit;font-size:12px;font-weight:650;text-decoration:none;min-height:44px}.print-link:hover{background:#e7f2fb}
 
-/* One visible safety total; detail formulas never change a saved plan. */
-.forecast-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px 16px;margin:8px 0 3px;font-size:15px;line-height:1.3;color:#183047;font-weight:500}
-.forecast-summary>div{display:flex;gap:8px;justify-content:space-between;align-items:baseline;min-width:0}
-.forecast-summary dt{font-weight:500;min-width:0}
-.forecast-summary dd{font-size:17px;font-weight:750;margin:0;font-variant-numeric:tabular-nums;flex-shrink:0}
-.forecast-summary-empty{font-size:15px;line-height:1.4;margin:8px 0}
-@media(min-width:981px){.forecast-summary{grid-template-columns:1fr;max-width:350px}}
-@media(max-width:360px){.forecast-summary{gap:5px 10px;font-size:14px}.forecast-summary dd{font-size:16px}}
+/* Keep the decision and its units together at every screen size. */
+.forecast-columns,.forecast-summary{max-width:22rem;font-variant-numeric:tabular-nums}
+.forecast-columns,.forecast-summary>div{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.forecast-columns{margin-top:8px;border-bottom:1px solid var(--line);padding-bottom:3px;font-size:13px;font-weight:600;color:#405970}
+.forecast-summary{margin:0;font-size:15px;line-height:1.35;color:#183047}
+.forecast-summary>div{padding:2px 0}
+.forecast-summary dt{font-weight:500}
+.forecast-summary dd{font-weight:650;margin:0}
+.forecast-summary .suggested-total{border-top:1px solid var(--line);color:#124e79}
+.suggested-total dt,.suggested-total dd{font-weight:750}
+.forecast-meta,.forecast-evidence,.forecast-why,.forecast-details{font-size:14px;line-height:1.4;font-weight:400}
+.forecast-meta,.forecast-evidence{margin:3px 0;color:#405970}
+.forecast-why{margin:8px 0 0}
+.forecast-why strong{font-weight:700}
+.forecast-details{margin:0}
+.forecast-details summary{display:list-item;width:fit-content;min-height:44px;padding:11px 0;color:var(--blue);font-weight:650;cursor:pointer}
+.forecast-details p{margin:0 0 6px;max-width:62ch}
+@media print{.forecast-details:not([open]){display:none}}

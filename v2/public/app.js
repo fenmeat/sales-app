@@ -9,8 +9,10 @@ import {zohoReconciliationStatus,zohoStatusTime} from './zoho-recon-status.js';
 import {summarise,today,routeScheduled,routeName,validateRecon,CASH_DENOMINATIONS,cashCountTotal,captureItems,availableForLoad,isQty} from './domain.js';
 const $=s=>document.querySelector(s);const app=$('#app');
 const escape=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const money=c=>c===null||c===undefined?'—':new Intl.NumberFormat('en-ZA',{style:'currency',currency:'ZAR'}).format(c/100);
-const number=q=>q===null||q===undefined?'—':new Intl.NumberFormat('en-ZA',{maximumFractionDigits:3}).format(q);
+const randFormat=new Intl.NumberFormat('en-ZA',{style:'currency',currency:'ZAR'});
+const quantityFormat=new Intl.NumberFormat('en-ZA',{maximumFractionDigits:3});
+const money=c=>c==null?'—':randFormat.format(c/100);
+const number=q=>q==null?'—':quantityFormat.format(q);
 const zohoReturn=new URL(location.href).searchParams.get('zoho');
 const zohoMessages={
  connected:'Zoho connected. FEN is confirmed for the invoice check below.',
@@ -80,44 +82,98 @@ function changeView(tab){if(state.busy)return;state.tab=tab;render();window.scro
 document.addEventListener('click',e=>{if(!e.target.closest('.more-menu'))$('.more-menu')?.removeAttribute('open');if(!e.target.closest('.capture-actions'))$('.capture-actions')?.removeAttribute('open');});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('.more-menu')?.removeAttribute('open');$('.capture-actions')?.removeAttribute('open');}});
 
-function footerNotes(){const r=state.result.run;
- const warnings=[...new Set(r.items.map(i=>i.forecast?.warning).filter(Boolean))];
- const legacy=warnings.some(w=>w.includes('actuals: invoice reconciliation unverified.'));
- const other=[...new Set(warnings.map(w=>w.replace(/(?:Legacy|Provisional) actuals: invoice reconciliation unverified\./g,'').trim()).filter(Boolean))];
- return `<footer><details><summary>Forecast &amp; data notes</summary><p>Stock quantities use the same sales units as the product catalogue.</p><p>Forecast uses actual sales from the same route and weekday. Compare 8-week average and weighted 12-week history. Month phases (days 1–7, 8–14 and 15–end) use measured patterns from completed months on this route and weekday. Suggested load is adjusted expected sales plus one buffer. Safety stock is the difference between the final suggestion and expected sales rounded up to whole sales units. A recent-sales minimum can raise the suggestion; it is not added again. Alternative formulas remain offline until they demonstrate a better balance in historical tests. Confirmed physical returns are included before cash close; mismatched or unconfirmed stock changes are excluded. Your plan can be changed.</p>${legacy?'<p>Provisional actuals: invoice reconciliation unverified.</p>':''}<p>Phase: ${escape(r.phase)} · Revision ${state.result.revision}</p></details>${other.map(w=>'<p class="alert">'+escape(w)+'</p>').join('')}</footer>`;
+function forecastWarningText(warning){
+ return String(warning??'')
+  .replace(/(?:Legacy|Provisional) actuals: invoice reconciliation unverified\./g,'Sales not yet checked against invoices.')
+  .replaceAll('Limited history.','Only a few visits have sales records.')
+  .replaceAll('Recent stockouts may understate demand.','Stock may have run out on recent visits.')
+  .replaceAll('Stockout safety allowance included; unmet demand remains unknown.','The suggestion includes extra stock. Missed sales are unknown.')
+  .replaceAll('No usable actual sales for this route and weekday.','No sales records for similar visits.')
+  .replaceAll('Suggested load is below the latest comparable sales.','The suggested load is below the last recorded sales.');
+}
+function footerNotes(){
+ const r=state.result.run;
+ const warnings=[...new Set(r.items.flatMap(i=>forecastWarningText(i.forecast?.warning).split(/(?<=\.)\s+/)).filter(Boolean))];
+ return `<footer><details><summary>How forecasts work</summary>
+ <p>We compare sales on the same route and weekday. We use either the last 8 weeks or up to 12 weeks with more weight on recent visits.</p>
+ <p>Sales can change during the month. We check days 1–7, 8–14 and 15 to month-end in past full months. We use a pattern only when there is enough history.</p>
+ <p>We round expected sales up to whole units. We compare the forecast with the minimum based on the last sale and use the higher load. Extra stock is already in that total.</p>
+ <p>We count confirmed returns before cash-up. We leave out unconfirmed counts and counts that disagree with invoices. Other forecast formulas are tested separately.</p>
+ ${warnings.map(w=>'<p>'+escape(w)+'</p>').join('')}<p>Route status: ${escape(r.phase)} · Saved version ${state.result.revision}</p></details></footer>`;
 }
 function monthCycleNote(c){
  if(!c)return '';
- return '<p>Month phase: '+escape(c.label)+'. '+(c.applied?'Route adjustment '+(c.factor>=1?'+':'')+number((c.factor-1)*100)+'%, based on '+c.months+' completed months.':'Not enough comparable months for an adjustment; the usual forecast is retained.')+'</p>';
+ const adjustment=c.applied
+  ? 'Expected sales are multiplied by '+number(c.factor)+'.'+(c.months!=null?' Based on '+number(c.months)+' completed months.':'')
+  : 'Too few comparable months for an adjustment.';
+ return '<p>Time of month: '+escape(c.label)+'. '+adjustment+'</p>';
 }
 function forecastStatus(){
  const r=state.result.run,s=state.result.forecast_status;if(r.phase!=='plan'||!s)return '';
  const warning=s.stale||!s.expected_visit_present||s.excluded_count;
- const content=`<p>Latest usable route sales: ${escape(s.latest_actual??'None')}. Last comparable visit expected: ${escape(s.expected_visit)}.${!s.expected_visit_present?' That visit is missing from forecast history.':''}${s.excluded_count?' '+s.excluded_count+' stock observations need confirmation or reconciliation.':''}</p>${s.stale?'':monthCycleNote(s.month_cycle)}`;
- return warning?`<div class="forecast-status alert"><strong>${s.stale?'Updated forecast available':'Forecast needs review'}</strong>${content}${s.stale?'<p>Your plan, actual loads and notes will be kept.</p><button id="refresh-forecast">Refresh suggestions</button>':''}</div>`:`<details class="forecast-status"><summary>Forecast checked · View details</summary>${content}</details>`;
+ const content=`<p>Latest sales on record: ${escape(s.latest_actual??'None')}. Last similar visit expected: ${escape(s.expected_visit)}.${!s.expected_visit_present?' Sales for that visit are missing.':''}${s.excluded_count?' Stock counts left out until checked: '+number(s.excluded_count)+'.':''}</p>${s.stale?'':monthCycleNote(s.month_cycle)}`;
+ return warning?`<div class="forecast-status alert"><strong>${s.stale?'New suggestions available':'Some sales records need checking'}</strong>${s.stale?'<p>Refreshing keeps your plan, actual loads and notes.</p><button id="refresh-forecast">Refresh suggestions</button>':''}<details><summary>More details</summary>${content}</details></div>`:`<details class="forecast-status"><summary>Forecast checked · More details</summary>${content}</details>`;
 }
-function forecastDetails(i){
- const f=i.forecast;
- if(!f?.samples)return '<p>No usable sales history. Missing sales are not zero. Enter your own plan.</p>';
- const minimum=f.recent_sales_minimum!=null?'<p>Recent-sales minimum: '+number(f.last_qty)+' sold + '+number(f.recent_sales_buffer)+' safety units = '+number(f.recent_sales_minimum)+'. '+(f.recent_sales_uplift>0?'This minimum raised the suggestion.':'The model already covers this minimum.')+' The higher quantity is used; the allowances are never added together.</p>':'';
- return '<p>Expected sales before rounding: '+number(f.base)+'. '+(f.used_samples??f.samples)+' comparable observations · last '+escape(f.last_date??'date unavailable')+'.</p><p>The displayed expected sales are rounded up. Safety stock includes the whole difference to the final suggestion.</p>'+minimum+(f.month_cycle?'<p>Month phase: '+escape(f.month_cycle.label)+'. '+(f.month_cycle.applied?'Applied factor '+number(f.month_cycle.factor)+'.':'No month adjustment.')+'</p>':'')+(f.last_constrained?'<p>Possible stockout on the last visit. Demand beyond the quantity sold is unknown.</p>':'')+(f.warning?'<p>'+escape(f.warning)+'</p>':'');
+function forecastDetails(f,expectedVisit){
+ const notes=[];
+ const used=f.used_samples??f.samples;
+ if(Number.isFinite(f.base))notes.push('Expected sales before rounding: '+number(f.base)+'. We round up to whole units.');
+ if(used!=null)notes.push('Similar visits used: '+number(used)+'.'+(f.samples>used?' Visits with sales records: '+number(f.samples)+'.':''));
+ if(f.last_date)notes.push('Last similar visit with sales: '+f.last_date+'.');
+ if(f.recent_sales_minimum!=null){
+  const sum=f.last_qty+f.recent_sales_buffer;
+  const result=sum===f.recent_sales_minimum?' = ':' rounded up to ';
+  notes.push('Recent-sales minimum: '+number(f.last_qty)+' sold + '+number(f.recent_sales_buffer)+' extra'+result+number(f.recent_sales_minimum)+'. '+
+   (f.recent_sales_uplift>0?'This minimum raised the suggested load.':'The forecast already covers this minimum.')+' It is included once.');
+ }
+ if(f.last_constrained)notes.push(f.recent_sales_minimum!=null?'Stock may have run out on the last visit. Missed sales are unknown.':'This saved suggestion is from an earlier forecast. Stock may have run out on the last visit.');
+ if(f.qty!=null&&f.last_qty!=null&&f.qty<f.last_qty)notes.push('The suggested load is below the last recorded sales.');
+ if(f.last_date&&expectedVisit&&f.last_date<expectedVisit)notes.push('Sales from a more recent similar visit are missing.');
+ if(f.missing_dates?.length)notes.push('Dates without sales records: '+f.missing_dates.join(', ')+'.');
+ if(f.warning)notes.push(forecastWarningText(f.warning));
+ if(!notes.length)notes.push('No calculation details were saved for this product.');
+ return notes.map(n=>'<p>'+escape(n)+'</p>').join('')+monthCycleNote(f.month_cycle);
 }
-function forecastWarnings(i){
- const f=i.forecast,covered=f?.recent_sales_minimum!=null;
- return (f?.last_constrained?(covered?'<small>Stockout allowance included in suggestion.</small>':'<small class="bad">Historical suggestion · possible stockout on the last comparable visit.</small>'):(f?.recent_sales_uplift>0?'<small>Minimum load rule applied.</small>':''))+(f?.qty!=null&&f.qty<f.last_qty?'<small class="bad">Below last comparable sales — review quantity.</small>':'')+(f?.last_date&&state.result.forecast_status&&f.last_date<state.result.forecast_status.expected_visit?'<small class="bad">Recent comparable sales are missing.</small>':'');
+function forecastUnit(unit){
+ const full=String(unit??'').trim(),[kind,...parts]=full.split(':');
+ const key=kind.trim().toLowerCase();
+ const names={bag:['bag','bags'],box:['box','boxes'],pack:['pack','packs'],sachet:['sachet','sachets']};
+ const lastWord=key.split(/\s+/).at(-1);
+ const noun=Object.hasOwn(names,lastWord)?names[lastWord]:['unit','units'];
+ const description=parts.length&&(Object.hasOwn(names,key)||key==='each')?parts.join(':').trim():full;
+ return {one:noun[0],many:noun[1],description:description.replace(/\s+x\s+/gi,' × ')};
 }
-function forecastSummary(i){
- const f=i.forecast;if(f?.qty==null||!Number.isFinite(f.base))return '<p class="forecast-summary-empty">Sales history unavailable · Enter your plan</p>';
- const expected=Math.ceil(f.base),safety=Math.max(0,f.qty-expected),lastSold=f.last_qty==null?'Unknown':number(f.last_qty),lastReturned=f.last_returned==null?'Unknown':number(f.last_returned);
- return '<dl class="forecast-summary"><div><dt>Expected sales</dt><dd>'+number(expected)+'</dd></div><div><dt>Safety stock</dt><dd>'+number(safety)+'</dd></div><div><dt>Last visit sold</dt><dd>'+lastSold+'</dd></div><div><dt>Last visit returned</dt><dd>'+lastReturned+'</dd></div></dl>';
+function morningProduct(i,expectedVisit){
+ const f=i.forecast??{},unit=forecastUnit(i.unit);
+ const qty=Number.isFinite(f.qty)?f.qty:null,expected=Number.isFinite(f.base)?Math.ceil(f.base):null;
+ const extra=qty!=null&&expected!=null?qty-expected:null;
+ const rows=[['Expected sales',expected],['Extra stock',extra],['Suggested load',qty],['Last visit sold',f.last_qty],['Last visit returned',f.last_returned]];
+ const summary=rows.map(([label,value])=>`<div${label==='Suggested load'?' class="suggested-total"':''}><dt>${label}</dt><dd>${value==null?'Unknown':number(value)}</dd></div>`).join('');
+ const noun=n=>n===1?unit.one:unit.many;
+ let why='';
+ if(extra!=null){
+  const reason=extra>0?`${number(expected)} expected sales + ${number(extra)} extra ${noun(extra)} to avoid running short.`
+   :extra===0?`${number(expected)} expected sales. No extra stock needed.`:`${number(expected)} expected sales. This saved load is ${number(-extra)} ${noun(-extra)} below that.`;
+  why=`<p class="forecast-why"><strong>Why ${number(qty)} ${noun(qty)}?</strong> ${reason}</p>`;
+ }else{
+  why='<p class="forecast-why">'+(qty!=null?'The breakdown was not saved with this suggestion.':'No suggested load. Enter your own plan.')+'</p>';
+ }
+ const count=f.used_samples??f.samples;
+ const evidence=[];
+ if(count>0)evidence.push('Based on '+number(count)+' similar '+(count===1?'visit.':'visits.'));
+ if(count===0)evidence.push('No sales records for similar visits.');
+ if(/(?:Legacy|Provisional) actuals: invoice reconciliation unverified\./.test(f.warning))evidence.push('Sales not yet checked against invoices.');
+ const meta=[i.code,unit.description,money(i.price_cents)].filter(Boolean).map(escape).join(' · ');
+ return `<strong class="product-name">${escape(i.name)}</strong><p class="forecast-meta">${meta}</p>
+ <div class="forecast-columns" aria-hidden="true"><span>Description</span><span>${unit.many[0].toUpperCase()+unit.many.slice(1)}</span></div>
+ <dl class="forecast-summary" aria-label="Forecast in ${unit.many}">${summary}</dl>
+ ${why}${evidence.length?'<p class="forecast-evidence">'+evidence.join(' ')+'</p>':''}
+ <details class="forecast-details"><summary>More details</summary>${forecastDetails(f,expectedVisit)}</details>`;
 }
-
 function captureProduct(i,evening){
  const unit=String(i.unit??'').split(':')[0].trim();
- return `<td class="product"><details class="capture-product-details"><summary><span class="capture-product-title"><strong class="product-name">${escape(i.name)}</strong>${unit?'<span class="capture-unit">'+escape(unit)+'</span>':''}</span><span class="product-details-label">Details <span aria-hidden="true">⌄</span></span></summary><div class="product-detail-body"><small>${escape(i.code)} · ${escape(i.unit)} · ${money(i.price_cents)}</small>${evening?'':forecastDetails(i)}</div></details>${evening?'':forecastSummary(i)+forecastWarnings(i)}${i.adjustment?'<small>Previously saved non-sale stock: '+number(i.adjustment)+' · '+escape(i.adjustment_reason)+'</small>':''}</td>`;
-}
-function forecastCell(i){
- return `<td data-label="Suggested" class="forecast-cell"><span class="forecast">${number(i.forecast?.qty)}</span></td>`;
+ const product=evening?`<details class="capture-product-details"><summary><span class="capture-product-title"><strong class="product-name">${escape(i.name)}</strong>${unit?'<span class="capture-unit">'+escape(unit)+'</span>':''}</span><span class="product-details-label">Details <span aria-hidden="true">⌄</span></span></summary><div class="product-detail-body"><small>${escape(i.code)} · ${escape(i.unit)} · ${money(i.price_cents)}</small></div></details>`:morningProduct(i,state.result.forecast_status?.expected_visit);
+ return '<td class="product">'+product+(i.adjustment?'<small>Previously saved non-sale stock: '+number(i.adjustment)+' · '+escape(i.adjustment_reason)+'</small>':'')+'</td>';
 }
 
 function view(){
@@ -125,7 +181,7 @@ function view(){
  if(state.tab==='cash')return cashView();if(state.tab==='recon')return reconView();
  const r=state.result.run,evening=state.tab==='evening';
  const list=captureItems(r,evening,state.bootstrap.catalog.products).filter(i=>!state.search||(i.code+' '+i.name).toLowerCase().includes(state.search.toLowerCase()));
- return `<section class="panel capture-panel"><div class="capture-toolbar"><input id="search" type="search" aria-label="Find a product" placeholder="Find a product…" value="${escape(state.search)}"><details class="capture-actions"><summary>${evening?'Return actions':'Load actions'} <span aria-hidden="true">⌄</span></summary><div class="action-options">${!evening?(r.phase==='plan'&&!state.result.forecast_status?.stale?'<button id="refresh-forecast">Refresh suggestions</button>':'')+'<button id="use-forecast">Use forecast as plan</button><button id="use-plan">Copy plan to loaded</button>':'<button id="zero-returns">Set blank returns to zero</button>'}</div></details></div>${!evening?forecastStatus():''}${evening?'<p class="row-note">Enter zero when nothing returned. Leave blank if it has not been counted.</p>':''}<div class="table-wrap capture-table ${evening?'evening-table':'morning-table'}"><table><thead><tr><th>Product / sales unit</th>${evening?'<th>Loaded</th><th>Returned</th><th>Stock sales</th><th>Sold out?</th>':'<th>Suggested load</th><th>Your plan</th><th>Actually loaded</th>'}</tr></thead><tbody>${list.map(i=>`<tr>${captureProduct(i,evening)}${evening?`<td class="num" data-label="Loaded">${number(i.loaded)}</td><td data-label="Returned">${numInput(i,'returned',!i.loaded)}</td><td class="num" data-label="Stock sales" data-sold="${i.code}">—</td><td data-label="Sold out?" class="soldout-cell"><input type="checkbox" aria-label="${escape(i.name)} sold out" data-soldout="${i.code}" ${i.sold_out?'checked':''}></td>`:`${forecastCell(i)}<td data-label="Plan">${numInput(i,'planned')}</td><td data-label="Loaded" class="load-cell"><button type="button" class="copy-product-plan" data-copy-plan="${i.code}" aria-label="${escape('Use plan for '+i.name+' actual load')}" ${r.phase==='closed'||!availableForLoad(i,state.bootstrap.catalog.products)||!isQty(i.planned)?'disabled':''} title="Use plan for actual load"><span aria-hidden="true">→</span></button>${numInput(i,'loaded')}</td>`}</tr>`).join('')}</tbody></table>${!list.length?'<div class="empty">'+(evening?'No matching loaded products.':'No matching available products.')+'</div>':''}</div><details class="route-details"><summary>Route details${r.rep?' · '+escape(r.rep):''}</summary><div class="fields"><label>Salesperson<input id="rep" value="${escape(r.rep)}" placeholder="Name"></label><label>Vehicle<input id="vehicle" value="${escape(r.vehicle)}" placeholder="Registration"></label></div></details><details class="route-notes"><summary>Route notes${r.notes?' · Added':''}</summary><label>Notes<textarea id="notes" placeholder="Loading changes, shortages or handover notes">${escape(r.notes)}</textarea></label></details></section>`;
+ return `<section class="panel capture-panel"><div class="capture-toolbar"><input id="search" type="search" aria-label="Find a product" placeholder="Find a product…" value="${escape(state.search)}"><details class="capture-actions"><summary>${evening?'Return actions':'Load actions'} <span aria-hidden="true">⌄</span></summary><div class="action-options">${!evening?(r.phase==='plan'&&!state.result.forecast_status?.stale?'<button id="refresh-forecast">Refresh suggestions</button>':'')+'<button id="use-forecast">Use suggested loads as plan</button><button id="use-plan">Copy plan to loaded</button>':'<button id="zero-returns">Set blank returns to zero</button>'}</div></details></div>${!evening?forecastStatus():''}${evening?'<p class="row-note">Enter zero when nothing returned. Leave blank if it has not been counted.</p>':''}<div class="table-wrap capture-table ${evening?'evening-table':'morning-table'}"><table><thead><tr><th>Product / sales unit</th>${evening?'<th>Loaded</th><th>Returned</th><th>Stock sales</th><th>Sold out?</th>':'<th>Your plan</th><th>Actually loaded</th>'}</tr></thead><tbody>${list.map(i=>`<tr>${captureProduct(i,evening)}${evening?`<td class="num" data-label="Loaded">${number(i.loaded)}</td><td data-label="Returned">${numInput(i,'returned',!i.loaded)}</td><td class="num" data-label="Stock sales" data-sold="${i.code}">—</td><td data-label="Sold out?" class="soldout-cell"><input type="checkbox" aria-label="${escape(i.name)} sold out" data-soldout="${i.code}" ${i.sold_out?'checked':''}></td>`:`<td data-label="Your plan">${numInput(i,'planned')}</td><td data-label="Actually loaded" class="load-cell"><button type="button" class="copy-product-plan" data-copy-plan="${i.code}" aria-label="${escape('Use plan for '+i.name+' actual load')}" ${r.phase==='closed'||!availableForLoad(i,state.bootstrap.catalog.products)||!isQty(i.planned)?'disabled':''} title="Use plan for actual load"><span aria-hidden="true">→</span></button>${numInput(i,'loaded')}</td>`}</tr>`).join('')}</tbody></table>${!list.length?'<div class="empty">'+(evening?'No matching loaded products.':'No matching available products.')+'</div>':''}</div><details class="route-details"><summary>Route details${r.rep?' · '+escape(r.rep):''}</summary><div class="fields"><label>Salesperson<input id="rep" value="${escape(r.rep)}" placeholder="Name"></label><label>Vehicle<input id="vehicle" value="${escape(r.vehicle)}" placeholder="Registration"></label></div></details><details class="route-notes"><summary>Route notes${r.notes?' · Added':''}</summary><label>Notes<textarea id="notes" placeholder="Loading changes, shortages or handover notes">${escape(r.notes)}</textarea></label></details></section>`;
 }
 
 function shop2shopField(r,field){
@@ -277,7 +333,7 @@ function bind(){
  for(const id of ['rep','vehicle','notes'])if($('#'+id))$('#'+id).oninput=e=>{state.result.run[id]=e.target.value;dirty();};
  if($('#search'))$('#search').onchange=e=>{state.search=e.target.value;render();$('#search')?.focus();};
  if($('#refresh-forecast'))$('#refresh-forecast').onclick=()=>save('forecast');
- if($('#use-forecast'))$('#use-forecast').onclick=()=>{if(!confirm('Replace your plan with forecast suggestions?'))return;for(const i of state.result.run.items)i.planned=availableForLoad(i,state.bootstrap.catalog.products)?i.forecast?.qty??null:0;dirty();render();};
+ if($('#use-forecast'))$('#use-forecast').onclick=()=>{if(!confirm('Replace your plan with the suggested loads?'))return;for(const i of state.result.run.items)i.planned=availableForLoad(i,state.bootstrap.catalog.products)?i.forecast?.qty??null:0;dirty();render();};
  if($('#use-plan'))$('#use-plan').onclick=()=>{if(!confirm('Copy planned quantities to actual load? Check what was physically loaded before confirming.'))return;for(const i of state.result.run.items){i.loaded=availableForLoad(i,state.bootstrap.catalog.products)?i.planned??null:i.loaded??0;if(i.loaded===0)i.returned=0;}dirty();render();};
  if($('#zero-returns'))$('#zero-returns').onclick=()=>{if(!confirm('Confirm that every unfilled product has zero returns?'))return;for(const i of state.result.run.items)if(i.returned===null)i.returned=0;dirty();render();};
  if($('#reload'))$('#reload').onclick=()=>safe(async()=>{if(state.dirty&&!confirm('Discard your unsaved edits and load the latest saved record?'))return;await loadRun();});if($('#save'))$('#save').onclick=()=>save('save');if($('#confirm'))$('#confirm').onclick=()=>{if(state.tab==='cash'&&state.result.run.phase!=='closed'){changeView('recon');return;}const action=state.result.run.phase==='closed'?'reopen':state.tab==='morning'?'load':state.tab==='evening'?'returns':'close';if(confirm(action==='close'?'Close this route after all stock and cash differences are resolved?':action==='reopen'?'Reopen this closed route? Record a reason in Route notes first.':'Confirm the captured '+(action==='load'?'morning load':'evening returns')+'?'))save(action);};
