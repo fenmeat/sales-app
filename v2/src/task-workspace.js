@@ -36,7 +36,7 @@ export async function readTaskWorkspace(env,user,query={}){
  const mails=user.username==='alex'?await mailSummaries(env.DB):new Map();
  const canonical=visibleRows.map(r=>projectMail(r,mails.get(r.id),today())),known=new Set(canonical.map(r=>r.id));
  const feedback=(result[2]?.results||[]).filter(f=>known.has(f.subject_key)).map(f=>({...f,status:f.answered?'answered':f.action==='respond'||f.question?'pending':f.acknowledged_at?'processed':'pending'}));
- const app={username:user.username,admin,invoice_rep:rep,today:today(),users:admin?taskUsers(env):[user.username],suppliers:[],tasks,notifications:[],next_offset:null};
+ const app={username:user.username,admin,invoice_rep:rep,today:today(),users:admin?taskUsers(env):[user.username],suppliers:[],tasks:tasks.map(t=>{const key='app-'+t.id,m=mails.get(key);return m?{...t,email:projectMail(t,m).email,mail_key:key}:t;}),notifications:[],next_offset:null};
  const pa={username:user.username,admin,users:admin?paUsers(env):[user.username],today:app.today,private_report:user.username==='alex',rabbi_access:!rep&&['alex','alinda','xalinda','xavier'].includes(user.username),register_revision:raw?.revision||0,source_at:register?.source_at||null,source_url:register?.source_url||null,rows:canonical,feedback};
  const rows=unifiedWork(app,pa),selected=selectWork(rows,{username:user.username,admin,scope,status,search}),counts=workCounts(rows,user.username);
  const snapshot=await hash(JSON.stringify({username:user.username,date:app.today,register:raw?.revision||0,tasks:tasks.map(t=>[t.id,t.revision,t.pa_sync]),feedback,mail:[...mails].map(([id,m])=>[id,m.revision]),scope,status,search}));

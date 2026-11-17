@@ -20,3 +20,7 @@
 .task-changes {padding-left:1.2rem; overflow-wrap:anywhere;}
 .task-changes li {margin:.65rem 0;}
 #dialog .actions {flex-wrap:wrap;}
+
+.mail-proposal{min-width:0;max-width:100%;margin:1rem 0;padding:clamp(.65rem,2vw,1.15rem);border:1px solid #9db4aa;border-radius:.65rem;background:white;color:#172b23;overflow-wrap:anywhere}
+.mail-proposal[hidden]{display:none}.mail-proposal h3{margin:0 0 .4rem}.mail-proposal dl{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:.3rem .8rem;margin:.7rem 0}.mail-proposal dd{margin:0;white-space:normal}.mail-state{font-weight:700}
+.mail-proposal iframe{display:block;box-sizing:border-box;width:100%;height:clamp(16rem,50vh,34rem);border:1px solid #c1cec7;background:#fff}.mail-proposal .actions{flex-wrap:wrap}.mail-proposal button{min-height:44px;max-width:100%;white-space:normal}.mail-proposal [data-field]{box-sizing:border-box;width:100%;max-width:100%}.mail-proposal textarea,.mail-proposal [contenteditable]{min-height:10rem}.mail-proposal [contenteditable],.mail-plain{border:1px solid #bac9c3;padding:.65rem;background:#fff}.mail-plain{white-space:pre-wrap}.mail-proposal [contenteditable]{overflow:auto}.mail-proposal [contenteditable] table{max-width:100%}.mail-proposal details{margin-top:.75rem}

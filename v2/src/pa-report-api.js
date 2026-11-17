@@ -1,7 +1,7 @@
 import {check,UserError,dateKey,today} from './domain.js';
 import {workPage} from './task-pa-work.js';
-import {ensureTaskSchema} from './tasks-api.js';
-import {EMAIL_SCHEMA,changeMail,readMail,mailSummaries,mailWork,projectMail} from './pa-email.js';
+import {ensureTaskSchema,getTask,saveTask} from './tasks-api.js';
+import {EMAIL_SCHEMA,changeMail,readMail,mailReview,mailActions,mailSummaries,mailWork,projectMail} from './pa-email.js';
 import {hash,isAdmin,keys} from './auth.js';
 
 // A versioned read model of the existing PA register, never a second master.
@@ -45,6 +45,47 @@ async function subject(env,user,key){
  const report=await latest(env.DB,m[1]),item=report?.sections.flatMap(s=>s.items).find(i=>i.id===m[2]);check(item,'Report item not found.',404);
  return {...item,scope:'private',assigned_to:'alex',subject_key:key,subject_hash:await hash(JSON.stringify(item)),report_date:report.date};
 }
+// App-only reminders keep their own identity. Never invent a PA register row.
+async function mailSubject(env,user,key){
+ check(user.username==='alex','Slegs Alex kan die e-pos bestuur.',403);
+ if(!key?.startsWith('app-'))return subject(env,user,key);
+ await ensureTaskSchema(env.DB);
+ const task=await getTask(env.DB,key.slice(4));check(task,'Taak nie gevind nie.',404);
+ return {...task,id:key,app_task_id:task.id};
+}
+async function writeMail(env,user,b){
+ const row=await mailSubject(env,user,b.subject_key);
+ if(b.action==='draft'&&b.data?.delivery_step){
+  const {task_id,step_id}=b.data.delivery_step;
+  await ensureTaskSchema(env.DB);
+  const task=await getTask(env.DB,task_id);
+  check(task&&(task.id===row.app_task_id||task.pa_task_id===row.id)&&task.steps?.some(s=>s.id===step_id&&s.status!=='Complete'),'Kies die bestaande e-posstap op hierdie taak.');
+ }
+ const reconcile=b.action==='reconcile_step';
+ if(reconcile)check(user.via==='pa','Hierdie handeling is vir PA.',403);
+ const result=reconcile?{}:await changeMail(env.DB,user,b,row);
+ if(reconcile||['sent','observe_sent'].includes(b.action)){
+  const m=await readMail(env.DB,row.id);
+  if(reconcile)check(m?.revision===b.revision&&m.message_id,'Lees die jongste versendingsbewys.',409);
+  if(m?.delivery_step&&m.message_id){
+   const {task_id,step_id}=m.delivery_step;
+   let task=await getTask(env.DB,task_id);
+   const step=task?.steps?.find(s=>s.id===step_id);
+   try{
+    check(step&&(task.id===row.app_task_id||task.pa_task_id===row.id),'Gaan die oorspronklike stap na.');
+    if(m.followup_required&&step.status!=='Complete'&&!task.steps.some(s=>s.id!==step_id&&s.required!==false&&s.status!=='Complete')){
+     const added=await saveTask(env,user,{task_id,revision:task.revision,action:'step_add',step_id:'mail-followup-'+m.message_id,
+      request_id:'mail-next-'+m.message_id,data:{description:'Volg die e-pos op',assigned_to:task.assigned_to,due_date:m.review_date,dependencies:[step_id]}});
+     task=added.task;
+    }
+    if(step.status!=='Complete')await saveTask(env,user,{task_id,step_id,revision:task.revision,action:'step_complete',
+     request_id:'mail-step-'+m.message_id,note:'Gmail het die versending bevestig.',proof_url:'https://mail.google.com/mail/u/0/#sent/'+m.message_id});
+    result.step_updated=true;
+   }catch{result.step_updated=false;result.step_notice='Die e-pos is gestuur. PA moet die taakstap nog nagaan.';}
+  }
+ }
+ return result;
+}
 function summary(rows){const active=rows.filter(opened);return {total:rows.length,open:active.length,pending:active.filter(r=>r.status==='Pending').length,scheduled:active.filter(r=>r.status==='Scheduled').length,waiting:active.filter(r=>r.status==='Waiting').length,fenmeat:active.filter(r=>r.scope==='fenmeat').length,private:active.filter(r=>r.scope==='private').length};}
 const feedbackSelect=`SELECT f.*,a.payload AS answer_payload,a.created_at AS answered_at,
  (SELECT message FROM v2_pa_report_attempts WHERE feedback_id=f.id ORDER BY created_at DESC,request_id DESC LIMIT 1) AS processing_error
@@ -73,11 +114,15 @@ export async function readPaReport(env,user,query={}){
   const previous=await env.DB.prepare("SELECT payload FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' ORDER BY resource_key DESC,revision DESC LIMIT 1").first();
   return workPage(env.DB,{offset:query.offset,report:query.id==='task-work-report',since:previous&&JSON.parse(previous.payload).source_at});
  }
- if(query.resource==='summary' && (query.id==='email-work'||query.id?.startsWith('email-TSK-'))){
+ if(query.resource==='summary'&&query.id?.startsWith('mail-review-')){
+  const key=query.id.slice(12),row=await mailSubject(env,user,key);
+  return mailReview(env.DB,key,opened(row));
+ }
+ if(query.resource==='summary' && (query.id==='email-work'||query.id?.startsWith('email-TSK-')||query.id?.startsWith('email-app-'))){
   check(user.username==='alex','Slegs Alex kan e-posopvolging bestuur.',403);
-  if(query.id==='email-work')return mailWork(env.DB,query.offset);
-  const key=query.id.slice(6);await subject(env,user,key);
-  return {email:await readMail(env.DB,key)};
+  if(query.id==='email-work'){await ensureTaskSchema(env.DB);return mailWork(env.DB,query.offset);}
+  const key=query.id.slice(6),row=await mailSubject(env,user,key),email=await readMail(env.DB,key);
+  return {email,available_actions:mailActions(email,opened(row))};
  }
  if(query.resource==='summary'&&query.id==='report-context'){
   check(user.username==='alex','Only Alex can read report context.',403);const register=await latest(env.DB,'register');
@@ -85,7 +130,14 @@ export async function readPaReport(env,user,query={}){
   const lastReport=await env.DB.prepare("SELECT resource_key FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' ORDER BY resource_key DESC,revision DESC LIMIT 1").first();
   const previous=lastReport?await latest(env.DB,lastReport.resource_key):null;
   const mails=await mailSummaries(env.DB);await ensureTaskSchema(env.DB);
-  return {register_revision:register?.revision||0,source_at:register?.source_at,previous_cutoff:previous?.source_at||null,task_work:(await workPage(env.DB,{report:true,since:previous?.source_at})),followup:reportFollowup((register?.rows||[]).map(r=>projectMail(r,mails.get(r.id))),feedback,today(),previous?.source_at||'')};
+  const app_email=[];
+  for(const [key,mail] of mails){
+   if(!key.startsWith('app-'))continue;
+   const t=await getTask(env.DB,key.slice(4));if(!t)continue;
+   const projected=projectMail(t,mail);
+   app_email.push({id:t.id,title:t.title,status:t.task_type==='workflow'?t.status:projected.status,email:projected.email,next_action:projected.next_action,review_date:projected.review_date});
+  }
+  return {app_email,register_revision:register?.revision||0,source_at:register?.source_at,previous_cutoff:previous?.source_at||null,task_work:(await workPage(env.DB,{report:true,since:previous?.source_at})),followup:reportFollowup((register?.rows||[]).map(r=>projectMail(r,mails.get(r.id))),feedback,today(),previous?.source_at||'')};
  }
  if(query.resource==='summary'&&query.id)return readConversation(env,user,query.id,query.offset);
  if(query.resource==='pending_feedback'){
@@ -96,6 +148,14 @@ export async function readPaReport(env,user,query={}){
   return {feedback,next_offset:list.results.length>50?offset+50:null};
  }
  if(query.resource==='file'){
+  if(query.id?.startsWith('appfile-')){
+   check(user.username==='alex','Slegs Alex kan hierdie bylaag lees.',403);await ensureTaskSchema(env.DB);
+   const id=query.id.slice(8),f=await env.DB.prepare('SELECT * FROM v2_task_attachments WHERE id=?').bind(id).first();
+   const m=f&&await readMail(env.DB,'app-'+f.task_id);
+   check(m?.envelope.attachments?.some(a=>a.id===id),'Bylaag nie op die voorstel nie.',404);
+   const bytes=new Uint8Array(f.bytes);let binary='';for(let n=0;n<bytes.length;n+=8192)binary+=String.fromCharCode(...bytes.slice(n,n+8192));
+   return {id,filename:f.filename,mime_type:f.mime_type,base64:btoa(binary),byte_length:bytes.length};
+  }
   check(user.username==='alex','Only Alex can read private report evidence through PA.',403);const f=await file(env,user,query.id),bytes=new Uint8Array(f.bytes);let binary='';for(let n=0;n<bytes.length;n+=8192)binary+=String.fromCharCode(...bytes.slice(n,n+8192));return {id:f.id,filename:f.filename,mime_type:f.mime_type,subject_key:f.subject_key,base64:btoa(binary),byte_length:bytes.length,download_url:'/api/pa-report/file?id='+f.id};
  }
  // One trip for independent reads. Alerts reuse these exact source versions;
@@ -170,7 +230,12 @@ function validateReport(data,register){
 export async function savePaReport(env,user,b){
  check(user.username==='alex'&&user.via==='pa','Only the authorised Alex PA connection can publish or acknowledge reports.',403);await ensurePaReportSchema(env.DB);
  check(ID.test(b.request_id??'')&&typeof b.reason==='string'&&b.reason.trim().length>=5,'Record the authorised instruction and a unique save ID.');
- if(b.operation==='email_followup')return changeMail(env.DB,user,b,await subject(env,user,b.subject_key));
+ if(b.operation==='email_attachment'){
+  const row=await mailSubject(env,user,b.subject_key),m=await readMail(env.DB,row.id);
+  check(opened(row)&&(m?.revision||0)===b.revision,'Lees die huidige voorstel weer.',409);
+  return storeReportFile(env,user,{...b.data,id:b.request_id,subject_key:'private-mail:'+row.id});
+ }
+ if(b.operation==='email_followup')return writeMail(env,user,b);
  if(['answer','feedback_error'].includes(b.operation))return saveAnswer(env,user,b);
  if(b.operation==='acknowledge'){
   const r=await env.DB.prepare('SELECT * FROM v2_pa_report_feedback WHERE id=?').bind(b.feedback_id??'').first();check(r,'Feedback not found.',404);
@@ -247,9 +312,12 @@ async function saveAnswer(env,user,b){
  const saved=await feedbackById(env.DB,r.id);check(saved.answer_payload,'Die taak het tydens stoor verander. Lees dit weer.',409);
  return {saved:true,feedback:feedbackRow(saved)};
 }
-async function file(env,user,id){check(ID.test(id??''),'Invalid evidence ID.');const r=await env.DB.prepare('SELECT * FROM v2_pa_report_files WHERE id=?').bind(id).first();check(r,'Evidence not found.',404);await subject(env,user,r.subject_key);return r;}
+async function file(env,user,id){check(ID.test(id??''),'Invalid evidence ID.');const r=await env.DB.prepare('SELECT * FROM v2_pa_report_files WHERE id=?').bind(id).first();check(r,'Evidence not found.',404);if(r.subject_key.startsWith('private-mail:'))await mailSubject(env,user,r.subject_key.slice(13));else if(r.subject_key.startsWith('app-'))await mailSubject(env,user,r.subject_key);else await subject(env,user,r.subject_key);return r;}
 async function upload(env,user,b){
  const s=await subject(env,user,b.subject_key);check(s.subject_hash===b.subject_hash,'This item changed. Refresh before adding evidence.',409);
+ return storeReportFile(env,user,b);
+}
+async function storeReportFile(env,user,b){
  check(ID.test(b.id??'')&&['image/jpeg','image/png','application/pdf'].includes(b.mime_type),'Use a JPG, PNG or PDF.');check(typeof b.base64==='string'&&b.base64.length<=700000&&/^[A-Za-z0-9+/]*={0,2}$/.test(b.base64),'Keep each attachment below 500 KB.');
  let bytes;try{bytes=Uint8Array.from(atob(b.base64),c=>c.charCodeAt(0));}catch{throw new UserError('Invalid evidence file.');}check(bytes.length>0&&bytes.length<=500000,'Keep each attachment below 500 KB.');
  check(b.mime_type==='application/pdf'?String.fromCharCode(...bytes.slice(0,5))==='%PDF-':b.mime_type==='image/png'?bytes[0]===137&&bytes[1]===80&&bytes[2]===78&&bytes[3]===71:bytes[0]===255&&bytes[1]===216&&bytes[2]===255,'The file does not match its type.');
@@ -293,9 +361,9 @@ export async function paReportApi({request,url,env,user,bodyOf}){
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
  if(url.pathname==='/api/pa-report/email'){
   check(user.username==='alex','Slegs Alex kan hierdie e-pos hersien.',403);
-  if(request.method==='GET'){const key=url.searchParams.get('subject_key');await subject(env,user,key);return {email:await readMail(env.DB,key)};}
-  check(request.method==='POST','Gebruik die goedkeurknoppie.',405);
-  const b=await bodyOf(request);return changeMail(env.DB,user,b,await subject(env,user,b.subject_key));
+  if(request.method==='GET'){const key=url.searchParams.get('subject_key');const row=await mailSubject(env,user,key);return mailReview(env.DB,key,opened(row),url.searchParams.get('revision'));}
+  check(request.method==='POST','Gebruik die e-posvoorstel.',405);
+  const b=await bodyOf(request);return writeMail(env,user,b);
  }
  if(request.method==='GET'&&url.pathname==='/api/pa-report/conversation')return readConversation(env,user,url.searchParams.get('subject_key'),url.searchParams.get('offset')||0);
  if(request.method==='GET'&&url.pathname==='/api/pa-report')return readPaReport(env,user,{date:url.searchParams.get('date')||undefined,view:url.searchParams.get('view')||undefined});

@@ -98,3 +98,72 @@ test('a direct human reply can reuse only its exact reviewed draft and reply att
  assert.equal((await readMail(db,ids[0])).phase,'sent');
  assert.equal((await readMail(db,ids[1])).phase,'reply');
 });
+
+test('original app task keeps private attachments, edits, cancellation, one Gmail dispatch and step evidence',async t=>{
+ const {db,call,task}=await fixture(t);
+ const env={DB:db,APP_ACCESS_KEYS:JSON.stringify({alex:'a'.repeat(40)})},pa={username:'alex',via:'pa'};
+ const create=task({title:'Send and review',assigned_to:'alex',task_type:'workflow'});
+ assert.equal((await call('alex','/api/tasks',create)).status,200);
+ let native=(await call('alex','/api/tasks?id='+create.task_id)).data.task;
+ const key='app-'+native.id,path='/api/pa-report/email',get=()=>call('alex',path+'?subject_key='+key);
+ const save=(action,revision,data={})=>savePaReport(env,pa,{operation:'email_followup',subject_key:key,action,revision,data,reason:'Isolated delivery test',request_id:crypto.randomUUID()});
+ const human=(action,revision,data,request_id=crypto.randomUUID())=>call('alex',path,{subject_key:key,action,revision,data,request_id});
+ const fileId=crypto.randomUUID(),base64=btoa('%PDF-1.4 test');
+ await savePaReport(env,pa,{operation:'email_attachment',subject_key:key,request_id:fileId,revision:0,reason:'Attach test PDF',data:{filename:'Status.pdf',mime_type:'application/pdf',base64}});
+ const draft={envelope:{from:'owner@example.com',to:['office@example.com'],cc:['copy@example.com'],bcc:['private@example.com'],
+  subject:'Status update',body:'Please confirm.',html:'<p style="color:#123456">Please confirm.</p><table><tr><td>Alex</td></tr></table>',scope:'Test reply',attachments:[fileId]},
+  review_date:today(),next_action:'Lees die voorstel.',delivery_step:{task_id:native.id,step_id:native.steps[0].id}};
+ await save('draft',0,draft);await save('submit',1);
+ const first=(await get()).data;
+ assert.deepEqual(first.available_actions,['edit','approve','cancel']);assert.match(first.review_html,/<table>/);assert.match(first.review_html,/color:#123456/);
+ assert.equal(first.email.envelope.attachments[0].size,atob(base64).length);assert.equal(first.email.envelope.attachments[0].sha256.length,64);
+ const readFileUrl='/api/pa-report/file?id='+fileId;
+ assert.equal((await readPaReport(env,pa,{resource:'file',id:fileId})).base64,base64);
+ assert.equal((await call('alinda',readFileUrl)).status,403);
+ assert.equal((await call('alinda',path+'?subject_key='+key)).status,403);
+ assert.equal((await human('approve',2,{envelope_hash:first.email.envelope_hash})).status,200);
+ await save('gmail_unavailable',3);
+ const approved=(await get()).data.email;assert.equal(approved.phase,'approved');assert.match(approved.failure,/Gmail is nie beskikbaar/);
+ assert.equal((await human('edit',4,{envelope_hash:approved.envelope_hash,changes:{subject:'Revised',body:'Revised text',to:['new@example.com'],html:'<p>Revised text</p>'}})).status,200);
+ const edited=(await get()).data.email;
+ assert.equal(edited.phase,'approval');assert.equal(edited.approval,undefined);assert.notEqual(edited.envelope_hash,approved.envelope_hash);
+ assert.equal(edited.envelope.to[0],'new@example.com');assert.equal(edited.envelope.attachments[0].sha256,first.email.envelope.attachments[0].sha256);
+ await assert.rejects(save('claim',5,{envelope_hash:approved.envelope_hash}),/goedkeuring/);
+ const cancelId=crypto.randomUUID();assert.equal((await human('cancel',5,{envelope_hash:edited.envelope_hash},cancelId)).status,200);
+ assert.equal((await human('cancel',5,{envelope_hash:edited.envelope_hash},cancelId)).data.replayed,true);
+ assert.equal((await get()).data.email.phase,'cancelled');assert.ok((await get()).data.history.some(x=>x.event==='cancel'));
+ await assert.rejects(save('claim',6,{envelope_hash:edited.envelope_hash}),/goedkeuring/);
+ const work=()=>readPaReport(env,pa,{resource:'summary',id:'email-work'});
+ assert.ok(!(await work()).items.some(x=>x.id===key));
+ await save('draft',6,{...draft,envelope:{...draft.envelope,subject:'Final'}});await save('submit',7);
+ const final=(await get()).data.email,approveId=crypto.randomUUID(),ok={envelope_hash:final.envelope_hash};
+ assert.equal((await human('approve',8,ok,approveId)).status,200);assert.equal((await human('approve',8,ok,approveId)).data.replayed,true);
+ const jobs=(await work()).items;assert.equal(jobs.filter(j=>j.id===key).length,1);
+ const claims=await Promise.allSettled([save('claim',9,ok),save('claim',9,ok)]);assert.equal(claims.filter(x=>x.status==='fulfilled').length,1);
+ const claimed=(await get()).data.email;await save('bind_draft',10,{claim_id:claimed.claim_id,draft_id:'r123456789'});
+ // Simulated Gmail accepted the one bound draft, but the sender lost the response.
+ const sentReceipt={message_id:'aaaabbbb01',thread_id:'ccdd1122',rfc_id:'<receipt@example.com>',labels:['SENT'],sent_at:new Date().toISOString(),...ok};
+ const bound=(await get()).data.email,drafts=new Set([bound.gmail_draft_id]),outbox=[];
+ const sendDraft=id=>{assert.ok(drafts.delete(id),'Only an existing Gmail draft can be sent');outbox.push(sentReceipt);throw Error('Connection lost after send');};
+ assert.throws(()=>sendDraft(bound.gmail_draft_id),/Connection lost/);
+ await save('failed',11);assert.equal((await get()).data.email.message_id,undefined);
+ await assert.rejects(save('claim',12,ok),/goedkeuring/);
+ const [evidence]=outbox;
+ const result=await save('sent',12,{evidence,followup_required:true,review_date:'2099-01-05',next_action:'Check the reply.'});
+ assert.equal(result.step_updated,true);assert.equal(outbox.length,1);
+ native=(await call('alex','/api/tasks?id='+create.task_id)).data.task;
+ assert.equal(native.steps[0].status,'Complete');assert.match(native.steps[0].completion.proof_url,/aaaabbbb01$/);assert.equal(native.status,'Scheduled');assert.equal(native.steps[1].id,'mail-followup-'+evidence.message_id);
+ const ctx=await readPaReport(env,pa,{resource:'summary',id:'report-context'});
+ assert.equal(ctx.app_email.find(x=>x.id===native.id).email.message_id,evidence.message_id);
+ const archived=(await call('alex',path+'?subject_key='+key+'&revision=2')).data;
+ assert.equal(archived.email.envelope.subject,'Status update');assert.deepEqual(archived.available_actions,[]);
+});
+
+test('mail cleaning keeps the signature table, safe links and typography',async()=>{
+ const {cleanMailHtml}=await import('../src/mail-html-bundle.js');
+ const markup='<table style="max-width:480px;position:fixed"><tr><td><a href="mailto:owner@example.com" style="color:#234f70" data-note="private">Owner</a></td></tr></table><form><input type="text"></form><img src="https://example.com/remote.png">';
+ const clean=cleanMailHtml(markup);
+ assert.match(clean,/<table/);assert.match(clean,/max-width:480px/);assert.match(clean,/color:#234f70/);assert.match(clean,/mailto:owner@example.com/);
+ assert.doesNotMatch(clean,/position|data-note|<form|<input|<img|remote.png/);
+ assert.equal(cleanMailHtml(clean),clean);
+});

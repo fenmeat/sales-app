@@ -2,6 +2,7 @@ import {createWorkspaceCache} from './task-workspace-cache.js';
 import {taskType,projectTask,statusLabel,localDate} from './task-workflow.js';
 import {stepsHTML,workflowForms} from './task-workflow-ui.js';
 import './input-selection.js';
+import {mountProposal} from './task-mail-proposal.js';
 import {renderReport} from './tasks-report.js';
 import {workHTML,noticeLabel,workLabel} from './task-pa-work-ui.js';
 import {renderPaWorkspace,conversationHTML} from './pa-report-ui.js';
@@ -54,7 +55,7 @@ async function load(options={}){
   if(!hadData&&reportMode&&data.admin&&paScope==='mine'){paScope=data.username==='alex'?'all':'fenmeat';await load();return;}
   loadInbox();
   if(reportMode||rabbiMode)await loadReport();
-  const id=new URL(location.href).searchParams.get('task');if(id&&!deepLinkHandled){deepLinkHandled=true;await detailsCurrent({id});}
+  const id=new URL(location.href).searchParams.get('task');if(id&&!deepLinkHandled){deepLinkHandled=true;if(/^TSK-\d+$/.test(id))paFeedback({subject_key:id},'respond');else await detailsCurrent({id});}
  }catch(e){
   if(sequence!==loadSequence)return;
   if(e.status===404){legacyMode=true;return legacyLoad();}
@@ -174,6 +175,10 @@ function editReminder(t){
 }
 function details(t){
  show(`<h2>${esc(t.title)}</h2>${workHTML(t,data.username)}${t.feedback_request?.status==='pending'?`<p class="notice">${esc(name(t.feedback_request.by))}: ${esc(t.feedback_request.question)}</p><button id="reply-report">Gee terugvoer</button>`:''}${t.last_update?`<p>${esc(name(t.last_update.by))}: ${esc(t.last_update.text)}</p>`:''}<p>${esc(t.details).replaceAll('\n','<br>')}</p>${taskAttachments(t)}${t.steps?stepsHTML(t,true,{admin:data.admin,username:data.username}):''}<dl><dt>Verantwoordelik</dt><dd>${esc(name(t.assigned_to))}</dd><dt>Geskep deur</dt><dd>${esc(name(t.created_by))}</dd><dt>Status</dt><dd>${esc(statusLabel(t.status))}</dd><dt>Datum</dt><dd>${esc(dateLabel(t))}</dd><dt>Herinnering</dt><dd>${esc(reminderLabel(t))}</dd>${t.due_date&&t.review_date?`<dt>Oorspronklike sperdatum</dt><dd>${esc(t.due_date)}</dd>`:''}</dl>${t.document_url?`<p><a href="${esc(t.document_url)}" target="_blank" rel="noopener noreferrer">Maak ${t.kind==='po_dispatch'?'goedgekeurde bestelling':'dokument'} oop</a></p>`:''}${t.kind==='po_dispatch'&&t.task_type!=='workflow'?'<p class="notice">Bevestig wanneer jy die goedgekeurde bestelling gestuur het. Ontvangs en betaling moet daarna nog bevestig word.</p>':''}${t.completion?`<p>Klaar gemerk deur ${esc(name(t.completion.by))} · ${esc(new Date(t.completion.at).toLocaleString('en-ZA',{timeZone:'Africa/Johannesburg'}))}</p><p>${esc(t.completion.note)}</p>${t.completion.proof_url?`<p><a href="${esc(t.completion.proof_url)}" target="_blank" rel="noopener noreferrer">Bewys van voltooiing</a></p>`:''}${(t.completion.attachments||[]).map((id,index)=>`<p><a href="/api/tasks/file?id=${encodeURIComponent(id)}" target="_blank" rel="noopener">Maak bewysstuk ${index+1} van ${t.completion.attachments.length} oop</a></p>`).join('')}`:''}<div class="actions">${open(t)&&t.task_type!=='workflow'?`${t.kind!=='stocktake'?'<button class="primary" id="complete">'+(t.kind==='po_dispatch'?'Bevestig gestuur':'Merk hele taak klaar')+'</button>':`<a class="button" href="/recipes?view=stock&supplier=${encodeURIComponent(t.supplier)}&task=${encodeURIComponent(t.id)}">Maak voorraadtelling oop</a><button id="check-count">Gaan gestoorde telling na</button>`}<button id="wait">Wag vir iemand</button>`:''}${open(t)&&!canManage(t)?'<button id="reminder">Wysig herinnering</button>':''}${canManage(t)?`${data.admin||open(t)?'<button id="edit">Wysig oorspronklike taak</button>':''}${open(t)?'<button id="cancel-task">Kanselleer taak</button>':'<button id="reopen">Heropen</button>'}`:''}${data.username==='alex'&&(data.workspace_source||mail.contacts?.recipients?.[t.assigned_to])?'<button id="email-task">Gaan taak se e-pos na</button>':''}${canManage(t)?t.task_type==='workflow'?'<button id="add-step">Voeg stap by</button><button id="fix-status">Korrigeer status</button>':t.kind!=='stocktake'?'<button id="convert-workflow">Maak taak met stappe</button>':'':''}${open(t)?'<button id="ask-pa">Gee PA ’n opdrag</button><button id="add-note">Voeg nota by</button>':''}${t.pa_task_id&&!data.invoice_rep?'<button id="pa-task-conversation">Gee terugvoer aan PA</button>':''}<button id="history">Geskiedenis</button><button data-close>Maak toe</button></div><div id="history-content"></div>`);
+ if(data.username==='alex'){
+  const linked=t.pa_task_id||t.parent_cycle_id||pa?.rows?.find(r=>r.app_task_id===t.id)?.id;
+  showProposals(dialog.querySelector('h2')?.nextElementSibling,[linked,'app-'+t.id],()=>load());
+ }
  workflowForms({FormDataConstructor:FormData,show,base,submit,getData:()=>data,dialog,attachmentPicker,fileData,createAttachments,api,setCleanup:f=>{dialogCleanup=f;}}).bind(t);
  if($('#ask-pa'))$('#ask-pa').onclick=()=>noteForm(t,'pa_request');
  dialog.querySelectorAll('[data-pa-resume]').forEach(btn=>btn.onclick=()=>noteForm(t,'pa_resume',btn.dataset.paResume));
@@ -259,12 +264,17 @@ function paFeedback(item,action){
  const links=linkedTasks(item);
  if(data.admin&&links.length){const box=document.createElement('div');box.className='actions';for(const task of links){const button=document.createElement('button');button.type='button';button.textContent='Wysig oorspronklike taak'+(links.length>1?' · '+task.title:'');button.onclick=()=>editCurrent(task);box.append(button);}form.querySelector('fieldset').prepend(box);}
  const historyBox=form.querySelector('#pa-conversation');
+ const mailKeys=item.subject_key?.startsWith('TSK-')?[item.subject_key]:item.pa_task_ids||[];
+ const proposalPanels=showProposals(form,mailKeys,async()=>{
+  const page=await api('/api/pa-report/conversation?subject_key='+encodeURIComponent(item.subject_key));
+  item=page.subject;await load();
+ });
  const related=(pa.feedback||[]).filter(f=>f.subject_key===item.subject_key);
  historyBox.innerHTML=conversationHTML(related);
  let conversation=related,conversationOffset=0;
  const more=form.querySelector('#pa-more');
  async function historyPage(){try{const page=await api('/api/pa-report/conversation?subject_key='+encodeURIComponent(item.subject_key)+'&offset='+conversationOffset);if(!page.feedback)return;conversation=conversationOffset?[...conversation,...page.feedback]:page.feedback;historyBox.innerHTML=conversationHTML(conversation);conversationOffset=page.next_offset;more.hidden=conversationOffset===null;}catch{more.hidden=false;more.textContent='Probeer gesprek weer laai';}}
- more.onclick=historyPage;form.querySelector('#pa-conversation-refresh').onclick=()=>{conversationOffset=0;return historyPage();};historyPage();
+ more.onclick=historyPage;form.querySelector('#pa-conversation-refresh').onclick=()=>{conversationOffset=0;proposalPanels.forEach(panel=>panel.refresh());return historyPage();};historyPage();
  // Drafts and uncertain submissions survive a reload in this tab, scoped to the signed-in user.
  // Never cache the private report or attachment bytes on a shared phone.
  const draftKey='fenmeat-pa-draft:'+data.username+':'+item.subject_key+':'+action;
@@ -289,23 +299,17 @@ function paFeedback(item,action){
  };
 }
 
-async function reviewMail(key){
- try{
-  const {email}=await api('/api/pa-report/email?subject_key='+encodeURIComponent(key));
-  if(email?.phase!=='approval'){toast('Die e-pos het verander. Lees die taak weer.');return load();}
-  const d=email.envelope,dialog=document.createElement('dialog'),heading=document.createElement('h3'),details=document.createElement('div');
-  heading.textContent='Hersien hierdie e-pos';details.className='pa-prose';
-  details.textContent=['Van: '+d.from,'Aan: '+d.to.join(', '),'Cc: '+(d.cc.join(', ')||'Geen'),'Bcc: '+(d.bcc.join(', ')||'Geen'),'Onderwerp: '+d.subject,'Doel: '+d.scope,'Geen aanhegsels.', '',d.body].join('\n');
-  const approve=document.createElement('button'),close=document.createElement('button');
-  approve.textContent='Keur hierdie versending goed';close.textContent='Maak toe';
-  dialog.append(heading,details);
-  if(d.html){const frame=document.createElement('iframe');frame.setAttribute('sandbox','');frame.title='Goedgekeurde e-posuitleg';frame.srcdoc=`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; form-action 'none'">`+d.html;dialog.append(frame);}
-  dialog.append(approve,close);document.body.append(dialog);dialog.onclose=()=>dialog.remove();close.onclick=()=>dialog.close();
-  approve.onclick=async()=>{approve.disabled=true;try{await api('/api/pa-report/email',{action:'approve',subject_key:key,revision:email.revision,request_id:crypto.randomUUID(),data:{envelope_hash:email.envelope_hash}});dialog.close();await load();}catch(e){toast(e.message);dialog.close();}};
-  dialog.showModal();
- }catch(e){toast(e.message);}
+function showProposals(anchor,keys,onChange){
+ if(!anchor||data.username!=='alex')return [];
+ return [...new Set(keys.filter(Boolean))].map(key=>{
+  const host=document.createElement('section');host.className='mail-proposal';host.hidden=true;
+  anchor.before(host);return mountProposal(host,key,api,onChange);
+ });
 }
-
+function reviewMail(key){
+ show('<h2>E-pos hersien</h2><div id="mail-here"></div><button data-close>Maak toe</button>');
+ showProposals(dialog.querySelector('#mail-here'),[key],()=>load());
+}
 let lastPaRefresh=0;
 async function refreshPaAnswers(){if(!data||dialog.open||busy||Date.now()-lastPaRefresh<60000)return;lastPaRefresh=Date.now();if(!legacyMode){inboxAt=0;if(reportMode||rabbiMode)reportCache=null;return load();}try{const fresh=await api('/api/pa-report'+(reportDate?'?date='+encodeURIComponent(reportDate):''));if(fresh.register_revision){pa=fresh;data.today=localDate();render();}}catch{/* Keep the last loaded conversation during a temporary outage. */}}
 window.addEventListener('focus',refreshPaAnswers);window.addEventListener('online',refreshPaAnswers);
