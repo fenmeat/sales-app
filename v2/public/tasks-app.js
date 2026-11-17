@@ -14,7 +14,7 @@ const requestedReport=new URL(location.href).searchParams;
 let pa=null,paError='',paScope='mine',reportDate=/^\d{4}-\d{2}-\d{2}$/.test(requestedReport.get('date')||'')?requestedReport.get('date'):(/^report-(\d{4}-\d{2}-\d{2}):/.exec(requestedReport.get('case')||'')?.[1]||''),paRetry=null;
 let data,filter=new URL(location.href).searchParams.get('status')||'open',owner='mine',search='',busy=false,retry=null,dialogCleanup=()=>{};
 const workspaceCache=createWorkspaceCache((...args)=>fetch(...args));
-let mutationGeneration=0,legacyMode=false,loadSequence=0,inboxAt=0,inboxFlight=null,reportFlight=null,reportCache=null,searchTimer,detailSequence=0;
+let mutationGeneration=0,legacyMode=false,loadSequence=0,inboxAt=0,inboxFlight=null,inboxRenderPending=false,reportFlight=null,reportCache=null,searchTimer,detailSequence=0;
 const mark=name=>{if(typeof performance!=='undefined'&&performance.mark)performance.mark(name);};
 mark('tasks-module-ready');
 async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const result=await r.json();if(!r.ok){const e=Error(result.error||'Kon nie stoor nie. Probeer weer.');e.status=r.status;throw e;}if(body){mutationGeneration++;workspaceCache.clear();inboxAt=0;reportCache=null;loadSequence++;}return result;}
@@ -65,7 +65,7 @@ async function load(options={}){
 }
 async function loadInbox(){
  if(!data||inboxFlight||Date.now()-inboxAt<60000)return;inboxAt=Date.now();const username=data.username;
- inboxFlight=(async()=>{try{const r=await api('/api/tasks/inbox');if(data?.username!==username)return;data.notifications=r.notifications||[];pa.alerts=r.alerts||[];pa.reminders=r.reminders||[];if(!dialog.open)render();}catch{/* Keep the existing list and retry on refresh/focus. */}finally{inboxFlight=null;}})();
+ inboxFlight=(async()=>{try{const r=await api('/api/tasks/inbox');if(data?.username!==username)return;data.notifications=r.notifications||[];pa.alerts=r.alerts||[];pa.reminders=r.reminders||[];if(dialog.open)inboxRenderPending=true;else render();}catch{/* Keep the existing list and retry on refresh/focus. */}finally{inboxFlight=null;}})();
  return inboxFlight;
 }
 async function loadReport(){
@@ -116,7 +116,7 @@ function render(){
  document.querySelectorAll('[data-notification]').forEach(b=>b.onclick=async()=>{const n=data.notifications.find(n=>n.id===b.dataset.notification);try{await api('/api/tasks/read',{id:n.id});n.read_at=new Date().toISOString();const t=data.tasks.find(t=>t.id===n.task_id);render();if(t)details(t);}catch(e){toast(e.message);}});
 }
 function card(t){const late=open(t)&&review(t)<data.today;return `<article class="card ${late?'overdue':''} ${t.status==='Complete'?'complete':''}"><div class="meta"><span class="pill">${esc(statusLabel(t.status))}</span><span>${esc(name(t.assigned_to))}</span>${t.priority!=='Normal'?`<strong>${esc(t.priority)}</strong>`:''}<span class="${late?'overdue-text':''}">${esc(dateLabel(t))}</span></div><h2>${esc(t.title)}</h2><p class="reminder">${esc(reminderLabel(t))}</p>${t.waiting_reason?`<p>${esc(t.waiting_reason)}</p>`:''}<div class="meta"><span>${t.task_type==='workflow'?'Taak met stappe':t.task_type==='reminder'?'Gewone herinnering':t.kind==='po_dispatch'?'Bestellingstap':t.kind==='stocktake'?'Voorraadtelling':'Gekoppelde taak'}</span>${t.pa_work?.length?`<span>${esc(workLabel(t.pa_work.find(j=>j.status!=='answered')?.status||'answered'))}</span>`:data.admin&&t.pa_sync.status!=='app_only'?`<span>${t.pa_sync.status==='synced'?'PA bygewerk':'PA sal die verandering kry'}</span>`:''}</div><div class="actions"><button data-task="${esc(t.id)}">Maak taak oop</button>${open(t)&&t.task_type!=='workflow'?t.kind==='stocktake'?`<a class="button" href="/recipes?view=stock&supplier=${encodeURIComponent(t.supplier)}&task=${encodeURIComponent(t.id)}">Maak voorraadtelling oop</a>`:`<button class="primary" data-complete="${esc(t.id)}">${t.kind==='po_dispatch'?'Bevestig gestuur':'Merk klaar'}</button>`:''}</div></article>`;}
-function show(html){dialogCleanup();dialogCleanup=()=>{};dialog.onclose=()=>dialogCleanup();dialog.oncancel=e=>{if(busy)e.preventDefault();};retry=null;dialog.innerHTML=html;dialog.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>dialog.close());if(!dialog.open)dialog.showModal();}
+function show(html){dialogCleanup();dialogCleanup=()=>{};dialog.onclose=()=>{dialogCleanup();if(inboxRenderPending&&data&&!dialog.open){inboxRenderPending=false;render();}};dialog.oncancel=e=>{if(busy)e.preventDefault();};retry=null;dialog.innerHTML=html;dialog.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>dialog.close());if(!dialog.open)dialog.showModal();}
 function base(title,content,submit='Stoor'){return `<h2>${esc(title)}</h2><form><fieldset>${content}<p class="error" role="alert"></p><div class="actions"><button class="primary" type="submit">${submit}</button><button type="button" data-close>Kanselleer</button></div></fieldset></form>`;}
 async function submit(form,body,onSuccess=()=>load()){
  if(busy)return;busy=true;form.querySelector('fieldset').disabled=true;

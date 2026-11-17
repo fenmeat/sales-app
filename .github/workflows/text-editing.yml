@@ -10,6 +10,9 @@ on:
       - 'v2/public/pa-report-ui.js'
       - 'v2/scripts/qa-pa-conversations.mjs'
       - 'v2/scripts/qa-task-editing.mjs'
+      - 'v2/scripts/qa-task-pa-work.mjs'
+      - 'v2/src/task-pa-work.js'
+      - 'v2/public/task-pa-work-ui.js'
       - 'v2/public/input-selection.js'
       - 'v2/public/invoicing/input-selection.js'
       - 'v2/scripts/qa-text-editing.mjs'
@@ -48,6 +51,10 @@ jobs:
         env:
           TEXT_BROWSER: ${{ matrix.browser }}
         run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-pa-conversations.mjs
+      - name: Check PA instruction, returned document and notification
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-pa-work.mjs
       - name: Check original task editing and real database readback
         env:
           TEXT_BROWSER: ${{ matrix.browser }}
