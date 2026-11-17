@@ -4,6 +4,12 @@ on:
     branches: [perf/tasks-loading-20261113,fix/task-editing-20261113, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
     paths:
       - 'v2/public/tasks-app.js'
+      - 'v2/public/task-attachments.js'
+      - 'v2/public/task-scanner.js'
+      - 'v2/public/scan-image.js'
+      - 'v2/public/scan-pdf.js'
+      - 'v2/src/task-files.js'
+      - 'v2/scripts/qa-task-scans.mjs'
       - 'v2/src/task-workspace.js'
       - 'v2/public/task-workspace-cache.js'
       - 'v2/scripts/qa-task-speed.mjs'
@@ -63,6 +69,10 @@ jobs:
         env:
           TEXT_BROWSER: ${{ matrix.browser }}
         run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-speed.mjs
+      - name: Check document scans, compressed photos and interrupted saves
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TASKS_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-scans.mjs
       - uses: actions/upload-artifact@v5
         if: always()
         with:

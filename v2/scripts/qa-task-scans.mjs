@@ -61,6 +61,7 @@ let browser;
 try{
  const origin=(await mf.ready).origin,db=await mf.getD1Database('DB');
  for(const [device,engine,options,executablePath] of devices){
+  if(process.env.TEXT_BROWSER&&engine.name()!==process.env.TEXT_BROWSER)continue;
   browser=await engine.launch({headless:true,executablePath,...(engine===pw.chromium?{args:['--no-sandbox','--disable-dev-shm-usage','--no-zygote']}: {})});
   const ctx=await browser.newContext({...options,timezoneId:'Africa/Johannesburg'});
   ctx.setDefaultTimeout(90000);
