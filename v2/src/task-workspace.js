@@ -8,9 +8,11 @@ import {unifiedWork,selectWork,workCounts} from '../public/pa-report-model.js';
 
 const statuses=new Set(['open','scheduled','waiting','closed','submitted','all']);
 const sourceFields=['id','title','kind','task_type','status','revision','pa_task_id','parent_cycle_id','assigned_to','created_by','due_date','review_date','next_action_date','requires_evidence','document_url','pa_sync'];
-const brief=t=>({...Object.fromEntries(sourceFields.filter(k=>t[k]!==undefined).map(k=>[k,t[k]])),brief:true});
+const workStatus=t=>t.pa_work?.find(j=>j.status!=='answered')?.status||t.pa_work?.at(-1)?.status;
+const brief=t=>({...Object.fromEntries(sourceFields.filter(k=>t[k]!==undefined).map(k=>[k,t[k]])),pa_work_status:workStatus(t),brief:true});
 function compact(row){
- const {last_edit,completion,attachments,last_update,last_reason,feedback_request,...r}=row;
+ const {pa_work,last_edit,completion,attachments,last_update,last_reason,feedback_request,...r}=row;
+ if(pa_work?.length)r.pa_work_status=workStatus(row);
  if(r.steps)r.steps=r.steps.map(({completion,notes,...step})=>step);
  if(r.stages)r.stages=r.stages.map(brief);
  return r;

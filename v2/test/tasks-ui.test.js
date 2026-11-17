@@ -5,6 +5,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {parseHTML} from 'linkedom';
+import {workHTML,noticeLabel,workLabel} from '../public/task-pa-work-ui.js';
 import {renderReport} from '../public/tasks-report.js';
 import {reminderOptions} from '../public/task-report-model.js';
 import {attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData} from '../public/task-attachments.js';
@@ -47,7 +48,7 @@ async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','createWorkspaceCache',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,createWorkspaceCache);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','createWorkspaceCache','workHTML','noticeLabel','workLabel',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,createWorkspaceCache,workHTML,noticeLabel,workLabel);
  return {document,dialog,posts,postPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 

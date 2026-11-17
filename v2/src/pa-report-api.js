@@ -1,4 +1,6 @@
 import {check,UserError,dateKey,today} from './domain.js';
+import {workPage} from './task-pa-work.js';
+import {ensureTaskSchema} from './tasks-api.js';
 import {EMAIL_SCHEMA,changeMail,readMail,mailSummaries,mailWork,projectMail} from './pa-email.js';
 import {hash,isAdmin,keys} from './auth.js';
 
@@ -65,6 +67,12 @@ export async function readPaReport(env,user,query={}){
  if(query.resource==='summary'&&/^tasks-workspace(?:-(open|scheduled|closed))?$/.test(query.id||''))return (await import('./task-workspace.js')).workspaceDiagnostic(env,user,{status:query.id.split('-')[2]||'open'});
  if(query.resource==='summary'&&query.id==='tasks-performance')return (await import('./task-performance.js')).taskPerformance(env,user);
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
+ if(query.resource==='summary'&&['task-work','task-work-report'].includes(query.id)){
+  check(user.username==='alex','Net Alex kan PA-opdragte verwerk.',403);
+  await ensureTaskSchema(env.DB);
+  const previous=await env.DB.prepare("SELECT payload FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' ORDER BY resource_key DESC,revision DESC LIMIT 1").first();
+  return workPage(env.DB,{offset:query.offset,report:query.id==='task-work-report',since:previous&&JSON.parse(previous.payload).source_at});
+ }
  if(query.resource==='summary' && (query.id==='email-work'||query.id?.startsWith('email-TSK-'))){
   check(user.username==='alex','Slegs Alex kan e-posopvolging bestuur.',403);
   if(query.id==='email-work')return mailWork(env.DB,query.offset);
@@ -76,8 +84,8 @@ export async function readPaReport(env,user,query={}){
   const feedback=(await env.DB.prepare(feedbackSelect+' ORDER BY f.created_at DESC,f.id DESC LIMIT 2000').all()).results.map(feedbackRow);
   const lastReport=await env.DB.prepare("SELECT resource_key FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' ORDER BY resource_key DESC,revision DESC LIMIT 1").first();
   const previous=lastReport?await latest(env.DB,lastReport.resource_key):null;
-  const mails=await mailSummaries(env.DB);
-  return {register_revision:register?.revision||0,source_at:register?.source_at,previous_cutoff:previous?.source_at||null,followup:reportFollowup((register?.rows||[]).map(r=>projectMail(r,mails.get(r.id))),feedback,today(),previous?.source_at||'')};
+  const mails=await mailSummaries(env.DB);await ensureTaskSchema(env.DB);
+  return {register_revision:register?.revision||0,source_at:register?.source_at,previous_cutoff:previous?.source_at||null,task_work:(await workPage(env.DB,{report:true,since:previous?.source_at})),followup:reportFollowup((register?.rows||[]).map(r=>projectMail(r,mails.get(r.id))),feedback,today(),previous?.source_at||'')};
  }
  if(query.resource==='summary'&&query.id)return readConversation(env,user,query.id,query.offset);
  if(query.resource==='pending_feedback'){

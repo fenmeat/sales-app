@@ -2,6 +2,7 @@ import {check,UserError,dateKey,today} from './domain.js';
 import {isAdmin,keys,hash} from './auth.js';
 import {isInvoiceRep} from './invoice-auth.js';
 import {projectTask,taskType,syncRequired} from './task-workflow.js';
+import {registerTaskText,changePaWork,unfinishedWork} from './task-pa-work.js';
 import {workflowAction,validateSteps,completeReminder} from './task-workflow-actions.js';
 import {MAIL_SCHEMA,mailAction,readTaskMail} from './tasks-mail.js';
 
@@ -33,7 +34,7 @@ export const latestSQL=`SELECT e.*,(SELECT MAX(c.revision) FROM v2_task_events c
 const text=(value,max,required=false)=>{check(typeof value==='string'&&value.length<=max&&(!required||value.trim()),'Enter the required task details.');return value.trim();};
 const optionalText=(v,max)=>v===null||v===undefined?'':text(v,max);
 function safeURL(value){if(!value)return '';let u;try{u=new URL(value);}catch{throw new UserError('Enter a complete secure document link.');}check(u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<=2000,'Use a secure document link.');return u.href;}
-export function decode(row){if(!row)return null;const raw=JSON.parse(row.payload);const task=projectTask({...raw,revision:row.revision,updated_at:row.saved_at,updated_by:row.actor,pa_task_id:row.synced_pa_task_id||raw.pa_task_id||''});return {...task,pa_sync:{acknowledged_revision:row.acknowledged_revision??0,status:!syncRequired(task)?'app_only':(row.acknowledged_revision??0)>=(row.pa_revision??row.revision)?'synced':'pending',synced_at:row.synced_at??null,error:row.last_error??null}};}
+export function decode(row){if(!row)return null;const raw=JSON.parse(row.payload);const task=projectTask({...raw,revision:row.revision,updated_at:row.saved_at,updated_by:row.actor,pa_task_id:row.synced_pa_task_id||raw.pa_task_id||''});return {...task,pa_sync:{acknowledged_revision:row.acknowledged_revision??0,status:!syncRequired(task)?(task.pa_work?.length?(unfinishedWork(task)?'work_pending':'work_answered'):'app_only'):(row.acknowledged_revision??0)>=(row.pa_revision??row.revision)?'synced':'pending',synced_at:row.synced_at??null,error:row.last_error??null}};}
 
 // Compare stable field/step identities; prior payloads remain the authoritative history.
 export function taskChanges(before,after){
@@ -129,7 +130,7 @@ export async function saveTask(env,user,b){
  check((old?.revision??0)===b.revision,'This task changed. Reload before saving.',409);
  check(env.TASK_WORKFLOWS_READ_ONLY!=='true'||!old||taskType(old)!=='workflow'||b.action==='restore_task_revision','Stapwysigings is tydelik gesluit vir onderhoud.',503);
  const action=b.action??'create';let task=old?structuredClone(old):null,files=[];
- check(b.files===undefined||action==='create','Task photos can only be supplied when creating a task.');
+ check(b.files===undefined||['create','pa_result'].includes(action),'Task photos can only be supplied when creating a task.');
  if(action==='create'){
   check(!old,'This task already exists.',409);
   check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||k==='area'),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat','Personal PA matters cannot be imported into FenMeat.');
@@ -153,7 +154,10 @@ export async function saveTask(env,user,b){
   task.attachments=files.map(f=>f.id);
  }else{
   check(old,'Task not found.',404);
-  if(action==='restore_task_revision'){
+  if(['pa_request','pa_claim','pa_result','pa_resume','pa_recover'].includes(action)){
+   if(action==='pa_result'&&b.files){check(Array.isArray(b.files)&&b.files.length<=4,'Kies hoogstens vier verslaglêers.');files=b.files.map(attachmentData);}
+   await changePaWork(task,b,user,env.DB,at,files,safeURL);
+  }else if(action==='restore_task_revision'){
    check(admin,'Only admins can restore task history.',403);check(Number.isSafeInteger(b.restore_revision)&&b.restore_revision>0&&b.restore_revision<old.revision,'Choose an earlier saved revision.');text(b.note,2000,true);
    const row=await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? AND revision=?').bind(old.id,b.restore_revision).first();check(row,'Earlier task not found.',404);const restored=JSON.parse(row.payload);
    check(restored.id===old.id&&restored.parent_cycle_id===old.parent_cycle_id&&(!restored.pa_task_id||restored.pa_task_id===old.pa_task_id),'Preserve the task and PA identity.');task={...restored,pa_task_id:old.pa_task_id,last_reason:b.note,restored_from:b.restore_revision};
@@ -230,8 +234,11 @@ export async function saveTask(env,user,b){
    check(admin||managesOwnTask(user,old),'Only admins can reopen or cancel tasks assigned by someone else.',403);text(b.note,2000,true);task.status=action==='reopen'?'Pending':'Cancelled';task.last_reason=b.note;task.completion=null;
   }else throw new UserError('Unsupported task action.');
  }
+ if(['restore_task_revision','undo_complete'].includes(action)&&old?.pa_work)task.pa_work=old.pa_work;
+ if(['create','note','respond'].includes(action)&&user.via!=='pa')registerTaskText(task,{...b,action},user,at);
  if(old?.assigned_to!==task.assigned_to&&task.feedback_request?.status==='pending')task.feedback_request={...task.feedback_request,status:'cancelled',cancelled_at:at};
  if(task.task_type!=='legacy')task=projectTask(task);
+ check(!(task.status==='Complete'||action==='complete')||!unfinishedWork(task),'Handel eers die oop PA-opdrag af.');
  check(statusSet.has(task.status),'Invalid task status.');
  if(task.reminder_mode==='once'&&(!old||old.reminder_mode!=='once'||old.reminder_at!==task.reminder_at))check(Date.parse(task.reminder_at)>Date.parse(at),'Choose a reminder time in the future.');
  for(const key of ['revision','updated_at','updated_by','pa_sync','progress','next_action','next_action_date','next_assigned_to'])delete task[key];
@@ -252,6 +259,11 @@ export async function saveTask(env,user,b){
  else if(['complete','wait'].includes(action))statements.push(notification(env.DB,b.request_id,task.created_by,task,action==='complete'?'completed':'waiting',at));
  else if(['update','reopen','cancel','undo_complete'].includes(action))statements.push(notification(env.DB,b.request_id,task.assigned_to,task,action,at));
  if(action.startsWith('step_'))for(const u of new Set([task.assigned_to,...task.steps.map(s=>s.assigned_to)]))if(u!==user.username)statements.push(notification(env.DB,b.request_id,u,task,'step_update',at));
+ if(action==='pa_result'){
+  const job=task.pa_work.find(j=>j.id===b.work_id);
+  for(const u of new Set([job.actor,task.assigned_to]))if(canSeeTask({username:u},task))
+    statements.push(notification(env.DB,b.request_id,u,task,b.status==='answered'?'pa_result':'pa_action',at));
+ }
  if(action==='request_update')statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'update_requested',at));
  const recipients=new Set();
  if(['respond','note'].includes(action))recipients.add(task.created_by);
