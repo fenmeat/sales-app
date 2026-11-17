@@ -1,3 +1,4 @@
+import {originalFileBytes} from './task-files.js';
 import {check,UserError,dateKey,today} from './domain.js';
 import {workPage} from './task-pa-work.js';
 import {ensureTaskSchema,getTask,saveTask} from './tasks-api.js';
@@ -153,7 +154,7 @@ export async function readPaReport(env,user,query={}){
    const id=query.id.slice(8),f=await env.DB.prepare('SELECT * FROM v2_task_attachments WHERE id=?').bind(id).first();
    const m=f&&await readMail(env.DB,'app-'+f.task_id);
    check(m?.envelope.attachments?.some(a=>a.id===id),'Bylaag nie op die voorstel nie.',404);
-   const bytes=new Uint8Array(f.bytes);let binary='';for(let n=0;n<bytes.length;n+=8192)binary+=String.fromCharCode(...bytes.slice(n,n+8192));
+   const bytes=await originalFileBytes(env.DB,f);let binary='';for(let n=0;n<bytes.length;n+=8192)binary+=String.fromCharCode(...bytes.slice(n,n+8192));
    return {id,filename:f.filename,mime_type:f.mime_type,base64:btoa(binary),byte_length:bytes.length};
   }
   check(user.username==='alex','Only Alex can read private report evidence through PA.',403);const f=await file(env,user,query.id),bytes=new Uint8Array(f.bytes);let binary='';for(let n=0;n<bytes.length;n+=8192)binary+=String.fromCharCode(...bytes.slice(n,n+8192));return {id:f.id,filename:f.filename,mime_type:f.mime_type,subject_key:f.subject_key,base64:btoa(binary),byte_length:bytes.length,download_url:'/api/pa-report/file?id='+f.id};

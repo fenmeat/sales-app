@@ -9,7 +9,7 @@ import {parseHTML} from 'linkedom';
 import {workHTML,noticeLabel,workLabel} from '../public/task-pa-work-ui.js';
 import {renderReport} from '../public/tasks-report.js';
 import {reminderOptions} from '../public/task-report-model.js';
-import {attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData} from '../public/task-attachments.js';
+import {attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,REPORT_FILE_ACCEPT,fileData} from '../public/task-attachments.js';
 import {createCanvas,loadImage} from '@napi-rs/canvas';
 
 async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={}){
@@ -49,7 +49,7 @@ async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','fileData','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','mountProposal','createWorkspaceCache','workHTML','noticeLabel','workLabel',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,mountProposal,createWorkspaceCache,workHTML,noticeLabel,workLabel);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','REPORT_FILE_ACCEPT','fileData','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','mountProposal','createWorkspaceCache','workHTML','noticeLabel','workLabel',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,REPORT_FILE_ACCEPT,fileData,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,mountProposal,createWorkspaceCache,workHTML,noticeLabel,workLabel);
  return {document,dialog,posts,postPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 
@@ -184,7 +184,7 @@ test('lost new-task save keeps all photo bytes, task ID, request ID and instruct
  assert.equal(ui.posts[1].data.assigned_to,'xavier');assert.equal(ui.dialog.open,false);
 });
 
-test('creation resizes real photo pixels and sends the resulting JPEG with its preview',async t=>{
+test('creation previews a small PNG and keeps its exact format and full resolution',async t=>{
  const ui=await screen('xavier');ui.document.querySelector('#new').onclick();
  const bitmap=globalThis.createImageBitmap;
  globalThis.createImageBitmap=async file=>{const image=await loadImage(Buffer.from(await file.arrayBuffer()));image.close=()=>{};return image;};
@@ -198,8 +198,8 @@ test('creation resizes real photo pixels and sends the resulting JPEG with its p
  selectFiles(ui,[new File([photo.toBuffer('image/png')],'photo.png',{type:'image/png'})]);
  assert.ok(ui.dialog.querySelector('.attachment-row img'));
  const form=ui.dialog.querySelector('form');form.elements.title.value='Photo example';await form.onsubmit({preventDefault(){}});
- assert.equal(ui.posts.length,1);assert.equal(ui.posts[0].files[0].mime_type,'image/jpeg');
- const saved=await loadImage(Buffer.from(ui.posts[0].files[0].base64,'base64'));assert.equal(saved.width,1600);assert.equal(saved.height,800);
+ assert.equal(ui.posts.length,1);assert.equal(ui.posts[0].files[0].mime_type,'image/png');
+ const saved=await loadImage(Buffer.from(ui.posts[0].files[0].base64,'base64'));assert.equal(saved.width,2000);assert.equal(saved.height,1000);
 });
 
 test('task instruction photos reopen while pending, survive edits and stay separate from completion evidence',async()=>{
@@ -252,7 +252,7 @@ test('selection limits and invalid files keep earlier choices and completed task
  selectFiles(ui,Array.from({length:12},(_,i)=>pdf(`file-${i}.pdf`)));
  assert.match(ui.dialog.querySelector('#attachment-status').textContent,/12 of 12/);
  selectFiles(ui,[pdf('extra.pdf')]);assert.match(ui.dialog.querySelector('.error').textContent,/up to 12/);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,12);
- selectFiles(ui,[new File(['bad'],'unsupported.txt',{type:'text/plain'})]);assert.match(ui.dialog.querySelector('.error').textContent,/JPG, PNG, HEIC, HEIF, WebP or PDF/);
+ selectFiles(ui,[new File(['bad'],'unsupported.bin',{type:'application/octet-stream'})]);assert.match(ui.dialog.querySelector('.error').textContent,/kies ’n foto/);
  assert.equal(ui.posts.length,0);
  const ids=['first-file-id','second-file-id','third-file-id'];
  const closed=await screen('xavier',[reportTask({status:'Complete',completion:{by:'xavier',at:'2099-11-02T08:00:00Z',attachments:ids}})]);
@@ -282,25 +282,25 @@ function noisyPhoto(width=1600,height=1200){
  ctx.putImageData(pixels,0,0);return canvas;
 }
 
-test('multi-MB detailed photo that failed the old 500 KB limit now fits, with exact retry bytes',async t=>{
+test('multi-MB detailed photo compresses without discarding fine detail, with exact retry bytes',async t=>{
  const ui=await screen('alex');ui.document.querySelector('#new').onclick();const tools=realPhotoTools(ui,t);
  const photo=noisyPhoto();assert.ok(photo.toBuffer('image/jpeg',75).length>500000,'reproduces old rejection');
  const original=photo.toBuffer('image/png');assert.ok(original.length>5000000);
  selectFiles(ui,[new File([original],'large-photo.PNG',{type:'image/png'})]);
  const form=ui.dialog.querySelector('form');form.elements.title.value='Detailed phone photo';ui.failNext();await form.onsubmit({preventDefault(){}});
  assert.equal(ui.posts.length,1);const saved=ui.posts[0].files[0];const bytes=Buffer.from(saved.base64,'base64');
- assert.ok(bytes.length<=500000);assert.equal(saved.filename,'large-photo.jpg');assert.equal(saved.mime_type,'image/jpeg');
- const image=await loadImage(bytes);assert.ok(image.width>=900);assert.equal(image.width/image.height,4/3);
- assert.ok(tools.calls.length>1);assert.ok(tools.calls.some(c=>c.width<1600),'also reduces dimensions when quality alone is insufficient');assert.equal(tools.closed(),1);
+ assert.ok(bytes.length<original.length*.45);assert.match(saved.filename,/^large-photo\.(jpg|webp)$/);assert.match(saved.mime_type,/^image\/(jpeg|webp)$/);
+ const image=await loadImage(bytes);assert.equal(image.width,1600);assert.equal(image.width/image.height,4/3);
+ assert.ok(tools.calls.length>1);assert.equal(tools.closed(),1);
  const count=tools.calls.length;await form.onsubmit({preventDefault(){}});assert.deepEqual(ui.posts[0],ui.posts[1]);assert.equal(tools.calls.length,count,'does not decode again on retry');assert.equal(ui.dialog.open,false);
 });
 
-test('12 MP portrait keeps orientation, small canvas and correct JPEG name for an untyped photo',async t=>{
+test('12 MP untyped PNG with a small file size keeps orientation and original pixels',async t=>{
  const ui=await screen('xavier');ui.document.querySelector('#new').onclick();const tools=realPhotoTools(ui,t);
  const photo=createCanvas(3000,4000),ctx=photo.getContext('2d');ctx.fillStyle='red';ctx.fillRect(0,0,3000,2000);ctx.fillStyle='blue';ctx.fillRect(0,2000,3000,2000);
  selectFiles(ui,[new File([photo.toBuffer('image/png')],'IMG_1234.PNG',{type:''})]);
  const form=ui.dialog.querySelector('form');form.elements.title.value='Portrait';await form.onsubmit({preventDefault(){}});
- const saved=ui.posts[0].files[0],image=await loadImage(Buffer.from(saved.base64,'base64'));assert.equal(image.width,1200);assert.equal(image.height,1600);assert.equal(saved.filename,'IMG_1234.jpg');assert.ok(tools.calls.every(c=>c.width<=1600&&c.height<=1600));
+ const saved=ui.posts[0].files[0],image=await loadImage(Buffer.from(saved.base64,'base64'));assert.equal(image.width,3000);assert.equal(image.height,4000);assert.equal(saved.filename,'IMG_1234.PNG');assert.equal(tools.calls.length,0);
 });
 
 test('HEIC selection uses native image fallback when bitmap decoding fails',async t=>{
@@ -312,15 +312,15 @@ test('HEIC selection uses native image fallback when bitmap decoding fails',asyn
  const create=ui.document.createElement.bind(ui.document);ui.document.createElement=name=>name==='img'?image:create(name);
  const urls=[],oldRevoke=URL.revokeObjectURL;URL.revokeObjectURL=url=>{urls.push(url);oldRevoke(url);};t.after(()=>URL.revokeObjectURL=oldRevoke);
  const saved=await fileData(new File(['synthetic codec input'],'IMG_1234.HEIC',{type:'image/heic'}));
- assert.equal(saved.mime_type,'image/jpeg');assert.equal(saved.filename,'IMG_1234.jpg');assert.equal(urls.length,1);
+ assert.match(saved.mime_type,/^image\/(jpeg|webp)$/);assert.match(saved.filename,/^IMG_1234\.(jpg|webp)$/);assert.equal(urls.length,1);
  ui.document.createElement=create;selectFiles(ui,[new File(['synthetic'],'selected.HEIC',{type:'image/heic'})]);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,1);assert.match(ui.dialog.querySelector('#attachment').getAttribute('accept'),/image\/heic/);
 });
 
 test('photo encoding failure keeps task text and selected files, saves nothing and releases bitmap',async t=>{
  const ui=await screen('alex');ui.document.querySelector('#new').onclick();const tools=realPhotoTools(ui,t,{nullBlob:true});
- const photo=createCanvas(100,100);selectFiles(ui,[new File([photo.toBuffer('image/png')],'broken.png',{type:'image/png'})]);
+ const photo=noisyPhoto(2200,1350);selectFiles(ui,[new File([photo.toBuffer('image/png')],'broken.png',{type:'image/png'})]);
  const form=ui.dialog.querySelector('form');form.elements.title.value='Do not lose this';await form.onsubmit({preventDefault(){}});
- assert.equal(ui.posts.length,0);assert.equal(form.elements.title.value,'Do not lose this');assert.equal(ui.dialog.open,true);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,1);assert.match(form.querySelector('.error').textContent,/could not be prepared/);assert.equal(tools.closed(),1);assert.equal(form.querySelector('fieldset').disabled,false);
+ assert.equal(ui.posts.length,0);assert.equal(form.elements.title.value,'Do not lose this');assert.equal(ui.dialog.open,true);assert.equal(ui.dialog.querySelectorAll('.attachment-row').length,1);assert.match(form.querySelector('.error').textContent,/kon nie gestoor word nie/);assert.equal(tools.closed(),1);assert.equal(form.querySelector('fieldset').disabled,false);
 });
 
 

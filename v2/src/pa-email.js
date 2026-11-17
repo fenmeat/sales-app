@@ -1,3 +1,4 @@
+import {originalFileBytes} from './task-files.js';
 import {check,dateKey,today} from './domain.js';
 import {cleanMailHtml} from './mail-html-bundle.js';
 import {hash} from './auth.js';
@@ -34,11 +35,11 @@ async function envelope(db,key,d,observed=false) {
   const owned=await db.prepare('SELECT filename,mime_type,bytes FROM v2_pa_report_files WHERE id=? AND subject_key IN (?,?)').bind(id,'private-mail:'+key,key).first();
   let file=owned,source='report';
   if(!file&&key.startsWith('app-')){
-   file=await db.prepare('SELECT filename,mime_type,bytes FROM v2_task_attachments WHERE task_id=? AND id=?').bind(key.slice(4),id).first();
+   file=await db.prepare('SELECT id,filename,mime_type,bytes FROM v2_task_attachments WHERE task_id=? AND id=?').bind(key.slice(4),id).first();
    source='task';
   }
   check(file,'Die bylaag behoort nie aan hierdie taak nie.');
-  const bytes=new Uint8Array(file.bytes);
+  const bytes=source==='task'?await originalFileBytes(db,file):new Uint8Array(file.bytes);
   const sha256=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),b=>b.toString(16).padStart(2,'0')).join('');
   attachments.push({id,source,filename:file.filename,mime_type:file.mime_type,size:bytes.length,sha256});
  }

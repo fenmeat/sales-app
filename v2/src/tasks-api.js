@@ -1,3 +1,4 @@
+import {attachmentData,fileStatements,fileChunksSchema,originalFileBytes,downloadOnly} from './task-files.js';
 import {check,UserError,dateKey,today} from './domain.js';
 import {isAdmin,keys,hash} from './auth.js';
 import {isInvoiceRep} from './invoice-auth.js';
@@ -7,7 +8,7 @@ import {workflowAction,validateSteps,completeReminder} from './task-workflow-act
 import {MAIL_SCHEMA,mailAction,readTaskMail} from './tasks-mail.js';
 
 export const TASK_SCHEMA=[
- ...MAIL_SCHEMA,
+ ...MAIL_SCHEMA,fileChunksSchema,
  `CREATE TABLE IF NOT EXISTS v2_task_events (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(task_id,revision))`,
  `CREATE INDEX IF NOT EXISTS v2_tasks_latest ON v2_task_events(task_id,revision DESC)`,
  `CREATE TABLE IF NOT EXISTS v2_task_po_links (parent_cycle_id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE)`,
@@ -106,17 +107,6 @@ function validateTask(raw,env){
  return t;
 }
 function notification(db,requestId,username,task,kind,at){return db.prepare('INSERT INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind(requestId+'-'+username,username,task.id,kind,at);}
-function attachmentData(b){
- check(b&&ID.test(b.id??'')&&['image/jpeg','image/png','application/pdf'].includes(b.mime_type),'Use a JPG, PNG or PDF attachment.');
- check(typeof b.base64==='string'&&b.base64.length<=700000&&/^[A-Za-z0-9+/]*={0,2}$/.test(b.base64),'Keep each attachment smaller than 500 KB.');
- let bytes;try{bytes=Uint8Array.from(atob(b.base64),c=>c.charCodeAt(0));}catch{throw new UserError('Invalid attachment.');}
- check(bytes.length>0&&bytes.length<=500000,'Keep each attachment smaller than 500 KB.');
- const signature=b.mime_type==='application/pdf'?String.fromCharCode(...bytes.slice(0,5))==='%PDF-':b.mime_type==='image/png'?bytes[0]===137&&bytes[1]===80&&bytes[2]===78&&bytes[3]===71:bytes[0]===255&&bytes[1]===216&&bytes[2]===255;
- check(signature,'The file contents do not match its type.');
- const filename=optionalText(b.filename,100).replace(/[^a-zA-Z0-9._-]/g,'_')||'attachment';
- return {id:b.id,mime_type:b.mime_type,filename,bytes};
-}
-function insertAttachment(db,taskId,username,at,file){return db.prepare('INSERT INTO v2_task_attachments VALUES(?,?,?,?,?,?,?)').bind(file.id,taskId,username,file.mime_type,file.filename,file.bytes,at);}
 export async function saveTask(env,user,b){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
  check(b&&ID.test(b.request_id??'')&&ID.test(b.task_id??''),'Use a valid save identifier.');
@@ -148,14 +138,14 @@ export async function saveTask(env,user,b){
    check(!duplicate,'This PO cycle already has a dispatch task. Update its existing revision.',409);
   }
   check(b.files===undefined||(Array.isArray(b.files)&&b.files.length<=12),'Choose up to 12 different attachments.');
-  files=(b.files??[]).map(attachmentData);
+  for(const input of b.files??[])files.push(await attachmentData(input));
   check(new Set(files.map(f=>f.id)).size===files.length,'Choose up to 12 different attachments.');
   // References belong to the instructions, never to completion evidence.
   task.attachments=files.map(f=>f.id);
  }else{
   check(old,'Task not found.',404);
   if(['pa_request','pa_claim','pa_result','pa_resume','pa_recover'].includes(action)){
-   if(action==='pa_result'&&b.files){check(Array.isArray(b.files)&&b.files.length<=4,'Kies hoogstens vier verslaglêers.');files=b.files.map(attachmentData);}
+   if(action==='pa_result'&&b.files){check(Array.isArray(b.files)&&b.files.length<=4,'Kies hoogstens vier verslaglêers.');for(const input of b.files)files.push(await attachmentData(input));}
    await changePaWork(task,b,user,env.DB,at,files,safeURL);
   }else if(action==='restore_task_revision'){
    check(admin,'Only admins can restore task history.',403);check(Number.isSafeInteger(b.restore_revision)&&b.restore_revision>0&&b.restore_revision<old.revision,'Choose an earlier saved revision.');text(b.note,2000,true);
@@ -253,7 +243,7 @@ export async function saveTask(env,user,b){
  }
  const revision=b.revision+1;
  const statements=[env.DB.prepare('INSERT INTO v2_task_events(request_id,fingerprint,task_id,revision,action,payload,actor,saved_at) VALUES(?,?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,task.id,revision,action,JSON.stringify(task),user.username,at)];
- statements.push(...files.map(file=>insertAttachment(env.DB,task.id,user.username,at,file)));
+ statements.push(...files.flatMap(file=>fileStatements(env.DB,task.id,user.username,at,file)));
  if(action==='create'&&task.kind==='po_dispatch')statements.push(env.DB.prepare('INSERT INTO v2_task_po_links VALUES(?,?)').bind(task.parent_cycle_id,task.id));
  if(action==='create'||old?.assigned_to!==task.assigned_to)statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'assigned',at));
  else if(['complete','wait'].includes(action))statements.push(notification(env.DB,b.request_id,task.created_by,task,action==='complete'?'completed':'waiting',at));
@@ -300,13 +290,18 @@ export async function tasksApi({request,url,env,user,bodyOf}){
   if(request.headers.get('If-None-Match')===r.etag)return new Response(null,{status:304,headers:{ETag:r.etag,'Cache-Control':'private, no-store',Vary:'Cookie, Authorization'}});
   return Response.json(r,{headers:{ETag:r.etag,'Cache-Control':'private, no-store',Vary:'Cookie, Authorization'}});
  }
+ if(path==='/api/tasks/receipt'&&request.method==='GET'){
+  const id=url.searchParams.get('request_id');check(ID.test(id??''),'Invalid save identifier.');
+  const row=await env.DB.prepare('SELECT task_id FROM v2_task_events WHERE request_id=? AND actor=?').bind(id,user.username).first();
+  return {saved:!!row&&row.task_id===url.searchParams.get('task_id')};
+ }
  if(path==='/api/tasks/emails'&&request.method==='GET')return readTaskMail(env,user);
  if(path==='/api/tasks'&&request.method==='GET'&&url.searchParams.has('id'))return {task:visible(user,await getTask(env.DB,url.searchParams.get('id')))};
  if(path==='/api/tasks'&&request.method==='GET')return listTasks(env,user,{offset:url.searchParams.get('offset')??0,mine:url.searchParams.get('mine')==='1'});
  if(path==='/api/tasks/file'&&request.method==='GET'){
   const id=url.searchParams.get('id');check(ID.test(id??''),'Invalid attachment.');
-  const file=await env.DB.prepare('SELECT * FROM v2_task_attachments WHERE id=?').bind(id).first();check(file,'Attachment not found.',404);visible(user,await getTask(env.DB,file.task_id));
-  return new Response(new Uint8Array(file.bytes),{headers:{'Content-Type':file.mime_type,'Content-Disposition':'inline; filename="'+file.filename+'"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
+  const file=await env.DB.prepare('SELECT id,task_id,mime_type,filename,hex(bytes) encoded FROM v2_task_attachments WHERE id=?').bind(id).first();check(file,'Attachment not found.',404);visible(user,await getTask(env.DB,file.task_id));
+  return new Response(await originalFileBytes(env.DB,file),{headers:{'Content-Type':file.mime_type,'Content-Disposition':(downloadOnly(file.mime_type)?'attachment':'inline')+'; filename="'+file.filename+'"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
  }
  if(path==='/api/tasks/audit'&&request.method==='GET'){
   const task=visible(user,await getTask(env.DB,url.searchParams.get('id')??''));
@@ -321,10 +316,10 @@ export async function tasksApi({request,url,env,user,bodyOf}){
  }
  if(path==='/api/tasks/file'){
   const task=visible(user,await getTask(env.DB,b.task_id));check(!['Complete','Cancelled'].includes(task.status),'Reopen the task before adding evidence.');
-  const file=attachmentData(b);
+  const file=await attachmentData(b);
   const old=await env.DB.prepare('SELECT task_id FROM v2_task_attachments WHERE id=?').bind(b.id).first();if(old){check(old.task_id===task.id,'Attachment identifier already used.',409);return {id:b.id};}
   const count=await env.DB.prepare('SELECT COUNT(*) n FROM v2_task_attachments WHERE task_id=? AND id NOT IN (SELECT value FROM json_each(?))').bind(task.id,JSON.stringify(task.attachments??[])).first();check(count.n<(task.task_type==='workflow'?120:12),'Hierdie taak se bewysberging is vol. Gebruik ’n dokumentskakel.');
-  await insertAttachment(env.DB,task.id,user.username,new Date().toISOString(),file).run();return {id:b.id};
+  await env.DB.batch(fileStatements(env.DB,task.id,user.username,new Date().toISOString(),file));return {id:b.id};
  }
  if(path==='/api/tasks')return saveTask(env,user,b);
  if(path==='/api/tasks/read'){check(/^[a-zA-Z0-9_-]{8,140}$/.test(b.id??''),'Invalid notification.');await env.DB.prepare('UPDATE v2_task_notifications SET read_at=? WHERE id=? AND username=?').bind(new Date().toISOString(),b.id,user.username).run();return {saved:true};}

@@ -7,7 +7,7 @@ import {renderReport} from './tasks-report.js';
 import {workHTML,noticeLabel,workLabel} from './task-pa-work-ui.js';
 import {renderPaWorkspace,conversationHTML} from './pa-report-ui.js';
 import {reminderOptions} from './task-report-model.js';
-import {attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,fileData} from './task-attachments.js';
+import {attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,REPORT_FILE_ACCEPT,fileData} from './task-attachments.js';
 const $=s=>document.querySelector(s),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const names={alex:'Alex',alinda:'Alinda',xavier:'Xavier',xalinda:'Xalinda',tapiz:'Tapiz',mosa:'Musa',musa:'Musa'},name=u=>names[u]||u;
 const dialog=$('#dialog');let reportMode=new URL(location.href).searchParams.get('view')==='report',rabbiMode=new URL(location.href).searchParams.get('view')==='rabbi',deepLinkHandled=false,mail={requests:[]},quickRetry=null;
@@ -18,7 +18,25 @@ const workspaceCache=createWorkspaceCache((...args)=>fetch(...args));
 let mutationGeneration=0,legacyMode=false,loadSequence=0,inboxAt=0,inboxFlight=null,inboxRenderPending=false,reportFlight=null,reportCache=null,searchTimer,detailSequence=0;
 const mark=name=>{if(typeof performance!=='undefined'&&performance.mark)performance.mark(name);};
 mark('tasks-module-ready');
-async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});const result=await r.json();if(!r.ok){const e=Error(result.error||'Kon nie stoor nie. Probeer weer.');e.status=r.status;throw e;}if(body){mutationGeneration++;workspaceCache.clear();inboxAt=0;reportCache=null;loadSequence++;}return result;}
+function uploadRequest(path,body,progress){
+ return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();xhr.open('POST',path);xhr.setRequestHeader('Content-Type','application/json');
+  xhr.upload.onprogress=e=>{if(e.lengthComputable)progress(Math.round(100*e.loaded/e.total));};
+  xhr.onload=()=>resolve(new Response(xhr.responseText,{status:xhr.status}));
+  xhr.onerror=xhr.onabort=()=>reject(Error('Die verbinding het onderbreek. Hou die taak oop en probeer weer.'));
+  xhr.send(JSON.stringify(body));
+ });
+}
+async function api(path,body,progress){
+ let r;
+ try{
+  r=progress&&typeof XMLHttpRequest==='function'?await uploadRequest(path,body,progress):
+   await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});
+ }catch(e){if(e instanceof TypeError)throw Error('Die verbinding het onderbreek. Hou die taak oop en probeer weer.');throw e;}
+ const result=await r.json().catch(()=>({error:'Geen bevestiging ontvang nie. Hou die taak oop en probeer weer.'}));
+ if(!r.ok||result.error){const e=Error(result.error||'Kon nie stoor nie. Probeer weer.');e.status=r.status;throw e;}
+ if(body){mutationGeneration++;workspaceCache.clear();inboxAt=0;reportCache=null;loadSequence++;}return result;
+}
 function toast(message,undo){const el=$('#message');el.textContent=message;if(undo){const b=document.createElement('button');b.textContent='Maak ongedaan';b.onclick=undo;el.append(' ',b);}el.style.display='block';setTimeout(()=>el.style.display='none',undo?15000:6500);}
 function open(t){return !['Complete','Cancelled'].includes(t.status);}
 function review(t){if(t.next_action_date)return t.next_action_date;return t.status==='Waiting'?t.review_date:t.due_date||t.review_date;}
@@ -122,10 +140,28 @@ function base(title,content,submit='Stoor'){return `<h2>${esc(title)}</h2><form>
 async function submit(form,body,onSuccess=()=>load()){
  if(busy)return;busy=true;form.querySelector('fieldset').disabled=true;
  form.querySelector('.error').textContent='';
- try{const payload=typeof body==='function'?await body():body;const signature=JSON.stringify(payload);if(!retry||retry.signature!==signature)retry={signature,request_id:crypto.randomUUID()};await api('/api/tasks',{...payload,request_id:retry.request_id});dialog.close();retry=null;await onSuccess();toast('Gestoor.');}catch(e){form.querySelector('.error').textContent=e.message;}finally{busy=false;form.querySelector('fieldset').disabled=false;}
+ try{
+  const payload=typeof body==='function'?await body():body,signature=JSON.stringify(payload);
+  let saved=false;
+  if(payload.action==='create'&&payload.files?.length&&retry){
+   const receipt=await api('/api/tasks/receipt?request_id='+encodeURIComponent(retry.request_id)+'&task_id='+encodeURIComponent(payload.task_id));
+   saved=receipt.saved===true;
+   if(saved&&signature!==retry.signature)throw Error('Die vorige weergawe is reeds gestoor. Maak die bestaande taak oop om dit te wysig.');
+  }
+  if(!retry||retry.signature!==signature)retry={signature,request_id:crypto.randomUUID()};
+  const status=form.querySelector('#attachment-status');
+  if(!saved)await api('/api/tasks',{...payload,request_id:retry.request_id},payload.files?.length&&status?pct=>{status.textContent=pct<100?'Laai lêers op · '+pct+'%':'Lêers opgelaai. Wag vir bevestiging…';}:undefined);
+  dialog.close();retry=null;await onSuccess();toast('Gestoor.');
+ }catch(e){form.querySelector('.error').textContent=e.message;const status=form.querySelector('#attachment-status');if(status)status.textContent='Jou keuses is nog hier.';}
+ finally{busy=false;form.querySelector('fieldset').disabled=false;}
 }
 function taskAttachments(t){const ids=t?.attachments||[];return ids.length?`<section aria-label="Task attachments"><h3>Foto’s en dokumente</h3>${ids.map((id,index)=>`<p><a href="/api/tasks/file?id=${encodeURIComponent(id)}" target="_blank" rel="noopener">Maak aanhegsel ${index+1} van ${ids.length} oop</a></p>`).join('')}</section>`:'';}
-function createAttachments(){return `<label>Voeg foto’s / PDF’s by (opsioneel)<input id="attachment" type="file" multiple accept="${TASK_FILE_ACCEPT}" aria-describedby="attachment-help attachment-status"></label><p id="attachment-help" class="help">Kies verskeie lêers, of kies weer om meer by te voeg. Hoogstens ${MAX_TASK_ATTACHMENTS} lêers. Groot foto’s word outomaties kleiner gemaak. PDF’s: hoogstens 500 KB.</p><p id="attachment-status" role="status" aria-live="polite"></p><ul id="attachment-list" aria-label="Selected attachments"></ul>`;}
+function createAttachments(required=false){return `<section aria-label="Taakaanhegsels"><h3>Voeg foto’s / PDF’s by ${required?'':'(opsioneel)'}</h3>
+ <div class="attachment-tools"><button type="button" data-pick="take-photo">Take Photo</button><button type="button" data-scan>Scan Document</button>
+ <button type="button" data-pick="library-photo">Photo Library</button><button type="button" data-pick="attachment">Choose Files</button></div>
+ <input id="take-photo" data-photo-input hidden type="file" accept="image/*" capture="environment"><input id="library-photo" data-photo-input hidden type="file" multiple accept="image/*">
+ <input id="attachment" hidden type="file" multiple accept="${TASK_FILE_ACCEPT}"><p class="help">Hoogstens ${MAX_TASK_ATTACHMENTS} lêers. Foto’s word op jou toestel verklein. Tot 6 MB per dokument en 6 MB saam wanneer jy ’n nuwe taak stoor.</p>
+ <p id="attachment-status" role="status" aria-live="polite"></p><ul id="attachment-list" aria-label="Selected attachments"></ul></section>`;}
 async function editCurrent(t){
  if(!t)return;
  try{const [fresh]=await Promise.all([api('/api/tasks?id='+encodeURIComponent(t.id)),prepareOptions()]);if(!fresh.task)throw Error('Die oorspronklike taak kon nie laai nie. Verfris en probeer weer.');edit(fresh.task);}catch(e){toast(e.message);}
@@ -195,7 +231,7 @@ function historyChanges(changes=[]){
 function reasonAction(t,action){show(base(action==='wait'?'Waarvoor wag ons?':action==='cancel'?'Kanselleer taak':'Heropen taak',`<label>Rede<textarea name="note" required maxlength="2000"></textarea></label>${action==='wait'?'<label>Volgende opvolgdatum<input name="review_date" type="date" required value="'+data.today+'"></label>':''}`));const f=dialog.querySelector('form');f.onsubmit=e=>{e.preventDefault();submit(f,{task_id:t.id,revision:t.revision,action,...Object.fromEntries(new FormData(f))});};}
 function complete(t){
  if(t.task_type==='workflow')return details(t);
- const sent=t.kind==='po_dispatch';show(base(sent?'Bevestig dat die bestelling gestuur is':'Taak klaar',`${sent?`<p><a href="${esc(t.document_url)}" target="_blank" rel="noopener noreferrer">Maak goedgekeurde ${esc(t.po_number)} oop</a></p><p class="help">Dokumentweergawe: ${esc(t.po_revision)}</p><label>Gestuur per<select name="channel"><option>Email</option><option>WhatsApp</option><option>Other</option></select></label><label>Werklike stuurdatum en -tyd (Suid-Afrika)<input name="sent_at" type="datetime-local" required value="${new Date(Date.now()+7200000).toISOString().slice(0,16)}"></label><label><input type="checkbox" required> Ek het hierdie goedgekeurde bestelling aan die verskaffer gestuur.</label>`:''}<label>Voltooiingsnota<textarea name="note" maxlength="2000"></textarea></label><label>Bewysskakel ${t.requires_evidence?'(of heg ’n lêer aan)':'(opsioneel)'}<input name="proof_url" type="url" value="${esc(t.evidence_url)}" placeholder="https://…"></label><label>Voeg foto’s / PDF’s by ${t.requires_evidence?'':'(opsioneel)'}<input id="attachment" type="file" multiple accept="${TASK_FILE_ACCEPT}" aria-describedby="attachment-help attachment-status"></label><p id="attachment-help" class="help">Kies verskeie lêers, of kies weer om meer by te voeg. Hoogstens ${MAX_TASK_ATTACHMENTS} lêers. Groot foto’s word outomaties kleiner gemaak. PDF’s: hoogstens 500 KB. ${sent?'Ontvangs en betaling moet nog afsonderlik bevestig word.':''}</p><p id="attachment-status" role="status" aria-live="polite"></p><ul id="attachment-list" aria-label="Selected attachments"></ul>`,sent?'Bevestig gestuur':'Merk klaar'));
+ const sent=t.kind==='po_dispatch';show(base(sent?'Bevestig dat die bestelling gestuur is':'Taak klaar',`${sent?`<p><a href="${esc(t.document_url)}" target="_blank" rel="noopener noreferrer">Maak goedgekeurde ${esc(t.po_number)} oop</a></p><p class="help">Dokumentweergawe: ${esc(t.po_revision)}</p><label>Gestuur per<select name="channel"><option>Email</option><option>WhatsApp</option><option>Other</option></select></label><label>Werklike stuurdatum en -tyd (Suid-Afrika)<input name="sent_at" type="datetime-local" required value="${new Date(Date.now()+7200000).toISOString().slice(0,16)}"></label><label><input type="checkbox" required> Ek het hierdie goedgekeurde bestelling aan die verskaffer gestuur.</label>`:''}<label>Voltooiingsnota<textarea name="note" maxlength="2000"></textarea></label><label>Bewysskakel ${t.requires_evidence?'(of heg ’n lêer aan)':'(opsioneel)'}<input name="proof_url" type="url" value="${esc(t.evidence_url)}" placeholder="https://…"></label>${createAttachments(t.requires_evidence)}${sent?'<p>Ontvangs en betaling moet nog afsonderlik bevestig word.</p>':''}`,sent?'Bevestig gestuur':'Merk klaar'));
  const form=dialog.querySelector('form'),picker=attachmentPicker(form,{taskId:t.id,api,prepareFile:fileData});dialogCleanup=()=>picker.dispose();
  form.onsubmit=e=>{e.preventDefault();if(busy)return;const f=Object.fromEntries(new FormData(form));if(sent){f.sent_at=new Date(f.sent_at+':00+02:00').toISOString();f.po_revision=t.po_revision;}return submit(form,async()=>({task_id:t.id,revision:t.revision,action:'complete',...f,attachments:await picker.upload()}));};
 }
@@ -259,7 +295,7 @@ function paFeedback(item,action){
  if(!item)return;
  if(!item.subject_hash){api('/api/pa-report/conversation?subject_key='+encodeURIComponent(item.subject_key||item.id)).then(r=>paFeedback(r.subject,action)).catch(e=>toast(e.message));return;}
  const labels={respond:'Gee terugvoer aan PA',complete:'Merk taak klaar',assign:'Wys taak toe',request_update:'Vra terugvoer',remind:'Herinner my'};
- show(base(labels[action],`<h3>${esc(item.title||'Report item')}</h3><p class="pa-prose">${esc(item.next_action||item.text||'')}</p>${action==='complete'?'<p class="notice">Druk Stoor om te bevestig dat jou werk klaar is. \'n Nota of bewys is opsioneel. Bestellings, betalings en voorraadtellings moet steeds nagegaan word.</p>':''}${action==='assign'?`<label>Verantwoordelik<select name="assigned_to">${pa.users.map(u=>`<option value="${u}" ${u===item.assigned_to?'selected':''}>${esc(name(u))}</option>`).join('')}</select></label>`:''}${action==='remind'?'<label>Herinnering se datum en tyd (Suid-Afrika)<input name="remind_at" type="datetime-local" required></label><p class="help">Hierdie herinnering is vir jou. Die ander persoon se sperdatum bly dieselfde.</p>':''}<section id="pa-conversation" aria-label="Gesprek"></section><button type="button" id="pa-conversation-refresh">Verfris gesprek</button><button type="button" id="pa-more" hidden>Laai meer van die gesprek</button><label>${action==='complete'?'Kort nota (opsioneel)':action==='request_update'?'Jou vraag':'Jou antwoord'}<textarea name="note" maxlength="5000" ${['remind','complete'].includes(action)?'':'required'} placeholder="Voeg 'n nota by as jy wil"></textarea></label><label>Bewysskakel<input name="proof_url" type="url" placeholder="https://…"></label><label>Voeg foto’s / PDF’s by<input id="attachment" type="file" accept="${TASK_FILE_ACCEPT}" multiple></label><p id="attachment-status" role="status"></p><ul id="attachment-list"></ul>`,action==='complete'?'Stoor voltooiing':'Stoor antwoord'));
+ show(base(labels[action],`<h3>${esc(item.title||'Report item')}</h3><p class="pa-prose">${esc(item.next_action||item.text||'')}</p>${action==='complete'?'<p class="notice">Druk Stoor om te bevestig dat jou werk klaar is. \'n Nota of bewys is opsioneel. Bestellings, betalings en voorraadtellings moet steeds nagegaan word.</p>':''}${action==='assign'?`<label>Verantwoordelik<select name="assigned_to">${pa.users.map(u=>`<option value="${u}" ${u===item.assigned_to?'selected':''}>${esc(name(u))}</option>`).join('')}</select></label>`:''}${action==='remind'?'<label>Herinnering se datum en tyd (Suid-Afrika)<input name="remind_at" type="datetime-local" required></label><p class="help">Hierdie herinnering is vir jou. Die ander persoon se sperdatum bly dieselfde.</p>':''}<section id="pa-conversation" aria-label="Gesprek"></section><button type="button" id="pa-conversation-refresh">Verfris gesprek</button><button type="button" id="pa-more" hidden>Laai meer van die gesprek</button><label>${action==='complete'?'Kort nota (opsioneel)':action==='request_update'?'Jou vraag':'Jou antwoord'}<textarea name="note" maxlength="5000" ${['remind','complete'].includes(action)?'':'required'} placeholder="Voeg 'n nota by as jy wil"></textarea></label><label>Bewysskakel<input name="proof_url" type="url" placeholder="https://…"></label><label>Voeg foto’s / PDF’s by<input id="attachment" type="file" accept="${REPORT_FILE_ACCEPT}" multiple></label><p id="attachment-status" role="status"></p><ul id="attachment-list"></ul>`,action==='complete'?'Stoor voltooiing':'Stoor antwoord'));
  const form=dialog.querySelector('form');
  const links=linkedTasks(item);
  if(data.admin&&links.length){const box=document.createElement('div');box.className='actions';for(const task of links){const button=document.createElement('button');button.type='button';button.textContent='Wysig oorspronklike taak'+(links.length>1?' · '+task.title:'');button.onclick=()=>editCurrent(task);box.append(button);}form.querySelector('fieldset').prepend(box);}
@@ -285,7 +321,7 @@ function paFeedback(item,action){
  form.elements.note.addEventListener('input',()=>saveDraft());
  if(action==='remind')form.elements.remind_at.value=new Date(Date.now()+10800000).toISOString().slice(0,16);
  if(action==='request_update')form.elements.note.value='Gee asseblief kort terugvoer: wat is klaar, wat kort nog en waarmee het jy hulp nodig?';
- const picker=attachmentPicker(form,{taskId:item.subject_key,prepareFile:fileData,api:(_path,b)=>api('/api/pa-report/file',{id:b.id,subject_key:item.subject_key,subject_hash:item.subject_hash,mime_type:b.mime_type,filename:b.filename,base64:b.base64})});dialogCleanup=()=>picker.dispose();paRetry=draft?.retry||null;
+ const picker=attachmentPicker(form,{taskId:item.subject_key,report:true,prepareFile:fileData,api:(_path,b)=>api('/api/pa-report/file',{id:b.id,subject_key:item.subject_key,subject_hash:item.subject_hash,mime_type:b.mime_type,filename:b.filename,base64:b.base64})});dialogCleanup=()=>picker.dispose();paRetry=draft?.retry||null;
  form.onsubmit=async e=>{
   e.preventDefault();if(busy)return;const f=new FormData(form);busy=true;form.querySelector('fieldset').disabled=true;form.querySelector('.error').textContent='';
   try{let payload={subject_key:item.subject_key,subject_hash:item.subject_hash,action,note:f.get('note')||'',proof_url:f.get('proof_url')||'',attachments:await picker.upload(),...(action==='assign'?{assigned_to:f.get('assigned_to')}:{}) ,...(action==='remind'?{remind_at:new Date(f.get('remind_at')+':00+02:00').toISOString()}:{})};

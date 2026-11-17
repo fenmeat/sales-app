@@ -279,3 +279,27 @@ test('direct PA instructions on ordinary reminders are claimed once, answered in
  assert.equal(report.items[0].work.results.length,2);assert.equal((await queue()).items.length,0);
  assert.equal((await call('alex','/api/tasks',write(8,'complete'))).status,200);
 });
+
+test('multi-chunk and losslessly packed task documents reopen byte-for-byte and stay private',async t=>{
+ const {call,task,readFile,db}=await fixture(t);
+ const {gzipSync}=await import('node:zlib');
+ const original=Buffer.from('%PDF-1.4\n'+'Account copy with fine print and colour.\n'.repeat(29000)+'%%EOF\n');
+ const packed=gzipSync(original);
+ const files=[original,packed].map((body,index)=>instructionFile({filename:'evidence-'+index+'.pdf',mime_type:'application/pdf',
+   base64:body.toString('base64'),...(index?{encoding:'gzip'}:{})}));
+ const create={...task(),files};
+ assert.equal((await call('alex','/api/tasks',create)).status,200);
+ for(const f of files){
+   const r=await readFile('xalinda',f.id);assert.equal(r.status,200);
+   assert.deepEqual(Buffer.from(await r.arrayBuffer()),original);
+   assert.equal((await readFile('xavier',f.id)).status,404);
+ }
+ assert.equal((await db.prepare('SELECT length(bytes) n FROM v2_task_attachments WHERE id=?').bind(files[1].id).first()).n,packed.length);
+ assert.ok((await db.prepare('SELECT count(*) n FROM v2_task_file_chunks WHERE file_id=?').bind(files[0].id).first()).n>=2);
+ const receipt='/api/tasks/receipt?task_id='+create.task_id+'&request_id='+create.request_id;
+ assert.equal((await call('alex',receipt)).data.saved,true);assert.equal((await call('xavier',receipt)).data.saved,false);
+ assert.equal((await call('alex','/api/tasks',{...task(),files:[{...files[0],encoding:'gzip'}]})).status,400);
+ const txt=instructionFile({filename:'notes.txt',mime_type:'text/plain',base64:Buffer.from('Afleweringsnota').toString('base64')});
+ assert.equal((await call('alex','/api/tasks/file',{...txt,task_id:create.task_id})).status,200);
+ assert.match((await readFile('alex',txt.id)).headers.get('Content-Disposition'),/^attachment;/);
+});
