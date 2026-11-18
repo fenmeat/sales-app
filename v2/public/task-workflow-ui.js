@@ -52,7 +52,7 @@ export function workflowForms(ctx){
    const data=getData();box.innerHTML=`<h3>Stap</h3><label>Stapnaam<textarea data-field="description" required maxlength="3000"></textarea></label><label>Delegeer<select data-field="assigned_to">${data.users.map(u=>`<option value="${u}" ${u===form.elements.assigned_to.value?'selected':''}>${esc(person(u))}</option>`).join('')}</select></label><label>Sperdatum<input data-field="due_date" type="date" value="${esc(form.elements.due_date.value)}"></label><label>Status<select data-field="status"><option value="Pending">Pending · Nog oop</option><option value="In Progress">In Progress · Besig</option></select></label>${reminders()}<label>Notas<textarea data-field="notes" maxlength="5000"></textarea></label>${createAttachments().replaceAll('id="','id="'+id+'-')}<button type="button" data-remove-draft>Verwyder stap</button>`;
    const reminder=box.querySelector('[name=reminder_mode]');reminder.removeAttribute('name');reminder.dataset.field='reminder_mode';
    list.append(box);
-   const scope={querySelector:selector=>selector==='fieldset'||selector==='.error'?form.querySelector(selector):box.querySelector(selector.startsWith('#')?'#'+id+'-'+selector.slice(1):selector),querySelectorAll:selector=>box.querySelectorAll(selector)};
+   const scope={querySelector:selector=>selector==='fieldset'||selector==='.error'?form.querySelector(selector):box.querySelector(selector.startsWith('#')?'[id="'+id+'-'+selector.slice(1)+'"]':selector),querySelectorAll:selector=>box.querySelectorAll(selector)};
    const picker=attach(scope,taskId),entry={id,box,picker};entries.push(entry);
    box.querySelector('[data-remove-draft]').onclick=()=>{picker.dispose();entries.splice(entries.indexOf(entry),1);box.remove();renumber();};renumber();
   }

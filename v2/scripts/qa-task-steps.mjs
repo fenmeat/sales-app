@@ -27,7 +27,7 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(origin+'/tasks');await page.locator('#pa-new').click();await page.locator('[name=title]').fill('Synthetic workflow '+name);await page.locator('[name=task_type]').selectOption('workflow');
  for(let i=1;i<5;i++)await page.locator('[data-add-draft]').click();
- const rows=page.locator('.draft-step');assert.equal(await rows.count(),5);
+ const rows=page.locator('.draft-step');assert.equal(await rows.count(),5);assert.deepEqual(errors,[]);
  for(let i=0;i<5;i++){await rows.nth(i).locator('[data-field=description]').fill('Synthetic step '+(i+1));await rows.nth(i).locator('[data-field=assigned_to]').selectOption(['alex','alinda','xavier','xavier','alex'][i]);assert.equal(await rows.nth(i).locator('[data-scan]').count(),1);}
  await rows.nth(3).locator('input[id$="-attachment"]').setInputFiles({name:'synthetic.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\nSynthetic\n%%EOF')});
  await page.locator('#dialog').getByRole('button',{name:'Stoor',exact:true}).click();await page.waitForSelector('#add-step');
