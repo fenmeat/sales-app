@@ -175,18 +175,17 @@ function linkedTasks(item){
 function edit(t){
  const workflow=t?.task_type==='workflow';
  show(base(t?'Wysig oorspronklike taak':'Nuwe taak',`
+ ${!t?`<section class="task-choice"><div id="general-choice"><label>Wat wil jy skep?<select name="task_type"><option value="reminder">Gewone taak</option><option value="workflow">Taak met stappe</option></select></label><p id="task-choice-help" class="help"></p>${data.invoice_rep?'':'<div class="special-task-choice"><span>Spesiale taak</span><button type="button" id="choose-stocktake">Voorraadtelling</button></div>'}</div>${data.invoice_rep?'':'<input type="hidden" name="kind" value="general"><div id="stocktake-choice" hidden><h3>Voorraadtelling</h3><p>Tel ons voorraad van een verskaffer se produkte. Stoor die telling in Stocktake voordat jy die taak klaar merk.</p><button type="button" id="choose-general">Terug na gewone take</button></div>'}</section>`:''}
  ${t?'<p class="help">Wysigings behou hierdie taak se geskiedenis, dokumente en PA-gesprek. Voltooiing is ’n afsonderlike handeling.</p>':''}
  <label>Taaktitel<input name="title" maxlength="180" required value="${esc(t?.title)}"></label>
  ${data.admin?`<label>Verantwoordelik<select name="assigned_to">${data.users.map(u=>`<option value="${esc(u)}" ${u===(t?.assigned_to||data.username)?'selected':''}>${esc(name(u))}</option>`).join('')}</select></label>`:`<p>Verantwoordelik: <strong>${esc(name(data.username))}</strong></p><input name="assigned_to" type="hidden" value="${esc(data.username)}">`}
- ${t||data.invoice_rep?'':'<label>Soort werk<select name="kind"><option value="general">Gewone taak</option><option value="stocktake">Verskaffer se voorraadtelling</option></select></label>'}
- ${!t?'<label>Taaksoort<select name="task_type"><option value="reminder">Gewone herinnering</option><option value="workflow">Taak met stappe</option></select></label>':''}
+ ${data.invoice_rep?'':`<label id="supplier-field" ${t?.kind==='stocktake'?'':'hidden'}>Verskaffer<input name="supplier" list="suppliers" maxlength="120" value="${esc(t?.supplier)}" ${t?.kind==='stocktake'?'required':'disabled'}><datalist id="suppliers">${data.suppliers.map(v=>`<option value="${esc(v)}"></option>`).join('')}</datalist></label>`}
  <label ${t&&t.task_type!=='reminder'?'hidden':''}>Herhaal<select name="repeat">${[['none','Moenie herhaal nie'],['daily','Elke dag'],['weekly','Elke week'],['monthly','Elke maand']].map(([v,l])=>`<option value="${v}" ${t?.repeat===v?'selected':''}>${l}</option>`).join('')}</select></label>
  ${!t||workflow?`<label><input name="pa_required" type="checkbox" ${t?.pa_required?'checked':''}> PA moet help met ondersoek, dokumente of opvolging</label>`:''}
  <label>Beskrywing<textarea name="details" maxlength="5000">${esc(t?.details)}</textarea></label>${taskAttachments(t)}${createAttachments()}
- ${data.invoice_rep?'':`<label>Verskaffer (vir ’n voorraadtelling)<input name="supplier" list="suppliers" maxlength="120" value="${esc(t?.supplier)}"><datalist id="suppliers">${data.suppliers.map(v=>`<option value="${esc(v)}"></option>`).join('')}</datalist></label>`}
- <label>Sperdatum / teldatum<input name="due_date" type="date" value="${esc(t?t.due_date||'':data.today)}"></label>
+ <label><span id="task-date-label">${t?.kind==='stocktake'?'Teldatum':'Sperdatum'}</span><input name="due_date" type="date" value="${esc(t?t.due_date||'':data.today)}"></label>
  <label>Volgende opvolgdatum<input name="review_date" type="date" value="${esc(t?t.review_date||'':data.today)}"></label>
- ${reminderControls(t)}<label>Prioriteit<select name="priority">${['Normal','High','Critical','Low'].map(p=>`<option ${p===(t?.priority||'Normal')?'selected':''}>${p}</option>`).join('')}</select></label>
+ <div id="parent-reminders" ${workflow?'hidden':''}>${reminderControls(t)}</div><label>Prioriteit<select name="priority">${['Normal','High','Critical','Low'].map(p=>`<option ${p===(t?.priority||'Normal')?'selected':''}>${p}</option>`).join('')}</select></label>
  <label>Dokumentskakel<input name="document_url" type="url" value="${esc(t?.document_url)}" placeholder="https://…"></label>
  ${workflow?'':`<label>Bewysskakel (opsioneel)<input name="evidence_url" type="url" value="${esc(t?.evidence_url)}" placeholder="https://…"></label>`}
  <label id="evidence-option" ${t?.kind==='stocktake'||workflow?'hidden':''}><input name="requires_evidence" type="checkbox" ${t?.requires_evidence?'checked':''}> Vra foto’s, PDF’s of ’n bewysstuk wanneer dit klaar is</label>
@@ -196,13 +195,32 @@ function edit(t){
  `,t?'Stoor taak':'Stoor'));
  const form=dialog.querySelector('form'),id=t?.id||crypto.randomUUID(),picker=attachmentPicker(form,{taskId:id,api,prepareFile:fileData});const draft=!t?workflowForms({getData:()=>data,attachmentPicker,fileData,createAttachments,api}).draft(form,id):null;dialogCleanup=()=>{picker.dispose();draft?.dispose();};setupReminder(form);
  if(t){const evidence=form.elements.requires_evidence;const check=()=>{form.elements.edit_reason.required=!open(t)||!!(t.requires_evidence&&!evidence.checked);};evidence.onchange=check;check();}
- if(!t&&form.elements.task_type){const refreshType=()=>{const workflow=form.elements.task_type.value==='workflow';form.elements.repeat.closest('label').hidden=workflow;form.elements.pa_required.closest('label').hidden=!workflow;form.elements.review_date.closest('label').hidden=!workflow;if(workflow)form.elements.repeat.value='none';draft?.show(workflow);form.elements.reminder_mode.closest('label').hidden=workflow;$('#evidence-option').hidden=workflow;};form.elements.task_type.onchange=refreshType;refreshType();}
- if(!t&&form.elements.kind)form.elements.kind.onchange=()=>{const stock=form.elements.kind.value==='stocktake';$('#evidence-option').hidden=stock;if(stock)form.elements.requires_evidence.checked=false;};
+ if(!t){
+  const refreshType=()=>{
+   const stock=form.elements.kind?.value==='stocktake',workflow=!stock&&form.elements.task_type.value==='workflow';
+   $('#general-choice').hidden=stock;if($('#stocktake-choice'))$('#stocktake-choice').hidden=!stock;
+   $('#task-choice-help').textContent=workflow?'Verdeel die werk in kleiner stappe en delegeer elke stap.':'Een werkopdrag wat jy klaar merk. Dit kan ook herhaal.';
+   form.elements.task_type.disabled=stock;
+   form.elements.repeat.closest('label').hidden=stock||workflow;form.elements.repeat.disabled=stock||workflow;
+   form.elements.pa_required.closest('label').hidden=!workflow;form.elements.pa_required.disabled=!workflow;
+   form.elements.review_date.closest('label').hidden=!workflow;form.elements.review_date.disabled=!workflow;
+   if(form.elements.supplier){$('#supplier-field').hidden=!stock;form.elements.supplier.disabled=!stock;form.elements.supplier.required=stock;}
+   $('#task-date-label').textContent=stock?'Teldatum':'Sperdatum';form.elements.due_date.required=stock;
+   draft?.show(workflow);$('#parent-reminders').hidden=workflow;
+   form.elements.reminder_at.required=!workflow&&form.elements.reminder_mode.value==='once';
+   $('#evidence-option').hidden=stock||workflow;form.elements.requires_evidence.disabled=stock||workflow;
+   if(form.elements.evidence_url){form.elements.evidence_url.closest('label').hidden=stock||workflow;form.elements.evidence_url.disabled=stock||workflow;}
+  };
+  form.elements.task_type.onchange=refreshType;
+  if($('#choose-stocktake'))$('#choose-stocktake').onclick=()=>{form.elements.kind.value='stocktake';refreshType();};
+  if($('#choose-general'))$('#choose-general').onclick=()=>{form.elements.kind.value='general';refreshType();};
+  refreshType();
+ }
  form.onsubmit=e=>{e.preventDefault();const f=new FormData(form),fields={...Object.fromEntries(f),...reminderValues(form),requires_evidence:f.has('requires_evidence')},note=fields.edit_reason||'';delete fields.edit_reason;
   if(form.elements.pa_required)fields.pa_required=f.has('pa_required');if(t)delete fields.kind;
   if(workflow)delete fields.requires_evidence;
   if(!t&&(fields.task_type||t?.task_type)==='reminder')fields.review_date=fields.due_date||fields.review_date;
-  if(fields.kind==='stocktake'){fields.task_type='legacy';fields.repeat='none';fields.pa_required=true;}if(fields.task_type==='workflow')fields.repeat='none';
+  if(fields.kind==='stocktake'){fields.task_type='legacy';fields.repeat='none';fields.pa_required=true;fields.requires_evidence=false;fields.review_date=fields.due_date;}if(fields.task_type==='workflow'){fields.repeat='none';if(!t){fields.reminder_mode='off';fields.reminder_at='';fields.requires_evidence=false;}}
   return submit(form,async()=>{const files=await picker.prepare();if(!t&&fields.task_type==='workflow')fields.steps=await draft.prepare();return {task_id:id,revision:t?.revision||0,action:t?'update':'create',data:fields,...(t?{note}:{}),...(!t||files.length?{files}:{})};},async()=>{await load();if(t||fields.task_type==='workflow'){const saved=await api('/api/tasks?id='+encodeURIComponent(id));if(saved.task)details(saved.task);}});
  };
 }

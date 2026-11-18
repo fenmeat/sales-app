@@ -26,7 +26,7 @@ async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={
  const dq=dialog.querySelector.bind(dialog);dialog.querySelector=s=>prepare(dq(s));
  document.querySelector=s=>prepare(query(s));
  class FormData{
-  constructor(form){this.values=(form.querySelector('fieldset')?.disabled?[]:[...form.querySelectorAll('[name]')]).filter(c=>c.type!=='checkbox'||c.checked).map(c=>[c.name,c.type==='checkbox'?(c.getAttribute('value')||'on'):c.value]);}
+  constructor(form){this.values=(form.querySelector('fieldset')?.disabled?[]:[...form.querySelectorAll('[name]')]).filter(c=>!c.disabled&&(c.type!=='checkbox'||c.checked)).map(c=>[c.name,c.type==='checkbox'?(c.getAttribute('value')||'on'):c.value]);}
   get(name){return this.values.find(([k])=>k===name)?.[1]??null;}
   getAll(name){return this.values.filter(([k])=>k===name).map(x=>x[1]);}
   has(name){return this.values.some(([key])=>key===name);}
@@ -390,4 +390,26 @@ test('step details display progress, own work, overdue status and final approval
  const {document,dialog,posts}=await screen('alex',[task]);document.querySelector('[data-task]').onclick();
  assert.match(dialog.textContent,/2 van 2 stappe voltooi — 100%/);assert.match(dialog.textContent,/Wag vir goedkeuring/);assert.ok(dialog.querySelector('progress'));assert.equal(dialog.querySelector('#complete'),null);
  dialog.querySelector('#approve-workflow').onclick();const form=dialog.querySelector('form');await form.onsubmit({preventDefault(){}});assert.equal(posts[0].action,'approve_workflow');
+});
+
+test('simple task choice keeps ordinary work separate from a saved supplier stocktake',async()=>{
+ const {document,dialog,posts}=await screen('alex');document.querySelector('#new').onclick();const form=dialog.querySelector('form');
+ assert.deepEqual([...form.elements.task_type.querySelectorAll('option')].map(o=>o.textContent),['Gewone taak','Taak met stappe']);
+ assert.equal(form.elements.kind.type,'hidden');assert.equal(document.querySelector('#supplier-field').hidden,true);
+ form.elements.title.value='Synthetic count';form.elements.repeat.value='weekly';form.elements.requires_evidence.checked=true;
+ document.querySelector('#choose-stocktake').onclick();
+ assert.equal(document.querySelector('#general-choice').hidden,true);assert.equal(document.querySelector('#stocktake-choice').hidden,false);
+ assert.equal(form.elements.supplier.disabled,false);assert.equal(form.elements.supplier.required,true);assert.equal(form.elements.due_date.required,true);
+ assert.equal(form.elements.repeat.disabled,true);assert.equal(document.querySelector('#new-steps').hidden,true);assert.equal(document.querySelector('#task-date-label').textContent,'Teldatum');
+ form.elements.supplier.value='Crown';await form.onsubmit({preventDefault(){}});
+ const d=posts[0].data;assert.equal(d.kind,'stocktake');assert.equal(d.task_type,'legacy');assert.equal(d.supplier,'Crown');assert.equal(d.repeat,'none');assert.equal(d.pa_required,true);assert.equal(d.requires_evidence,false);assert.equal(d.steps,undefined);assert.equal(d.review_date,d.due_date);
+});
+
+test('switching back preserves task text and draft steps without submitting hidden supplier fields',async()=>{
+ const {document,dialog,posts}=await screen('alex');document.querySelector('#new').onclick();const form=dialog.querySelector('form');form.elements.title.value='Keep my draft';
+ form.elements.task_type.value='workflow';form.elements.task_type.onchange();const step=document.querySelector('[data-field=description]');step.value='Keep this step';
+ document.querySelector('#choose-stocktake').onclick();form.elements.supplier.value='Crown';document.querySelector('#choose-general').onclick();
+ assert.equal(form.elements.task_type.value,'workflow');assert.equal(document.querySelector('[data-field=description]'),step);assert.equal(step.value,'Keep this step');assert.equal(document.querySelector('#supplier-field').hidden,true);
+ form.elements.task_type.value='reminder';form.elements.task_type.onchange();form.elements.repeat.value='weekly';await form.onsubmit({preventDefault(){}});
+ assert.equal(posts[0].data.title,'Keep my draft');assert.equal(posts[0].data.kind,'general');assert.equal(posts[0].data.task_type,'reminder');assert.equal(posts[0].data.repeat,'weekly');assert.equal(posts[0].data.supplier,undefined);assert.equal(posts[0].data.steps,undefined);
 });

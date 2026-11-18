@@ -211,3 +211,15 @@ Validation includes isolated Worker/D1, OAuth/MCP, UI form and mobile browser
 acceptance (`scripts/qa-task-steps.mjs`). Test traffic has no external transport
 and cannot notify live staff. Roll back with a forward fix; retain these events
 and approval checks, never revert to automatic parent completion or restore D1.
+
+## Simple new-task screen — 0.47.1
+
+The initial form offers one choice: Gewone taak or Taak met stappe. A separate
+Voorraadtelling button opens the supplier count form, with a clear explanation
+that this counts our stock from that supplier. Only this form shows a required
+supplier and Teldatum. Switching back retains title, notes and draft steps.
+Hidden fields are disabled and excluded from saves. Existing kind/task_type
+values and all server permissions/count-receipt requirements remain intact.
+No schema or data migration. Ordinary recurrence, step delegation and scanners
+remain available. DOM and Chromium/WebKit acceptance exercise all three saves
+and verify that a stocktake cannot complete without its saved count.
