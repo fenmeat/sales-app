@@ -73,6 +73,7 @@ try{
   await ctx.addCookies([{name:cookie.slice(0,eq),value:cookie.slice(eq+1),url:origin}]);
   await page.goto(origin+'/tasks');
   await page.getByRole('button',{name:'Nuwe taak',exact:true}).click();const form=page.locator('#dialog form'),scanner=page.locator('.scan-dialog');
+  await form.locator('.attachment-tools button').first().waitFor({state:'visible'});
   assert.deepEqual(await form.locator('.attachment-tools button').allTextContents(),['Take Photo','Scan Document','Photo Library','Choose Files']);
   await form.locator('[name=title]').fill(device+' Scan QA');await form.locator('[name=details]').fill('Keep this description through a lost response.');
   async function choose(button,files,camera=false){
