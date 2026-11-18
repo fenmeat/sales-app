@@ -1,8 +1,10 @@
 # Factory POS — 0.29.1
 
-## Receipt presentation — 3 November 2026
+## Receipt presentation — 18 November 2026 (0.46.2)
 
-Receipts use the original logo extracted without modification from the approved `FenMeat_Official_Letterhead_PDF_Master.pdf`, together with its black header/footer, royal-blue rule, navy panels, legal name and margins. The source and PNG hashes are retained in `src/fenmeat-receipt-brand.js`. A4 output keeps product rows together and repeats the table headings and receipt number on continuation pages. The document is labelled **Sales receipt**; no new VAT calculation or tax-invoice claim is introduced.
+Receipts now use the approved 13 November FenMeat PDF master identity: a white header with a compact blue/navy FEN MEAT wordmark, a continuous thin blue rule, right-aligned title/reference, compact date/time/cashier/status fields, pale customer/issuer panels, navy table/totals and a compact white footer. The former oversized image logo and black header/footer are no longer used. Reference: the existing `FenMeat_Official_Letterhead_PDF_Master.pdf` (Drive `1Hl7N2payiUgTExrUrAcFw-rFpNPvI6_z`), updated in place on 13 November. A4 output keeps product rows together and repeats the table headings and receipt number on continuation pages. The document remains labelled **Sales receipt**; payment calculations, VAT treatment, saved sales and stock records do not change. Both new and reopened receipts use `/api/pos/receipt`, so Print / Share PDF uses the same current layout. No migration is required; rollback is the previous code version.
+
+Validation: all 512 existing Node/DOM/Worker/D1 checks pass, including cash, card, Shop2Shop, split payments, immutable sale data and receipt pagination. Rendered one-page and five-page synthetic PDFs were visually inspected against the saved master. Physical iPhone/iPad printing is not exercised. Local checks do not by themselves establish a live deployment; verify Cloudflare and the live version separately.
 
 The PDF, on-screen receipt and WhatsApp handoff show only payment methods with a positive saved amount. Cash tendered and change appear when cash was handed over. Split payments retain every used method. Cashier names display as Alex, Alinda, Xavier and Xalinda; saved account identities remain unchanged. Reopening an existing receipt uses the current presentation without changing the original sale or its stock/payment records. Daily totals continue showing every payment channel, including zeroes.
 

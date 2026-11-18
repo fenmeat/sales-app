@@ -23,10 +23,11 @@ test('receipt PDF and WhatsApp preserve the sale while displaying only used paym
     const sale=fixture(variant.payment,variant.actor),before=structuredClone(sale),pdf=await PDFDocument.load(await posReceiptPDF(sale));
     assert.equal(pdf.getPageCount(),1);const text=pageText(pdf).join(' '),message=receiptMessage(sale);
     assert.match(text,/SALES RECEIPT/);assert.match(text,/FOURFORONE/);assert.ok(text.includes(variant.name));assert.ok(message.includes('Served by: '+variant.name));
-    assert.ok(pdf.getPage(0).node.Resources().toString().includes('/XObject'),'original logo is embedded');
+    assert.match(text,/FEN  MEAT QUALITY IS OUR PRIORITY/);
+    assert.match(text,/21C Mascador Street, Voorbaai/);
     for(const label of variant.shown){assert.ok(text.includes(label),label);assert.ok(message.includes(label),label);}
     for(const label of variant.hidden){assert.ok(!text.includes(label),label);assert.ok(!message.includes(label),label);}
-    assert.match(text,/03 Nov 2026  16:15:49/);assert.match(text,/160[.,]00/);assert.deepEqual(sale,before);
+    assert.match(text,/03 Nov 2026/);assert.match(text,/16:15:49/);assert.match(text,/160[.,]00/);assert.deepEqual(sale,before);
   }
 });
 test('long receipts retain every line, repeat table headings, and keep payment summary on the final page',async()=>{
