@@ -171,3 +171,43 @@ preservation, leaving the field, clearing, and correct matching task results on
 Chromium desktop/Android and WebKit iPhone/iPad profiles. A DOM regression checks
 retained element identity, ancestor identity, notifications, clearing, and view
 navigation. Test fixtures are isolated; no task data or schema changes are needed.
+
+## Delegated steps and final approval — 0.47.0
+
+A workflow can be created atomically with 1–100 individual steps in `data.steps`.
+Each retains its stable ID, assignee, date, notes, reference files and status.
+`In Progress` is now supported. Reference files (including scans) can be supplied
+at creation, with step_add/step_update, or with step_note; completion evidence
+remains separate and records the actor and server time. Existing permissions,
+optimistic revisions, retry keys and append-only D1 events are unchanged.
+
+Completing the last required step leaves the parent Pending with
+`ready_for_approval:true`. Only Alex or the parent's assigned person can use
+`approve_workflow`; open PA work still blocks final closure. Previously closed
+workflows retain their original completion. Adding/reopening work clears the
+approval. No mass rewrite or schema migration occurs. `step_delete` needs a reason
+and explicit confirmation, cannot remove a referenced dependency or last required
+step, and leaves old events/files intact. `step_reorder` accepts every current
+step ID exactly once. Administrators retain delegation rights; staff retain
+access to their own assigned parent/steps and may add notes or completion evidence.
+
+The form supports adding all steps before saving; each has its own scanner.
+Lists show compact progress, remaining/overdue counts, next responsible person
+and the viewer's own steps. Full details load on opening the existing parent.
+The existing notification queue sends assignment and completion messages to the
+relevant people. Each step independently chooses due-date + first-overdue alerts,
+daily alerts, or off. Stable IDs deduplicate scheduler retries; changing dates,
+assignees or completion withdraws stale alerts. No parent due alert duplicates
+step alerts. Delivery still depends on the existing device push permission.
+
+PA's existing authenticated MCP tools expose the new contract. The same parent
+enters pending_sync; children do not create separate PA register rows. Daily
+`report-context.task_steps` reads current progress directly. Continue its
+next_offset with `summary`, id `task-steps`; pages have 25 parents. Use current
+step status over an older mirrored parent row, merge the same existing PA ID, and
+report meaningful changes or overdue work without repeating completed items.
+
+Validation includes isolated Worker/D1, OAuth/MCP, UI form and mobile browser
+acceptance (`scripts/qa-task-steps.mjs`). Test traffic has no external transport
+and cannot notify live staff. Roll back with a forward fix; retain these events
+and approval checks, never revert to automatic parent completion or restore D1.

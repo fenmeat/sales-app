@@ -381,3 +381,16 @@ test('Tasks MCP keeps read grants read-only and acknowledges only a verified cur
  const updated=await ok(f,write.tokens,'save_task',{task:{task_id:task.task_id,revision:1,request_id:crypto.randomUUID(),action:'step_update',step_id:'step-1',data:{status:'Waiting',waiting_reason:'Waiting for source document',due_date:'2026-10-30'}}});assert.equal(updated.task.pa_sync.status,'pending');
  assert.equal((await ok(f,read.tokens,'get_tasks',{query:{resource:'pending_sync'}})).tasks.length,1);
 });
+
+test('authorised MCP creates and edits one five-step task, reads progress, and requires explicit approval',async t=>{
+ const f=await fixture(t),write=await f.connect(true),items=['alex','alinda','xavier','xavier','alex'].map((assigned_to,i)=>({id:'step-'+i,description:'Synthetic service step '+i,assigned_to,due_date:'2099-11-23',status:'Pending'}));
+ let saved=(await ok(f,write.tokens,'save_task',{task:{action:'create',revision:0,request_id:crypto.randomUUID(),data:{title:'Synthetic five-step MCP service',task_type:'workflow',due_date:'2099-11-23',assigned_to:'alex',pa_required:true,steps:items}}})).task;
+ const read=async()=>{const result=await ok(f,write.tokens,'get_tasks',{query:{task_id:saved.id}});return result.task||result.tasks?.[0];};
+ assert.equal((await read()).steps.length,5);
+ const edit=async(action,extra={})=>{saved=(await ok(f,write.tokens,'save_task',{task:{task_id:saved.id,revision:saved.revision,request_id:crypto.randomUUID(),action,...extra}})).task;return read();};
+ assert.equal((await edit('step_update',{step_id:'step-1',data:{due_date:'2099-11-24',assigned_to:'xavier'}})).steps[1].assigned_to,'xavier');
+ for(let i=0;i<5;i++)await edit('step_complete',{step_id:'step-'+i,note:'Synthetic completion'});
+ const ready=await read();assert.equal(ready.status,'Pending');assert.equal(ready.ready_for_approval,true);assert.equal(ready.progress.percent,100);
+ assert.equal((await edit('approve_workflow',{note:'All checks passed'})).status,'Complete');
+ assert.equal((await f.db.prepare('SELECT COUNT(DISTINCT task_id) n FROM v2_task_events').first()).n,1);
+});

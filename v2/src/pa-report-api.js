@@ -1,9 +1,17 @@
 import {originalFileBytes} from './task-files.js';
 import {check,UserError,dateKey,today} from './domain.js';
 import {workPage} from './task-pa-work.js';
-import {ensureTaskSchema,getTask,saveTask} from './tasks-api.js';
+import {ensureTaskSchema,getTask,saveTask,latestSQL,decode} from './tasks-api.js';
 import {EMAIL_SCHEMA,changeMail,readMail,mailReview,mailActions,mailSummaries,mailWork,projectMail} from './pa-email.js';
 import {hash,isAdmin,keys} from './auth.js';
+
+// Bounded, current workflow summaries for the existing PA report. No new tasks
+// or mirror rows: retain one parent identity and expose outstanding child work.
+async function stepReportPage(db,offset=0){
+ offset=Number(offset);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
+ const rows=(await db.prepare(latestSQL+" WHERE json_extract(e.payload,'$.task_type')='workflow' ORDER BY e.saved_at DESC,e.task_id LIMIT 26 OFFSET ?").bind(offset).all()).results;
+ return {items:rows.slice(0,25).map(decode).map(t=>({task_id:t.id,pa_task_id:t.pa_task_id,revision:t.revision,title:t.title,status:t.status,assigned_to:t.assigned_to,updated_at:t.updated_at,progress:t.progress,ready_for_approval:!!t.ready_for_approval,next_action:t.next_action,next_assigned_to:t.next_assigned_to,next_action_date:t.next_action_date,url:'/tasks?task='+t.id,steps:(t.steps||[]).filter(s=>s.status!=='Complete').map(s=>({id:s.id,description:s.description,assigned_to:s.assigned_to,due_date:s.due_date,status:s.status,overdue:s.overdue,blocked:s.blocked}))})),next_offset:rows.length>25?offset+25:null};
+}
 
 // A versioned read model of the existing PA register, never a second master.
 // Private records and the complete email report are filtered on the server.
@@ -109,6 +117,9 @@ export async function readPaReport(env,user,query={}){
  if(query.resource==='summary'&&/^tasks-workspace(?:-(open|scheduled|closed))?$/.test(query.id||''))return (await import('./task-workspace.js')).workspaceDiagnostic(env,user,{status:query.id.split('-')[2]||'open'});
  if(query.resource==='summary'&&query.id==='tasks-performance')return (await import('./task-performance.js')).taskPerformance(env,user);
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
+ if(query.resource==='summary'&&query.id==='task-steps'){
+  check(user.username==='alex','Net Alex kan die volledige stapverslag lees.',403);await ensureTaskSchema(env.DB);return stepReportPage(env.DB,query.offset);
+ }
  if(query.resource==='summary'&&['task-work','task-work-report'].includes(query.id)){
   check(user.username==='alex','Net Alex kan PA-opdragte verwerk.',403);
   await ensureTaskSchema(env.DB);
@@ -138,7 +149,7 @@ export async function readPaReport(env,user,query={}){
    const projected=projectMail(t,mail);
    app_email.push({id:t.id,title:t.title,status:t.task_type==='workflow'?t.status:projected.status,email:projected.email,next_action:projected.next_action,review_date:projected.review_date});
   }
-  return {app_email,register_revision:register?.revision||0,source_at:register?.source_at,previous_cutoff:previous?.source_at||null,task_work:(await workPage(env.DB,{report:true,since:previous?.source_at})),followup:reportFollowup((register?.rows||[]).map(r=>projectMail(r,mails.get(r.id))),feedback,today(),previous?.source_at||'')};
+  return {app_email,task_steps:await stepReportPage(env.DB),register_revision:register?.revision||0,source_at:register?.source_at,previous_cutoff:previous?.source_at||null,task_work:(await workPage(env.DB,{report:true,since:previous?.source_at})),followup:reportFollowup((register?.rows||[]).map(r=>projectMail(r,mails.get(r.id))),feedback,today(),previous?.source_at||'')};
  }
  if(query.resource==='summary'&&query.id)return readConversation(env,user,query.id,query.offset);
  if(query.resource==='pending_feedback'){

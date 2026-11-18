@@ -33,7 +33,7 @@ test('workflow waits three weeks, blocks dependent completion and automatically 
  await queueTaskReminders(envFor(db),new Date('2099-11-30T06:00:00Z'));await queueTaskReminders(envFor(db),new Date('2099-11-30T06:05:00Z'));
  const notices=(await db.prepare("SELECT * FROM v2_task_notifications WHERE kind='step_due'").all()).results;assert.equal(notices.length,1);assert.equal(currentTaskNotification(r.data.task,notices[0],new Date('2099-11-30T06:05:00Z')),true);
  r=await send(call,b.task_id,4,'step_complete',{step_id:'future'});assert.equal(r.data.task.status,'Pending');assert.equal((await send(call,b.task_id,5,'step_complete',{step_id:'proof'})).status,400);
- r=await send(call,b.task_id,5,'step_complete',{step_id:'proof',proof_url:'https://example.com/synthetic-proof'});assert.equal(r.data.task.status,'Complete');assert.equal(r.data.task.progress.done,3);
+ r=await send(call,b.task_id,5,'step_complete',{step_id:'proof',proof_url:'https://example.com/synthetic-proof'});assert.equal(r.data.task.status,'Pending');assert.equal(r.data.task.ready_for_approval,true);assert.equal(r.data.task.progress.done,3);
  const before=(await readTasksForPa(envFor(db),{username:'alex'},{resource:'pending_sync'})).tasks;assert.equal(before.length,1);
  await acknowledgeTask(envFor(db),{username:'alex'},{task_id:b.task_id,revision:6,pa_task_id:'TSK-99999',source_url:'https://docs.google.com/spreadsheets/d/synthetic/edit'});
  assert.equal((await readTasksForPa(envFor(db),{username:'alex'},{resource:'pending_sync'})).tasks.length,0);

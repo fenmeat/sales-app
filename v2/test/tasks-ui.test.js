@@ -369,3 +369,25 @@ test('task edits, notes and PA followups share the scanner and submit documents 
   assert.deepEqual(ui.postPaths,['/api/tasks']);
  }
 });
+
+test('new workflow form captures five independent steps with scan controls and keeps stable retry IDs',async()=>{
+ const {document,dialog,posts,failNext}=await screen('alex');document.querySelector('#new').onclick();let form=dialog.querySelector('form');
+ form.elements.title.value='Synthetic five-step Dyna';form.elements.task_type.value='workflow';form.elements.task_type.onchange();
+ for(let i=1;i<5;i++)document.querySelector('[data-add-draft]').onclick();
+ const boxes=[...document.querySelectorAll('.draft-step')];assert.equal(boxes.length,5);
+ for(const [i,box] of boxes.entries()){
+  box.querySelector('[data-field=description]').value='Synthetic step '+i;
+  for(const option of box.querySelectorAll('[data-field=assigned_to] option'))option.toggleAttribute('selected',option.value===['alex','alinda','xavier','xavier','alex'][i]);
+  assert.ok(box.querySelector('[data-scan]'));assert.ok(box.querySelector('[data-photo-input]'));
+ }
+ failNext();await form.onsubmit({preventDefault(){}});assert.equal(dialog.open,true);await form.onsubmit({preventDefault(){}});
+ assert.equal(posts[0].data.steps.length,5);assert.deepEqual(posts[0].data.steps.map(s=>s.assigned_to),['alex','alinda','xavier','xavier','alex']);assert.equal(new Set(posts[0].data.steps.map(s=>s.id)).size,5);assert.deepEqual(posts[0],posts[1]);
+ assert.ok(posts[0].data.steps.every(s=>s.reminder_mode==='due'));
+});
+
+test('step details display progress, own work, overdue status and final approval without a complete shortcut',async()=>{
+ const task={id:'synthetic-workflow-approval',revision:5,title:'Approval test',task_type:'workflow',assigned_to:'alex',created_by:'alex',status:'Pending',kind:'general',priority:'Normal',pa_sync:{status:'app_only'},steps:[{id:'one',description:'Done',assigned_to:'xavier',status:'Complete',completion:{by:'xavier',at:'2099-11-01T08:00:00Z'}},{id:'two',description:'Check',assigned_to:'alex',status:'Complete',completion:{by:'alex',at:'2099-11-01T08:00:00Z'}}]};
+ const {document,dialog,posts}=await screen('alex',[task]);document.querySelector('[data-task]').onclick();
+ assert.match(dialog.textContent,/2 van 2 stappe voltooi — 100%/);assert.match(dialog.textContent,/Wag vir goedkeuring/);assert.ok(dialog.querySelector('progress'));assert.equal(dialog.querySelector('#complete'),null);
+ dialog.querySelector('#approve-workflow').onclick();const form=dialog.querySelector('form');await form.onsubmit({preventDefault(){}});assert.equal(posts[0].action,'approve_workflow');
+});

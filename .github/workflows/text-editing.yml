@@ -1,8 +1,11 @@
 name: Text editing browser acceptance
 on:
   push:
-    branches: [perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
+    branches: [feature/task-steps,perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
     paths:
+      - 'v2/public/task-workflow-ui.js'
+      - 'v2/src/task-workflow-actions.js'
+      - 'v2/scripts/qa-task-steps.mjs'
       - 'v2/public/tasks-app.js'
       - 'v2/public/task-attachments.js'
       - 'v2/public/task-scanner.js'
@@ -74,6 +77,10 @@ jobs:
         env:
           TEXT_BROWSER: ${{ matrix.browser }}
         run: TASKS_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-scans.mjs
+      - name: Check delegated task steps and final approval
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-steps.mjs
       - uses: actions/upload-artifact@v5
         if: always()
         with:
@@ -83,4 +90,5 @@ jobs:
             /tmp/fenmeat-pa-conversations/
             /tmp/fenmeat-task-editing/
             /tmp/fenmeat-task-speed/
+            /tmp/fenmeat-task-steps/
           retention-days: 7

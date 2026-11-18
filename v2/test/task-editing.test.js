@@ -35,7 +35,7 @@ test('step edits preserve completed evidence and cannot skip dependencies or sil
  assert.equal((await write(call,b.task_id,4,'step_complete',{step_id:'pay',proof_url:'https://example.com/proof'})).status,200);
  const before=(await call('alex','/api/tasks?id='+b.task_id)).data.task;
  assert.equal((await write(call,b.task_id,5,'step_update',{step_id:'pay',data:{description:'Corrected payment description'},note:'Correct wording, keep the payment evidence.'},'alinda')).status,200);
- const after=(await call('alex','/api/tasks?id='+b.task_id)).data.task;assert.deepEqual(after.steps.map(s=>s.completion),before.steps.map(s=>s.completion));assert.deepEqual(after.completion,before.completion);assert.equal(after.status,'Complete');
+ const after=(await call('alex','/api/tasks?id='+b.task_id)).data.task;assert.deepEqual(after.steps.map(s=>s.completion),before.steps.map(s=>s.completion));assert.deepEqual(after.completion,before.completion);assert.equal(after.status,'Pending');assert.equal(after.ready_for_approval,true);
  assert.equal((await write(call,b.task_id,6,'step_update',{step_id:'pay',data:{status:'Pending'},note:'Wrong action'})).status,400);
  assert.equal((await write(call,b.task_id,6,'step_update',{step_id:'pay',data:{description:'Staff edit'},note:'Attempt'},'xalinda')).status,403);
 });
