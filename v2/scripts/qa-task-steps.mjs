@@ -1,5 +1,6 @@
 // Browser acceptance against isolated Worker/D1 only. Never contacts staff.
 import assert from 'node:assert/strict';
+import {createCanvas} from '@napi-rs/canvas';
 import {createServer} from 'node:http';
 import {readFile,mkdir} from 'node:fs/promises';
 import {resolve,extname} from 'node:path';
@@ -19,6 +20,67 @@ const server=createServer(async(req,res)=>{
  }catch(e){res.writeHead(500);res.end(String(e));}
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));port=server.address().port;const origin='http://127.0.0.1:'+port;
+// Exercise the actual registered-phone sessions with each mobile layout.
+const repSessions=new Map();
+async function checkRepSteps(page,deviceName){
+ const adminSession=await api('/api/login',{username:'alex',key:keys.alex});
+ const adminCookie=adminSession.headers.get('set-cookie').split(';')[0];
+ for(const username of ['tapiz','mosa']){
+  cookie=adminCookie;
+  if(!repSessions.has(username)){
+   const invitation=await api('/api/invoicing/phones',{action:'create',rep:username});
+   cookie='';
+   const enrolled=await api('/api/invoicing/access/enroll',{code:invitation.data.code,pin:'704862',pin_confirm:'704862'});
+   repSessions.set(username,enrolled.headers.getSetCookie().map(value=>value.split(';')[0]).join('; '));
+  }
+  cookie=adminCookie;
+  const id=crypto.randomUUID();
+  await api('/api/tasks',{action:'create',task_id:id,revision:0,request_id:crypto.randomUUID(),data:{
+   title:'Synthetic delivery '+deviceName+' '+username,visibility:'operational',task_type:'workflow',
+   assigned_to:'alex',due_date:new Date().toISOString().slice(0,10),details:'Private parent context',
+   steps:[
+    {id:'office',description:'Office-only instruction',assigned_to:'alex',status:'Pending'},
+    {id:'delivery',description:'Deliver and scan the receipt',assigned_to:username,status:'Pending'}
+   ]
+  }});
+  cookie=repSessions.get(username);
+  await page.goto(origin+'/tasks?task='+id);
+  await page.locator('[data-step-note=delivery]').waitFor();
+  assert.equal(await page.locator('[data-step-delegate]').count(),0);
+  assert.equal(await page.locator('#edit').count(),0);
+  assert.doesNotMatch(await page.locator('#dialog').textContent(),/Private parent context|Office-only instruction/);
+  await page.locator('[data-step-note=delivery]').click();
+  await page.locator('[name=note]').fill('Receipt captured at delivery');
+  const canvas=createCanvas(700,900),pen=canvas.getContext('2d');
+  pen.fillStyle='white';pen.fillRect(0,0,700,900);
+  pen.fillStyle='black';pen.font='32px sans-serif';pen.fillText('SYNTHETIC RECEIPT',70,120);
+  const chooser=page.waitForEvent('filechooser');
+  await page.locator('[data-scan]').click();
+  await (await chooser).setFiles({name:'receipt.jpg',mimeType:'image/jpeg',buffer:canvas.toBuffer('image/jpeg')});
+  const scanner=page.locator('.scan-dialog');
+  await scanner.locator('[data-use]').click();
+  await scanner.locator('[data-save]').click();
+  await page.locator('.attachment-row').waitFor();
+  await page.getByRole('button',{name:'Stoor nota',exact:true}).click();
+  await page.waitForSelector('dialog:not([open])',{state:'attached'});
+  let saved=(await api('/api/tasks?id='+id)).data.task;
+  assert.equal(saved.steps.length,1);
+  assert.equal(saved.steps[0].attachments.length,1);
+  await page.goto(origin+'/tasks?task='+id);
+  await page.locator('[data-step-complete=delivery]').click();
+  await page.getByRole('button',{name:'Stoor voltooiing',exact:true}).click();
+  await page.waitForSelector('dialog:not([open])',{state:'attached'});
+  saved=(await api('/api/tasks?id='+id)).data.task;
+  assert.equal(saved.steps[0].status,'Complete');
+  assert.equal(saved.status,'Pending');
+  cookie=adminCookie;
+  const parent=(await api('/api/tasks?id='+id)).data.task;
+  assert.equal(parent.steps[0].status,'Pending');
+  assert.equal(parent.steps[1].completion.by,username);
+  console.log('PASS '+deviceName+' '+username+': registered phone session, private step view, scanned receipt and own-step completion');
+ }
+}
+
 try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{width:1440,height:1000}}],['chromium-android',chromium,devices['Pixel 7']],['webkit-iphone',webkit,devices['iPhone 13']],['webkit-ipad',webkit,devices['iPad Pro 11']]]){
  if(process.env.TEXT_BROWSER&&!name.startsWith(process.env.TEXT_BROWSER))continue;
  const login=await api('/api/login',{username:'alex',key:keys.alex});cookie=login.headers.get('set-cookie').split(';')[0];
@@ -54,6 +116,12 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  assert.equal(task.status,'Pending');assert.equal(task.ready_for_approval,true);await open();assert.match(await page.locator('#dialog').textContent(),/Wag vir goedkeuring/);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.ok(await page.locator('dialog').evaluate(e=>e.scrollWidth<=e.clientWidth+1));assert.ok(await page.locator('.step .actions button').evaluateAll(buttons=>buttons.every(b=>b.getBoundingClientRect().width>=120)),'Step buttons must stay readable on narrow screens');await page.screenshot({path:folder+'/'+name+'.png'});
  await page.locator('#approve-workflow').click();await page.getByRole('button',{name:'Stoor',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});await refresh();assert.equal(task.status,'Complete');assert.equal(task.approval.by,actor);assert.deepEqual(errors,[]);
+ await open();await page.locator('#reopen').click();await page.locator('[name=note]').fill('Final review again');
+ await page.getByRole('button',{name:'Stoor',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});
+ await refresh();assert.equal(task.status,'Pending');assert.equal(task.approval,null);assert.equal(task.progress.percent,100);
+ await open();await page.locator('#approve-workflow').waitFor();assert.deepEqual(errors,[]);
+ await page.getByRole('button',{name:'Maak toe',exact:true}).click();
  console.log('PASS '+name+': simplified task chooser, ordinary repeat, stocktake saved-count gate, five steps, delegation, PDF, progress, approval and responsive width');
+ await checkRepSteps(page,name);assert.deepEqual(errors,[]);
  }finally{await browser.close();}
 }}finally{await new Promise(r=>server.close(r));await mf.dispose();}

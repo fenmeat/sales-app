@@ -259,8 +259,8 @@ export async function saveTask(env,user,b){
    check(taskType(task)!=='workflow','Kies die stap wat op iemand wag.');
    check(!['Complete','Cancelled'].includes(task.status),'Reopen this task first.');task.waiting_reason=text(b.note,2000,true);task.review_date=dateKey(b.review_date);task.status='Waiting';
   }else if(action==='reopen'||action==='cancel'){
-   check(action==='cancel'||taskType(task)!=='workflow'||task.status==='Cancelled','Heropen die toepaslike stap.');
    check(manage||managesOwnTask(user,old),'Only admins can reopen or cancel tasks assigned by someone else.',403);text(b.note,2000,true);task.status=action==='reopen'?'Pending':'Cancelled';task.last_reason=b.note;task.completion=null;
+   if(taskType(task)==='workflow')task.approval=null;
   }else throw new UserError('Unsupported task action.');
  }
  if(['step_add','step_update','step_note'].includes(action)){
