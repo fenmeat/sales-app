@@ -29,6 +29,7 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  const {defaultBrowserType,...device}=options,context=await browser.newContext({...device,timezoneId:'Africa/Johannesburg'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(origin+'/tasks');await page.locator('#pa-new').click();
+ await page.locator('dialog[open] select[name=task_type]').waitFor();
  assert.deepEqual(await page.locator('[name=task_type] option').allTextContents(),['Gewone taak','Taak met stappe']);assert.equal(await page.locator('[name=supplier]').isVisible(),false);
  await page.screenshot({path:folder+'/'+name+'-new-task.png'});
  await page.locator('#choose-stocktake').click();assert.equal(await page.locator('[name=task_type]').isVisible(),false);assert.equal(await page.locator('[name=repeat]').isVisible(),false);assert.equal(await page.locator('[data-scan]').isVisible(),true);
