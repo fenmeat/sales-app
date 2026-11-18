@@ -1,3 +1,4 @@
+import {isTaskManager,taskVisibility} from './task-access.js';
 import {check,dateKey} from './domain.js';
 import {projectTask,taskType,nextOccurrence,localDate} from './task-workflow.js';
 const clean=(s,max=3000)=>{check(typeof s==='string'&&s.trim()&&s.length<=max,'Vul die stap se besonderhede in.');return s.trim();};
@@ -20,19 +21,20 @@ export function validateSteps(steps,users){
  function visit(id){check(map.has(id),'’n Vorige stap bestaan nie.');check(!visiting.has(id),'Stappe kan nie in ’n sirkel van mekaar afhang nie.');if(visited.has(id))return;visiting.add(id);for(const dep of map.get(id).dependencies)visit(dep);visiting.delete(id);visited.add(id);}
  result.forEach(s=>visit(s.id));return result;
 }
-export async function workflowAction({task,b,user,admin,users,at,db}){
+export async function workflowAction({task,b,user,admin,manage:manager=admin,users,at,db}){
  const originalCompletion=task.completion,originalStatus=task.status;
- const action=b.action,manage=admin||(task.created_by===user.username&&task.assigned_to===user.username);
+ const action=b.action,manage=manager||(!(task.steps||[]).some(s=>s.assigned_to!==user.username)&&task.created_by===user.username&&task.assigned_to===user.username);
  if(action==='start_workflow'){
   check(manage,'Net die eienaar of admin kan stappe opstel.',403);check(task.kind!=='stocktake','Behoud die bestaande voorraadtelling se bewysproses.');check(taskType(task)!=='workflow','Hierdie taak het reeds stappe.');check(b.note?.trim(),'Teken aan waarom die taak na stappe omgeskakel word.');
   const steps=b.steps||[{id:'step-1',description:task.title,assigned_to:task.assigned_to,due_date:task.review_date||task.due_date,status:task.status==='Complete'?'Complete':'Pending',completion:task.completion}];
+  if(!manager)check(steps.every(s=>s.assigned_to===user.username),'Jy kan net eie stappe opstel.',403);
   if(!admin)check(steps.every(s=>s.status!=='Complete'),'Slegs ’n admin kan bestaande voltooiings met bronbewys oordra.',403);
   if(steps.some(s=>s.status==='Complete'))check(admin&&steps.filter(s=>s.status==='Complete').every(s=>s.completion?.note||s.completion?.proof_url),'Gee die bevestiging vir elke reeds voltooide stap.');
   task.legacy_completion=task.completion;task.task_type='workflow';task.pa_required=!!(task.pa_task_id||task.parent_cycle_id||b.pa_required);task.steps=validateSteps(steps,users);task.status='Pending';task.completion=null;task.repeat='none';task.last_reason=clean(b.note);
  }else{
   check(taskType(task)==='workflow','Hierdie taak het nog nie stappe nie.');check(task.status!=='Cancelled','Heropen die taak eers.');
   if(action==='approve_workflow'){
-   check(user.username==='alex'||task.assigned_to===user.username,'Net Alex of die verantwoordelike persoon kan die taak finaal goedkeur.',403);
+   check(user.username==='alex'||task.assigned_to===user.username||(task.kind==='general'&&taskVisibility(task)==='operational'&&isTaskManager(user.username)),'Die verantwoordelike persoon of ’n gemagtigde taakbestuurder moet die taak goedkeur.',403);
    check(projectTask(task).ready_for_approval,'Voltooi eers al die vereiste stappe.');
    task.approval={by:user.username,at,note:String(b.note||'').slice(0,3000)};task.completion=task.approval;task.status='Complete';return task;
   }else if(action==='step_reorder'){
@@ -45,15 +47,15 @@ export async function workflowAction({task,b,user,admin,users,at,db}){
    else{check(['Pending','Scheduled','Waiting'].includes(b.status),'Voltooi die vereiste stappe om die taak af te handel.');check(b.status==='Pending'||b.until,'Kies ’n opvolgdatum.');task.status_override={status:b.status,until:b.until?dateKey(b.until):'',reason,by:user.username,at};}task.last_reason=reason;
   }else{
    const index=task.steps.findIndex(s=>s.id===b.step_id),old=task.steps[index];
-   if(action==='step_add'){check(manage,'Net die eienaar of admin kan stappe byvoeg.',403);check(!b.data?.completion&&!b.data?.attachments?.length&&!['Complete','Completed'].includes(b.data?.status),'Voltooi die nuwe stap afsonderlik.');check(admin||b.data?.assigned_to===user.username,'Jy kan net eie stappe delegeer.',403);task.steps.push({...b.data,id:b.step_id,status:b.data?.status||'Pending',completion:null});}
+   if(action==='step_add'){check(manage,'Net die eienaar of admin kan stappe byvoeg.',403);check(!b.data?.completion&&!b.data?.attachments?.length&&!['Complete','Completed'].includes(b.data?.status),'Voltooi die nuwe stap afsonderlik.');check(manager||b.data?.assigned_to===user.username,'Jy kan net eie stappe delegeer.',403);task.steps.push({...b.data,id:b.step_id,status:b.data?.status||'Pending',completion:null});}
    else{
-    check(old,'Stap nie gevind nie.',404);check(admin||old.assigned_to===user.username,'Hierdie stap is aan iemand anders toegeken.',403);
-    if(action==='step_update'){check(manage,'Net die eienaar of admin kan stappe wysig.',403);check(admin||old.status!=='Complete','Heropen hierdie stap om dit te verander.');check(b.data&&Object.keys(b.data).every(k=>['description','assigned_to','due_date','status','dependencies','waiting_reason','notes','document_url','required','requires_evidence','reminder_mode'].includes(k)),'Ongeldige stapveld.');check(b.data.status!=='Complete'||old.status==='Complete','Gebruik die Klaar-knoppie.');
+    check(old,'Stap nie gevind nie.',404);check(manager||old.assigned_to===user.username,'Hierdie stap is aan iemand anders toegeken.',403);
+    if(action==='step_update'){check(manage,'Net die eienaar of admin kan stappe wysig.',403);check(manager||old.status!=='Complete','Heropen hierdie stap om dit te verander.');check(b.data&&Object.keys(b.data).every(k=>['description','assigned_to','due_date','status','dependencies','waiting_reason','notes','document_url','required','requires_evidence','reminder_mode'].includes(k)),'Ongeldige stapveld.');check(b.data.status!=='Complete'||old.status==='Complete','Gebruik die Klaar-knoppie.');
      if(old.status==='Complete'){
       check(!b.data.status||b.data.status==='Complete','Gebruik Heropen stap om die voltooiing te verander.');
       check((b.data.required===undefined||b.data.required===old.required)&&(b.data.dependencies===undefined||JSON.stringify(b.data.dependencies)===JSON.stringify(old.dependencies)),'Heropen die stap voordat jy sy afhanklikhede verander.');
      }
-     check(admin||!b.data.assigned_to||b.data.assigned_to===user.username,'Net admin kan aan ’n ander persoon delegeer.',403);
+     check(manager||!b.data.assigned_to||b.data.assigned_to===user.username,'Net admin kan aan ’n ander persoon delegeer.',403);
      check(b.data.status!=='In Progress'||!projectTask(task).steps[index].blocked,'Voltooi eers die vorige stap.');
      task.steps[index]={...old,...b.data};}
     else if(action==='step_start'){
@@ -69,7 +71,7 @@ export async function workflowAction({task,b,user,admin,users,at,db}){
     }else if(action==='step_complete'){
      check(old.status!=='Complete','Hierdie stap is reeds klaar.',409);check(!projectTask(task).steps[index].blocked,'Voltooi eers die vorige vereiste stap.');
      const attachments=b.attachments||[];check(Array.isArray(attachments)&&attachments.length<=12,'Gebruik hoogstens 12 bewysstukke.');
-     for(const id of attachments){const f=await db.prepare('SELECT task_id FROM v2_task_attachments WHERE id=?').bind(id).first();check(f?.task_id===task.id,'Die bewysstuk behoort aan ’n ander taak.');}
+     for(const id of attachments){const f=await db.prepare('SELECT task_id,username FROM v2_task_attachments WHERE id=?').bind(id).first();check(f?.task_id===task.id&&(manager||f.username===user.username),'Die bewysstuk behoort aan ’n ander taak.');}
      check(attachments.every(id=>!task.attachments?.includes(id)&&!task.steps.some(s=>s.attachments?.includes(id))),'Voeg nuwe voltooiingsbewys by; opdragdokumente is nie voltooiingsbewys nie.');
      const proof_url=url(b.proof_url);check(!old.requires_evidence||proof_url||attachments.length,'Voeg die vereiste bewys by.');task.steps[index]={...old,status:'Complete',completion:{by:user.username,at,note:String(b.note||'').slice(0,3000),proof_url,attachments}};
     }else if(action==='step_reopen'){check(manage,'Net die eienaar of admin kan ’n stap heropen.',403);check(b.note?.trim(),'Sê waarom hierdie stap heropen word.');task.steps[index]={...old,status:'Pending',completion:null};task.last_reason=clean(b.note);}

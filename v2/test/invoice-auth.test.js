@@ -242,3 +242,34 @@ test('task access uses the same registered phone and stops on lock, expiry and r
  assert.equal((await f.req('/api/tasks/push',null,current)).status,401);
  assert.equal((await f.req('/api/invoicing/bootstrap',null,current)).status,401);
 });
+
+test('both paired phones see only delegated steps, scan and finish them, and lose access after reassignment',async t=>{
+ const f=await fixture(t);
+ const a=await f.paired('tapiz'),b=await f.paired('musa');
+ const doc=()=>({id:crypto.randomUUID(),filename:'scan.pdf',mime_type:'application/pdf',base64:btoa('%PDF-1.4\nTest scan\n%%EOF')});
+ const privateFile=doc(),id=crypto.randomUUID();
+ const r=await f.req('/api/tasks',{task_id:id,revision:0,request_id:crypto.randomUUID(),action:'create',
+  data:{title:'Delivery',details:'Parent notes',task_type:'workflow',visibility:'operational',assigned_to:'alex',review_date:today(),
+   steps:[a,b].map(p=>({id:p.username,description:'Step for '+p.username,assigned_to:p.username,status:'Pending'}))},files:[privateFile]},f.admin);
+ assert.equal(r.status,200,JSON.stringify(r.data));
+ let revision=1;
+ for(const [person,other] of [[a,b],[b,a]]){
+  const own=person.username,view=(await f.req('/api/tasks?id='+id,null,person.cookie)).data.task;
+  assert.deepEqual(view.steps.map(s=>s.id),[own]);assert.equal(view.details,undefined);
+  assert.equal((await f.req('/api/tasks/file?id='+privateFile.id,null,person.cookie)).status,404);
+  assert.equal((await f.req('/api/tasks/workspace?scope=fenmeat',null,person.cookie)).status,403);
+  const act=(action,extra={})=>f.req('/api/tasks',{action,task_id:id,revision,request_id:crypto.randomUUID(),...extra},person.cookie);
+  for(const [action,extra] of [['step_note',{step_id:other.username,note:'Other'}],['step_update',{step_id:own,data:{assigned_to:other.username}}],['cancel',{note:'No'}],['note',{note:'Parent'}]]){
+   assert.equal((await act(action,extra)).status,403);
+  }
+  const scan=doc();assert.equal((await act('step_note',{step_id:own,note:'Done on site',files:[scan]})).status,200);revision++;
+  assert.equal((await f.req('/api/tasks/file?id='+scan.id,null,person.cookie)).status,200);
+  assert.equal((await f.req('/api/tasks/file?id='+scan.id,null,other.cookie)).status,404);
+  assert.equal((await act('step_complete',{step_id:own})).status,200);revision++;
+  const audit=(await f.req('/api/tasks/audit?id='+id,null,person.cookie)).data;
+  assert.ok(audit.history.every(h=>h.task.steps.every(s=>s.id===own)));
+ }
+ const moved=await f.req('/api/tasks',{action:'step_update',task_id:id,revision,request_id:crypto.randomUUID(),step_id:a.username,data:{assigned_to:'alex'},note:'Change owner'},f.admin);
+ assert.equal(moved.status,200,JSON.stringify(moved.data));
+ assert.equal((await f.req('/api/tasks?id='+id,null,a.cookie)).status,404);
+});

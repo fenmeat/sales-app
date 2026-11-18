@@ -72,7 +72,7 @@ export async function queueTaskReminders(env,now=new Date()){
  statements.push(env.DB.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
  SELECT 'followup-'||e.task_id||'-'||f.key||'-'||strftime('%s',f.value),f.key,e.task_id,'follow_up',?
  FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision, json_each(e.payload,'$.followup_reminders') f
- WHERE json_extract(e.payload,'$.status') IN ('Pending','Scheduled','Waiting') AND f.key IN ('alex','alinda') AND f.value<=?`).bind(now.toISOString(),now.toISOString()));
+ WHERE json_extract(e.payload,'$.status') IN ('Pending','Scheduled','Waiting') AND f.key IN ('alex','alinda','xalinda','xavier') AND f.value<=?`).bind(now.toISOString(),now.toISOString()));
  const latest=(await env.DB.prepare(`SELECT e.task_id,e.payload FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision WHERE json_extract(e.payload,'$.status') NOT IN ('Complete','Cancelled')`).all()).results;
  if(local.slice(11,16)>='08:00')for(const row of latest){const task=projectTask(JSON.parse(row.payload),date);
   if(task.task_type==='workflow'){

@@ -22,9 +22,12 @@ export function unifiedWork(app,pa){
  return rows;
 }
 export function workCounts(rows,username){const active=rows.filter(paOpen);return {open:active.length,mine:active.filter(r=>r.assigned_to===username||r.steps?.some(s=>s.assigned_to===username)).length,fenmeat:active.filter(r=>r.scope==='fenmeat').length,private:active.filter(r=>r.scope==='private').length,pending:active.filter(r=>r.status==='Pending').length,waiting:active.filter(r=>r.status==='Waiting').length,scheduled:active.filter(r=>r.status==='Scheduled').length,submitted:rows.filter(r=>r.completion_pending).length};}
-export function selectWork(rows,{username,admin,scope='mine',status='open',search=''}){
+export function selectWork(rows,{username,admin,scope='mine',status='open',search='',person='',date='',priority=''}){
  return rows.filter(r=>(scope==='mine'?(r.assigned_to===username||r.steps?.some(s=>s.assigned_to===username)):scope==='private'?r.scope==='private':scope==='fenmeat'?r.scope==='fenmeat':admin)
  &&(status==='all'||status==='open'&&r.status==='Pending'||status==='scheduled'&&r.status==='Scheduled'||status==='closed'&&['Complete','Cancelled','Archived'].includes(r.status)||status==='waiting'&&r.status==='Waiting'||status==='submitted'&&r.completion_pending)
+ &&(!person||r.assigned_to===person||r.steps?.some(s=>s.assigned_to===person))
+ &&(!date||[r.due_date,r.review_date,paDue(r)].includes(date)||r.steps?.some(s=>s.due_date===date))
+ &&(!priority||r.priority===priority)
  &&(!search||[r.title,r.next_action,r.details,r.assigned_to,r.review_group].join(' ').toLowerCase().includes(search.toLowerCase())))
  .sort((a,b)=>Number(paOpen(b))-Number(paOpen(a))||({Critical:0,High:1,Normal:2,Low:3}[a.priority]??2)-({Critical:0,High:1,Normal:2,Low:3}[b.priority]??2)||(paDue(a)||'9999').localeCompare(paDue(b)||'9999')||a.title.localeCompare(b.title));
 }

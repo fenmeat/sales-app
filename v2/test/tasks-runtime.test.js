@@ -18,14 +18,14 @@ async function fixture(t){
 test('tasks enforce owner privacy, admin assignment, revisions, idempotency, evidence and notifications',async t=>{
  const {call,task,db}=await fixture(t),b=task({requires_evidence:true});
  assert.equal((await call('','/api/tasks')).status,401);assert.equal((await call('tapiz','/api/tasks')).status,403);
- assert.equal((await call('xalinda','/api/tasks',task({assigned_to:'xavier'}))).status,403);
+ assert.equal((await call('xalinda','/api/tasks',task({assigned_to:'xavier',visibility:'confidential'}))).status,403);
  assert.equal((await call('alinda','/api/tasks',b,{Origin:'https://evil.example'})).status,403);
  assert.equal((await call('alinda','/api/tasks',task({area:'Personal'}))).status,400);
  const first=await call('alinda','/api/tasks',b);assert.equal(first.status,200,JSON.stringify(first.data));assert.equal(first.data.task.revision,1);
  assert.equal((await call('alinda','/api/tasks',b)).data.replayed,true);
  assert.equal((await call('alinda','/api/tasks',{...b,data:{...b.data,title:'Changed retry'}})).status,409);
  assert.equal((await call('xavier','/api/tasks')).data.tasks.length,0);assert.equal((await call('xavier','/api/tasks/audit?id='+b.task_id)).status,404);
- const own=(await call('xalinda','/api/tasks')).data;assert.equal(own.tasks.length,1);assert.deepEqual(own.users,['xalinda']);assert.equal(own.notifications.length,1);
+ const own=(await call('xalinda','/api/tasks')).data;assert.equal(own.tasks.length,1);assert.ok(own.task_manager&&own.users.includes('xavier')&&own.users.includes('mosa'));assert.equal(own.notifications.length,1);
  const completion={task_id:b.task_id,request_id:crypto.randomUUID(),revision:1,action:'complete'};
  assert.equal((await call('xavier','/api/tasks',completion)).status,404);
  assert.equal((await call('xalinda','/api/tasks',{...completion,revision:0})).status,409);
@@ -77,7 +77,7 @@ test('each user creates and manages their own task while both admins retain over
   assert.equal(saved.data.task.created_by,username);assert.equal(saved.data.task.assigned_to,username);assert.equal(saved.data.task.reminder_at,'2099-11-02T07:30:00.000Z');
   assert.equal((await call(username,'/api/tasks',b)).data.replayed,true);
   const update={task_id:b.task_id,request_id:crypto.randomUUID(),revision:1,action:'update',data:{title:'Updated own task',due_date:'2099-11-03'}};
-  assert.equal((await call(username,'/api/tasks',{...update,data:{assigned_to:'alinda'}})).status,403);
+  assert.equal((await call(username,'/api/tasks',{...update,data:{visibility:'confidential',assigned_to:'alinda'}})).status,403);
   assert.equal((await call(username,'/api/tasks',update)).status,200);
   assert.equal((await call(username,'/api/tasks',{...update,request_id:crypto.randomUUID(),revision:2,action:'cancel',note:'No longer needed'})).status,200);
   assert.equal((await call(username,'/api/tasks',{...update,request_id:crypto.randomUUID(),revision:3,action:'reopen',note:'Required again'})).status,200);
@@ -88,12 +88,12 @@ test('each user creates and manages their own task while both admins retain over
   assert.equal((await call(admin,'/api/tasks?mine=1')).data.tasks.length,0);
  }
  for(const [i,username] of ['xalinda','xavier'].entries()){
-  const view=(await call(username,'/api/tasks')).data;assert.equal(view.admin,false);assert.deepEqual(view.users,[username]);assert.deepEqual(view.tasks.map(t=>t.id),[created[i]]);
+  const view=(await call(username,'/api/tasks')).data;assert.equal(view.admin,false);assert.ok(view.task_manager&&view.users.includes('tapiz'));assert.deepEqual(view.tasks.map(t=>t.id),[created[i]]);
   const other=created[1-i];assert.equal((await call(username,'/api/tasks/audit?id='+other)).status,404);
   assert.equal((await call(username,'/api/tasks',{task_id:other,request_id:crypto.randomUUID(),revision:0,action:'update',data:{title:'Forbidden'}})).status,404);
   assert.equal((await call(username,'/api/tasks',{task_id:other,request_id:crypto.randomUUID(),revision:4,action:'reminder',data:{reminder_mode:'off'}})).status,404);
  }
- for(const data of [{assigned_to:'alex'},{kind:'po_dispatch'},{pa_task_id:'TSK-00999'},{parent_cycle_id:'TSK-00999'},{required_materials:[]},{created_by:'alex'}]){
+ for(const data of [{visibility:'confidential'},{kind:'po_dispatch'},{pa_task_id:'TSK-00999'},{parent_cycle_id:'TSK-00999'},{required_materials:[]},{created_by:'alex'}]){
   const r=await call('xalinda','/api/tasks',task({assigned_to:'xalinda',...data}));assert.ok([400,403].includes(r.status),JSON.stringify(r));
  }
  assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_task_events').first()).n,8);
@@ -207,7 +207,7 @@ test('new-task photos commit with the task, reopen for its owner and admins, and
  assert.equal(move.status,200);assert.deepEqual(move.data.task.attachments,b.files.map(f=>f.id));
  assert.equal((await readFile('xalinda',b.files[0].id)).status,404);assert.equal((await readFile('xavier',b.files[0].id)).status,200);
  const own={...task({assigned_to:'xalinda'}),files:[instructionFile()]};assert.equal((await call('xalinda','/api/tasks',own)).status,200);
- assert.equal((await call('xalinda','/api/tasks',{...task({assigned_to:'xavier'}),files:[instructionFile()]})).status,403);
+ assert.equal((await call('xalinda','/api/tasks',{...task({assigned_to:'xavier'}),files:[instructionFile()]})).status,200);
 });
 
 test('invalid new-task photos and attachment collisions leave no partial task, files or notification',async t=>{

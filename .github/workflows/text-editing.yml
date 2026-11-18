@@ -1,8 +1,10 @@
 name: Text editing browser acceptance
 on:
   push:
-    branches: [feature/task-steps,perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
+    branches: [feature/task-access-0480, feature/task-steps,perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
     paths:
+      - 'v2/src/task-access.js'
+      - 'v2/test/task-access.test.js'
       - 'v2/public/task-workflow-ui.js'
       - 'v2/public/tasks.css'
       - 'v2/src/task-workflow-actions.js'

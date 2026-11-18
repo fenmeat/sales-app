@@ -23,7 +23,9 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  if(process.env.TEXT_BROWSER&&!name.startsWith(process.env.TEXT_BROWSER))continue;
  const login=await api('/api/login',{username:'alex',key:keys.alex});cookie=login.headers.get('set-cookie').split(';')[0];
  if(!seeded){await api('/api/recipes',{revision:0,request_id:crypto.randomUUID(),reason:'Synthetic chooser fixture',register:{schema_version:1,notes:'Synthetic',materials:[{id:'RM01',name:'Synthetic material',unit:'kg',supplier:'Crown',pack_qty:20,procure:true,notes:'',source:'Synthetic',price:{amount:null,status:'unknown',date:null,valid_until:null,source:''},stock:{qty:null,date:null,reserve:null,incoming:[],source:''}}],recipes:[],packaging:[]}});seeded=true;}
- const browser=await engine.launch({headless:true});try{
+ const actor={'chromium-desktop':'alex','chromium-android':'xavier','webkit-iphone':'xalinda','webkit-ipad':'alinda'}[name];
+ const session=await api('/api/login',{username:actor,key:keys[actor]});cookie=session.headers.get('set-cookie').split(';')[0];
+ const browser=await engine.launch({headless:true,...(engine===chromium&&process.env.TASKS_BROWSER_EXECUTABLE?{executablePath:process.env.TASKS_BROWSER_EXECUTABLE}:{})});try{
  const {defaultBrowserType,...device}=options,context=await browser.newContext({...device,timezoneId:'Africa/Johannesburg'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(origin+'/tasks');await page.locator('#pa-new').click();
@@ -36,8 +38,8 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  const count=(await api('/api/tasks')).data.tasks.find(t=>t.title==='Synthetic count '+name);assert.equal(count.kind,'stocktake');assert.equal(count.task_type,'legacy');assert.deepEqual(count.required_materials,['RM01']);assert.notEqual(count.status,'Complete');
  const blocked=await mf.dispatchFetch(origin+'/api/tasks',{method:'POST',headers:{origin,'Content-Type':'application/json',Cookie:cookie},body:JSON.stringify({task_id:count.id,revision:count.revision,request_id:crypto.randomUUID(),action:'complete'})});assert.equal(blocked.status,400,'Stocktake still requires a saved count');
  await page.locator('#pa-new').click();await page.locator('[name=title]').fill('Synthetic ordinary '+name);await page.locator('[name=repeat]').selectOption('weekly');await page.getByRole('button',{name:'Stoor',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});
- const ordinary=(await api('/api/tasks')).data.tasks.find(t=>t.title==='Synthetic ordinary '+name);assert.equal(ordinary.kind,'general');assert.equal(ordinary.task_type,'reminder');assert.equal(ordinary.repeat,'weekly');
- await page.locator('#pa-new').click();await page.locator('[name=title]').fill('Synthetic workflow '+name);await page.locator('[name=task_type]').selectOption('workflow');
+ const ordinary=(await api('/api/tasks')).data.tasks.find(t=>t.title==='Synthetic ordinary '+name);assert.equal(ordinary.visibility,'operational');assert.equal(ordinary.kind,'general');assert.equal(ordinary.task_type,'reminder');assert.equal(ordinary.repeat,'weekly');
+ await page.locator('#pa-new').click();await page.locator('[name=title]').fill('Synthetic workflow '+name);await page.locator('[name=assigned_to]').selectOption('alinda');await page.locator('[name=task_type]').selectOption('workflow');
  for(let i=1;i<5;i++)await page.locator('[data-add-draft]').click();
  const rows=page.locator('.draft-step');assert.equal(await rows.count(),5);assert.deepEqual(errors,[]);
  for(let i=0;i<5;i++){await rows.nth(i).locator('[data-field=description]').fill('Synthetic step '+(i+1));await rows.nth(i).locator('[data-field=assigned_to]').selectOption(['alex','alinda','xavier','xavier','alex'][i]);assert.equal(await rows.nth(i).locator('[data-scan]').count(),1);}
@@ -50,7 +52,7 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  for(let i=0;i<5;i++){await open();await page.locator('[data-step-complete="'+task.steps[i].id+'"]').click();await page.getByRole('button',{name:'Stoor voltooiing',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});await refresh();if(i===2)assert.equal(task.progress.percent,60);}
  assert.equal(task.status,'Pending');assert.equal(task.ready_for_approval,true);await open();assert.match(await page.locator('#dialog').textContent(),/Wag vir goedkeuring/);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.ok(await page.locator('dialog').evaluate(e=>e.scrollWidth<=e.clientWidth+1));assert.ok(await page.locator('.step .actions button').evaluateAll(buttons=>buttons.every(b=>b.getBoundingClientRect().width>=120)),'Step buttons must stay readable on narrow screens');await page.screenshot({path:folder+'/'+name+'.png'});
- await page.locator('#approve-workflow').click();await page.getByRole('button',{name:'Stoor',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});await refresh();assert.equal(task.status,'Complete');assert.equal(task.approval.by,'alex');assert.deepEqual(errors,[]);
+ await page.locator('#approve-workflow').click();await page.getByRole('button',{name:'Stoor',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});await refresh();assert.equal(task.status,'Complete');assert.equal(task.approval.by,actor);assert.deepEqual(errors,[]);
  console.log('PASS '+name+': simplified task chooser, ordinary repeat, stocktake saved-count gate, five steps, delegation, PDF, progress, approval and responsive width');
  }finally{await browser.close();}
 }}finally{await new Promise(r=>server.close(r));await mf.dispose();}

@@ -17,7 +17,7 @@ export function stepView(steps,day=localDate()){
 }
 export function projectTask(t,day=localDate()){
  const type=taskType(t),result={...t,task_type:type};
- if(t.status==='Cancelled')return result;
+ if(t.step_only||t.status==='Cancelled')return result;
  if(type==='workflow'&&t.steps?.length){
   const steps=stepView(t.steps,day),open=steps.filter(s=>s.required!==false&&s.status!=='Complete');
   const ready=open.filter(s=>!s.blocked),actionable=ready.filter(s=>['Pending','In Progress'].includes(s.effective_status));

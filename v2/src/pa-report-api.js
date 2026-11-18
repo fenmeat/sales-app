@@ -3,6 +3,7 @@ import {check,UserError,dateKey,today} from './domain.js';
 import {workPage} from './task-pa-work.js';
 import {ensureTaskSchema,getTask,saveTask,latestSQL,decode} from './tasks-api.js';
 import {EMAIL_SCHEMA,changeMail,readMail,mailReview,mailActions,mailSummaries,mailWork,projectMail} from './pa-email.js';
+import {isTaskManager,fullTaskAccess,taskVisibility} from './task-access.js';
 import {hash,isAdmin,keys} from './auth.js';
 
 // Bounded, current workflow summaries for the existing PA report. No new tasks
@@ -39,6 +40,23 @@ const txt=(v,max,required=false)=>{check(typeof v==='string'&&v.length<=max&&(!r
 const iso=v=>{check(typeof v==='string'&&Number.isFinite(Date.parse(v)),'Provide the source timestamp.');return new Date(v).toISOString();};
 function link(v){if(!v)return '';let u;try{u=new URL(v);}catch{throw new UserError('Use a complete secure source link.');}check(u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<=2000,'Use a secure source link.');return u.href;}
 const canSee=(u,r)=>r.scope==='private'?u.username==='alex':isAdmin(u.username)||r.assigned_to===u.username;
+// Require access to every app task contributing to a shared PA conversation.
+export async function visiblePaRows(env,user,rows){
+ if(!rows.length||isAdmin(user.username))return rows.filter(r=>canSee(user,r));
+ await ensureTaskSchema(env.DB);
+ const sources=(await env.DB.prepare(`SELECT task_id AS id,coalesce(nullif(s.pa_task_id,''),json_extract(e.payload,'$.pa_task_id')) pa_task_id,
+  json_extract(e.payload,'$.parent_cycle_id') parent_cycle_id,json_extract(e.payload,'$.kind') kind,
+  json_extract(e.payload,'$.assigned_to') assigned_to,json_extract(e.payload,'$.created_by') created_by,
+  json_extract(e.payload,'$.visibility') visibility FROM v2_task_events e LEFT JOIN v2_task_sync s USING(task_id)
+  WHERE e.revision=(SELECT MAX(revision) FROM v2_task_events latest WHERE latest.task_id=e.task_id)`).all()).results;
+ return rows.filter(r=>{
+  if(r.scope!=='fenmeat')return false;
+  const linked=sources.filter(t=>t.id===r.app_task_id||t.pa_task_id===r.id||t.parent_cycle_id===r.id);
+  if(!linked.length)return r.assigned_to===user.username;
+  return linked.every(t=>fullTaskAccess(user,t))&&(r.assigned_to===user.username||
+   linked.every(t=>isTaskManager(user.username)&&taskVisibility(t)==='operational'));
+ });
+}
 const canReadRabbi=user=>['alex','alinda','xalinda','xavier'].includes(user.username);
 // Share the reading itself, never the surrounding private report, links or replies.
 function rabbiReading(report){
@@ -48,7 +66,7 @@ function rabbiReading(report){
 async function latest(db,key){const r=await db.prepare('SELECT * FROM v2_pa_report_versions WHERE resource_key=? ORDER BY revision DESC LIMIT 1').bind(key).first();return r?{...JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at}:null;}
 async function subject(env,user,key){
  const register=await latest(env.DB,'register');
- if(TSK.test(key)){const r=register?.rows.find(r=>r.id===key);check(r&&canSee(user,r),'Report item not found.',404);const mail=user.username==='alex'?await env.DB.prepare('SELECT summary FROM v2_pa_followup_mail WHERE subject_key=? ORDER BY revision DESC LIMIT 1').bind(key).first():null;const current=projectMail(r,mail&&JSON.parse(mail.summary));return {...current,subject_key:r.id,subject_hash:await hash(JSON.stringify(current)),register_revision:register.revision};}
+ if(TSK.test(key)){const r=register?.rows.find(r=>r.id===key);check(r&&(await visiblePaRows(env,user,[r])).length,'Report item not found.',404);const mail=user.username==='alex'?await env.DB.prepare('SELECT summary FROM v2_pa_followup_mail WHERE subject_key=? ORDER BY revision DESC LIMIT 1').bind(key).first():null;const current=projectMail(r,mail&&JSON.parse(mail.summary));return {...current,subject_key:r.id,subject_hash:await hash(JSON.stringify(current)),register_revision:register.revision};}
  check(user.username==='alex','Report item not found.',404);
  const m=/^(report-\d{4}-\d{2}-\d{2}):([a-zA-Z0-9-]{1,90})$/.exec(key??'');check(m,'Invalid report item.');
  const report=await latest(env.DB,m[1]),item=report?.sections.flatMap(s=>s.items).find(i=>i.id===m[2]);check(item,'Report item not found.',404);
@@ -106,7 +124,7 @@ function feedbackRow(r){const payload=JSON.parse(r.payload),answer=r.answer_payl
  answer_status:answer?'answered':r.processing_error?'retry':requiresAnswer(payload)?'awaiting_answer':r.acknowledged_at?'recorded':'pending',
  acknowledged_at:r.acknowledged_at,outcome:r.outcome,source_url:r.source_url,answer,answered_at:r.answered_at||null,processing_error:answer?null:r.processing_error||null};}
 async function feedbackById(db,id){return db.prepare(feedbackSelect+' WHERE f.id=?').bind(id).first();}
-export {canSee as canSeePa,users as paUsers};
+export {users as paUsers};
 export async function readConversation(env,user,key,offset=0){
  const current=await subject(env,user,key);offset=Number(offset);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  // Private report comments are included in their linked task only for Alex.
@@ -114,6 +132,7 @@ export async function readConversation(env,user,key,offset=0){
  return {subject:current,feedback:list.results.slice(0,50).map(feedbackRow),next_offset:list.results.length>50?offset+50:null};
 }
 export async function readPaReport(env,user,query={}){
+ if(query.resource==='summary'&&query.id==='task-access')return (await import('./task-workspace.js')).taskAccessSummary(env,user);
  if(query.resource==='summary'&&/^tasks-workspace(?:-(open|scheduled|closed))?$/.test(query.id||''))return (await import('./task-workspace.js')).workspaceDiagnostic(env,user,{status:query.id.split('-')[2]||'open'});
  if(query.resource==='summary'&&query.id==='tasks-performance')return (await import('./task-performance.js')).taskPerformance(env,user);
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
@@ -179,7 +198,7 @@ export async function readPaReport(env,user,query={}){
   env.DB.prepare('SELECT subject_key,remind_at,request_id FROM v2_pa_report_reminders WHERE username=?').bind(user.username),
   env.DB.prepare("SELECT resource_key,MAX(revision) revision FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' GROUP BY resource_key ORDER BY resource_key DESC LIMIT 30")
  ]);
- const raw=reg.results[0],register=raw?{...JSON.parse(raw.payload),revision:raw.revision,saved_at:raw.saved_at}:null,rawRows=register?.rows.filter(r=>canSee(user,r))??[];
+ const raw=reg.results[0],register=raw?{...JSON.parse(raw.payload),revision:raw.revision,saved_at:raw.saved_at}:null,rawRows=await visiblePaRows(env,user,register?.rows||[]);
  const mails=user.username==='alex'&&query.view!=='inbox'?await mailSummaries(env.DB):new Map();
  const rows=rawRows.map(r=>projectMail(r,mails.get(r.id)));
  const visible=new Set(rows.map(r=>r.id));
@@ -203,7 +222,7 @@ export async function readPaReport(env,user,query={}){
  if(query.view==='inbox')return {alerts:currentAlerts,reminders:reminders.map(({request_id,...r})=>r)};
  for(const r of rows){const fingerprint=await hash(JSON.stringify(r));r.subject_key=r.id;r.subject_hash=fingerprint;}
  if(report)for(const s of report.sections)for(const i of s.items){i.subject_key='report-'+report.date+':'+i.id;i.subject_hash=await hash(JSON.stringify({...i,subject_key:undefined,subject_hash:undefined}));}
- return {username:user.username,admin:isAdmin(user.username),private_report:user.username==='alex',rabbi_access,rabbi,rabbi_history,today:today(),users:isAdmin(user.username)?users(env):[user.username],register_revision:register?.revision??0,source_at:register?.source_at??null,source_url:register?.source_url??null,summary:summary(rows),rows,feedback,report,history,reminders:reminders.map(({request_id,...r})=>r),alerts:currentAlerts};
+ return {username:user.username,admin:isAdmin(user.username),private_report:user.username==='alex',rabbi_access,rabbi,rabbi_history,today:today(),users:isAdmin(user.username)?users(env):[user.username],register_revision:register?.revision??0,source_at:register?.source_at??null,source_url:isAdmin(user.username)?register?.source_url??null:null,summary:summary(rows),rows,feedback,report,history,reminders:reminders.map(({request_id,...r})=>r),alerts:currentAlerts};
 }
 function validateRegister(data,env){
  check(data&&Array.isArray(data.rows)&&data.rows.length>0&&data.rows.length<=2000,'Supply the complete bounded PA register.');
