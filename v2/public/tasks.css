@@ -35,5 +35,5 @@
 .workflow progress{display:block;width:100%;height:18px;accent-color:#166534;margin:.5rem 0}
 .draft-step{padding:16px;border:1px solid #b8c7d4;border-radius:10px;margin:12px 0;background:#f6f9fc;min-width:0}
 .draft-step h3{margin-top:0}.step-list{padding-left:0;list-style:none}.step{overflow-wrap:anywhere}
-.step .actions{flex-wrap:wrap}.step .actions button{min-height:44px}.step.overdue{border-left:4px solid #b91c1c}
+.step .actions{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,130px),1fr));align-items:stretch}.step .actions button{min-height:44px;min-width:0;overflow-wrap:normal;word-break:normal}.step .actions [data-step-note]{grid-column:1/-1}.step.overdue{border-left:4px solid #b91c1c}
 .workflow p{margin:.5rem 0}.workflow a{display:inline-block;margin:4px 8px 4px 0}
