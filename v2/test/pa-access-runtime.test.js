@@ -40,6 +40,60 @@ async function fixture(t) {
 }
 async function businessSnapshot(db) {const result={};for(const table of ['v2_catalog','v2_events','v2_production_events','v2_recipe_events','v2_history','v2_sync','v2_zoho_connection'])result[table]=(await db.prepare('SELECT * FROM '+table).all()).results;return result;}
 const change=(target,revision,data,extra={})=>({target,revision,data,request_id:crypto.randomUUID(),reason:'Synthetic owner instruction for isolated test',...extra});
+test('Task connector creates without task_id, exposes its contract, and replays through both transports',async t=>{
+ const f=await fixture(t),write=await f.connect(true),read=await f.connect(),before=await businessSnapshot(f.db);
+ const context=await ok(f,write.tokens,'get_app_edit_context',{target:'tasks'});assert.match(context.save_contract.create,/optional ONLY for create/);
+ const list=await f.rpc(write.tokens,'tools/list');const schema=list.data.result.tools.find(x=>x.name==='save_task').inputSchema.properties.task.allOf.find(s=>s.required);
+ assert.ok(schema.required.includes('request_id'));assert.ok(schema.required.includes('revision'));assert.ok(!schema.required.includes('task_id'));
+ const task={action:'create',revision:0,request_id:crypto.randomUUID(),data:{title:'Synthetic connector service',details:'Isolated acceptance',assigned_to:'alex',due_date:'2099-11-23',priority:'Normal',reminder_mode:'once',reminder_at:'2099-11-23T05:00:00.000Z'}};
+ assert.equal((await f.rpc(read.tokens,'tools/call',{name:'save_task',arguments:{task}})).response.status,403);
+ const created=await ok(f,write.tokens,'save_task',{task});assert.match(created.task.id,/^pa-[a-f0-9]{64}$/);assert.equal(created.task.revision,1);assert.equal(created.task.status,'Scheduled');
+ const reordered={data:Object.fromEntries(Object.entries(task.data).reverse()),request_id:task.request_id,revision:0,action:'create'};
+ assert.equal((await ok(f,write.tokens,'save_task',{task:reordered})).replayed,true);
+ assert.equal((await ok(f,write.tokens,'save_app_data',{target:'tasks',revision:0,request_id:task.request_id,reason:'Same authorised retry',data:{action:'create',data:task.data}})).replayed,true);
+ assert.equal((await ok(f,write.tokens,'save_task',{task:{...task,task_id:created.task.id}})).replayed,true);
+ assert.equal((await call(f,write.tokens,'save_task',{task:{...task,data:{...task.data,title:'Different intention'}}})).isError,true);
+ const current=await ok(f,read.tokens,'get_tasks',{query:{task_id:created.task.id}});assert.equal(current.task.title,task.data.title);assert.equal(current.history.length,1);
+ assert.equal((await ok(f,read.tokens,'get_tasks')).tasks.length,1);
+ const browser=await f.req('/api/tasks?id='+created.task.id,{headers:{Cookie:write.session}});assert.equal((await browser.json()).task.id,created.task.id);
+ assert.deepEqual(await businessSnapshot(f.db),before);
+});
+
+test('Task connector updates assignment, dates and reminder, keeps history, and enforces completion rules',async t=>{
+ const f=await fixture(t),write=await f.connect(true);const created=await ok(f,write.tokens,'save_task',{task:{action:'create',revision:0,request_id:crypto.randomUUID(),data:{title:'Synthetic lifecycle',due_date:'2099-11-23',assigned_to:'alex',requires_evidence:true,document_url:'https://example.com/instructions.pdf',reminder_mode:'off'}}});
+ const id=created.task.id;let revision=1;
+ const save=(action,extra={})=>ok(f,write.tokens,'save_task',{task:{task_id:id,revision,request_id:crypto.randomUUID(),action,...extra}});
+ const updated=await save('update',{data:{assigned_to:'xavier',due_date:'2099-11-24',review_date:'2099-11-24',reminder_mode:'once',reminder_at:'2099-11-24T05:00:00.000Z'},note:'Authorised reschedule and assignment'});revision=updated.task.revision;
+ assert.equal(updated.task.assigned_to,'xavier');assert.equal(updated.task.document_url,'https://example.com/instructions.pdf');assert.equal(updated.task.reminder_at,'2099-11-24T05:00:00.000Z');
+ assert.equal((await call(f,write.tokens,'save_task',{task:{task_id:id,revision:1,request_id:crypto.randomUUID(),action:'update',data:{title:'Stale'}}})).isError,true);
+ assert.equal((await call(f,write.tokens,'save_task',{task:{task_id:id,revision,request_id:crypto.randomUUID(),action:'complete'}})).isError,true);
+ const complete=await save('complete',{proof_url:'https://example.com/proof.pdf',note:'Synthetic acceptance only'});revision=complete.task.revision;assert.equal(complete.task.status,'Complete');
+ const reopened=await save('reopen',{note:'Synthetic reopen acceptance'});revision=reopened.task.revision;assert.equal(reopened.task.status,'Scheduled');
+ const waiting=await save('wait',{note:'Synthetic dependency',review_date:'2099-11-25'});revision=waiting.task.revision;assert.equal(waiting.task.status,'Waiting');
+ const current=await ok(f,write.tokens,'get_tasks',{query:{task_id:id}});assert.deepEqual(current.history.map(h=>h.action),['wait','reopen','complete','update','create']);assert.equal(current.task.requires_evidence,true);
+ const audit=await (await f.req('/api/tasks/audit?id='+id,{headers:{Cookie:write.session}})).json();assert.equal(audit.history.length,5);assert.equal(audit.history.find(h=>h.action==='complete').task.completion.proof_url,'https://example.com/proof.pdf');
+});
+
+test('Task connector rejects invalid identifiers clearly and preserves historical replay fingerprints',async t=>{
+ const f=await fixture(t),write=await f.connect(true);const task={task_id:crypto.randomUUID(),revision:0,request_id:crypto.randomUUID(),action:'create',data:{title:'Synthetic legacy retry',due_date:'2099-11-23',reminder_mode:'off'}};
+ for(const [field,value]of [['request_id','bad_key'],['task_id','short']]){const result=await call(f,write.tokens,'save_task',{task:{...task,[field]:value}});assert.equal(result.isError,true);assert.match(result.content[0].text,new RegExp(field));}
+ const missing=await call(f,write.tokens,'save_task',{task:{action:'update',revision:1,request_id:crypto.randomUUID(),data:{title:'Missing identity'}}});assert.match(missing.content[0].text,/task_id/);
+ await ok(f,write.tokens,'save_task',{task});await f.db.prepare('UPDATE v2_task_events SET fingerprint=? WHERE request_id=?').bind(await hash(JSON.stringify({...task,actor:'alex'})),task.request_id).run();
+ assert.equal((await ok(f,write.tokens,'save_task',{task})).replayed,true);
+ const simultaneous={action:'create',revision:0,request_id:crypto.randomUUID(),data:{title:'Synthetic concurrent retry',due_date:'2099-11-23',reminder_mode:'off'}};
+ const results=await Promise.all([ok(f,write.tokens,'save_task',{task:simultaneous}),ok(f,write.tokens,'save_task',{task:simultaneous})]);assert.equal(results[0].task.id,results[1].task.id);
+ assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM v2_task_events WHERE request_id=?').bind(simultaneous.request_id).first()).n,1);
+});
+
+test('Connector 07:00 SAST reminder queues once at 05:00 UTC and is withdrawn after completion',async t=>{
+ const {queueTaskReminders}=await import('../src/tasks-push.js');const f=await fixture(t),write=await f.connect(true);
+ const created=await ok(f,write.tokens,'save_task',{task:{action:'create',revision:0,request_id:crypto.randomUUID(),data:{title:'Synthetic timed reminder',due_date:'2099-11-23',reminder_mode:'once',reminder_at:'2099-11-23T05:00:00.000Z'}}});const id=created.task.id;
+ await queueTaskReminders({DB:f.db},new Date('2099-11-23T04:59:59Z'));assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM v2_task_notifications WHERE task_id=? AND kind='due'").bind(id).first()).n,0);
+ await queueTaskReminders({DB:f.db},new Date('2099-11-23T05:00:00Z'));await queueTaskReminders({DB:f.db},new Date('2099-11-23T05:05:00Z'));
+ assert.equal((await f.db.prepare("SELECT COUNT(*) n FROM v2_task_notifications WHERE task_id=? AND kind='due'").bind(id).first()).n,1);
+ await ok(f,write.tokens,'save_task',{task:{task_id:id,revision:1,request_id:crypto.randomUUID(),action:'complete',note:'Synthetic test complete'}});
+ assert.equal((await ok(f,write.tokens,'get_tasks')).notifications.filter(n=>n.task_id===id&&n.kind==='due').length,0);
+});
 test('Financial connector uses owner write scope, audited records and explicit readback',async t=>{
  const f=await fixture(t),read=await f.connect(),write=await f.connect(true),before=await businessSnapshot(f.db);
  const args=change('financial',0,{record:{id:'synthetic-finance-weekly',type:'weekly',data:{supplier:'Synthetic',reference:'SYN-FIN-1',amount:10000,opening_paid:0,status:'To Pay'}}});

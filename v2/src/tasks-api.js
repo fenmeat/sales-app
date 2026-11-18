@@ -109,12 +109,17 @@ function validateTask(raw,env){
 function notification(db,requestId,username,task,kind,at){return db.prepare('INSERT INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind(requestId+'-'+username,username,task.id,kind,at);}
 export async function saveTask(env,user,b){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
- check(b&&ID.test(b.request_id??'')&&ID.test(b.task_id??''),'Use a valid save identifier.');
+ check(b&&typeof b.request_id==='string'&&ID.test(b.request_id),'Die taak is nie gestoor nie: request_id ontbreek of is ongeldig. Gebruik 8–90 letters, syfers of koppeltekens en behou dieselfde request_id vir ’n identiese herhaling.');
+ // A new connector task has no database ID yet. Derive it from the owner and
+ // retry key, never a fresh random UUID, so an interrupted create is replayable.
+ if(user.via==='pa'&&(b.action??'create')==='create'&&(b.task_id===undefined||b.task_id===null||b.task_id===''))b={...b,task_id:'pa-'+await hash(JSON.stringify([user.username,b.request_id]))};
+ check(typeof b.task_id==='string'&&ID.test(b.task_id),'Die taak is nie gestoor nie: task_id ontbreek of is ongeldig. Lees die bestaande taak se id terug; gebruik 8–90 letters, syfers of koppeltekens. By ’n nuwe PA-taak kan task_id weggelaat word.');
  check(Number.isSafeInteger(b.revision)&&b.revision>=0,'Read the task before saving.');
  if(['report_contacts','queue_email','email_status','cancel_email'].includes(b.action))return mailAction(env,user,b,()=>getTask(env.DB,b.task_id));
- const fingerprint=await hash(JSON.stringify({...b,actor:user.username}));
+ const legacyFingerprint=await hash(JSON.stringify({...b,actor:user.username}));
+ const fingerprint=user.via==='pa'?await hash(JSON.stringify(canonicalTaskRequest({...b,actor:user.username}))):legacyFingerprint;
  const prior=await env.DB.prepare('SELECT fingerprint,task_id,revision FROM v2_task_events WHERE request_id=?').bind(b.request_id).first();
- if(prior){check(prior.fingerprint===fingerprint,'This save identifier belongs to a different action.',409);return {task:visible(user,await getTask(env.DB,prior.task_id)),replayed:true};}
+ if(prior){check([fingerprint,legacyFingerprint].includes(prior.fingerprint),'Hierdie request_id is reeds vir ander inhoud gebruik. Lees die taak terug; gebruik ’n nuwe request_id slegs vir ’n nuwe wysiging.',409);return {task:visible(user,await getTask(env.DB,prior.task_id)),replayed:true};}
  const old=await getTask(env.DB,b.task_id),admin=isAdmin(user.username),at=new Date().toISOString();
  if(old)visible(user,old);
  check((old?.revision??0)===b.revision,'This task changed. Reload before saving.',409);
@@ -259,7 +264,12 @@ export async function saveTask(env,user,b){
  if(['respond','note'].includes(action))recipients.add(task.created_by);
  if(['respond','note','complete','undo_complete'].includes(action)&&old?.feedback_request)recipients.add(old.feedback_request.by);
  for(const recipient of recipients)if(recipient!==user.username&&!(action==='complete'&&recipient===task.created_by)&&canSeeTask({username:recipient},task))statements.push(notification(env.DB,b.request_id,recipient,task,'response',at));
- try{await env.DB.batch(statements);}catch{throw new UserError('This task changed while saving. Reload; your previous work is safe.',409);}
+ try{await env.DB.batch(statements);}catch{
+  // Concurrent identical retries may reach the unique constraint together.
+  const saved=await env.DB.prepare('SELECT fingerprint,task_id FROM v2_task_events WHERE request_id=?').bind(b.request_id).first();
+  if(saved&&[fingerprint,legacyFingerprint].includes(saved.fingerprint))return {task:visible(user,await getTask(env.DB,saved.task_id)),replayed:true};
+  throw new UserError('This task changed while saving. Reload; your previous work is safe.',409);
+ }
  return {task:await getTask(env.DB,task.id),replayed:false};
 }
 export async function acknowledgeTask(env,user,b){
@@ -329,6 +339,21 @@ function openTask(task){return ['Pending','Scheduled','Waiting'].includes(task.s
 export async function readTasksForPa(env,user,query={}){
  await ensureTaskSchema(env.DB);check(isAdmin(user.username),'Only admins can read PA task integration.',403);
  if(query.resource==='email_requests'||query.resource==='report_contacts')return readTaskMail(env,user,query);
- if(query.task_id){const task=await getTask(env.DB,query.task_id);check(task,'Task not found.',404);return {task};}
- return listTasks(env,user,{pending_sync:query.resource==='pending_sync',offset:query.offset??0});
+ if(query.task_id){const task=await getTask(env.DB,query.task_id);check(task,'Task not found.',404);const history=await env.DB.prepare('SELECT revision,action,actor,saved_at FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 50').bind(task.id).all();return {task,history:history.results,history_has_more:task.revision>50,save_contract:taskSaveContract};}
+ return {...await listTasks(env,user,{pending_sync:query.resource==='pending_sync',offset:query.offset??0}),save_contract:taskSaveContract};
 }
+
+function canonicalTaskRequest(value){
+ if(Array.isArray(value))return value.map(canonicalTaskRequest);
+ if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonicalTaskRequest(value[k])]));
+ return value;
+}
+const taskSaveContract={
+ create:'save_task({task:{action:"create",revision:0,request_id,data:{title,details,assigned_to,due_date,review_date,priority,reminder_mode,reminder_at}}}). task_id is optional ONLY for create; omitted IDs are derived from owner + request_id. Search all get_tasks pages before creating; reuse an existing task for the same obligation.',
+ update:'Read the current task first. save_task({task:{action:"update",task_id:task.id,revision:task.revision,request_id,data:{only_changed_fields},note}}). Use existing usernames from users. Use details for the description.',
+ identifiers:'task_id and save_task request_id: 8–90 ASCII letters, digits or hyphens. UUIDs are safe. save_app_data request_id: 16–80. Reuse the SAME request_id and identical content for a retry; a changed request needs a new request_id. Never use a task id as the request id.',
+ actions:'Use complete, reopen, wait or cancel for status, not data.status. wait requires note (the waiting reason) and review_date; reopen requires note. Workflow steps retain their existing completion/evidence rules.',
+ reminder:'reminder_mode: once, daily or off. once requires a future UTC ISO timestamp with milliseconds; 07:00 Africa/Johannesburg is 05:00:00.000Z. A future open reminder displays Scheduled until its due date, then Pending.',
+ readback:'After saving, call get_tasks({query:{task_id:result.task.id}}) and check the actual saved fields and revision before reporting success. History is append-only; these reads include the latest 50 event summaries.',
+ fallback:'save_app_data({target:"tasks",revision,request_id,reason,data:{task_id,action,data,...action_fields}}) uses the same task writer. Omit task_id only for create.'
+};
