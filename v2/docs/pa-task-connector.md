@@ -68,3 +68,18 @@ stale revisions, evidence, complete/reopen/wait, audit preservation and one-time
 
 Rollback is a code deployment of the prior release. Keep all append-only events,
 including tasks created with generated IDs; those IDs satisfy the older format.
+
+## Tasks access from 0.48.0
+
+Create ordinary team work with `data.visibility="operational"`. Alex, Alinda,
+Xalinda and Xavier can manage it. They can delegate the parent and its steps to
+registered Tasks users. Ordinary workflows still require explicit final approval.
+Private PA report items remain Alex-only. The administrator-only PO dispatch
+confirmation and PA processing permissions continue to apply.
+
+Use `assigned` for restricted assignments or `confidential` for Alex and Alinda.
+Existing unclassified records keep assignment-based access. Supplier stocktakes
+are operational. An administrator can classify a reviewed record in place with
+`set_visibility`, its current revision and a reason. This appends a history event
+and preserves the original task, attachments, completion and PA sync position.
+The owner can check current role counts using daily report summary `task-access`.

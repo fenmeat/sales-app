@@ -7,7 +7,7 @@ import {taskUsers,latestSQL,decode,currentTaskNotification,ensureTaskSchema,getT
 import {visiblePaRows,paUsers,ensurePaReportSchema,readPaReport} from './pa-report-api.js';
 import {unifiedWork,selectWork,workCounts} from '../public/pa-report-model.js';
 
-const statuses=new Set(['open','scheduled','waiting','closed','submitted','all']);
+const statuses=new Set(['open','scheduled','waiting','closed','complete','cancelled','submitted','all']);
 const sourceFields=['id','title','kind','task_type','status','revision','pa_task_id','parent_cycle_id','assigned_to','created_by','due_date','review_date','next_action_date','requires_evidence','document_url','pa_sync','step_only','visibility','priority','can_manage'];
 const workStatus=t=>t.pa_work?.find(j=>j.status!=='answered')?.status||t.pa_work?.at(-1)?.status;
 const brief=t=>({...Object.fromEntries(sourceFields.filter(k=>t[k]!==undefined).map(k=>[k,t[k]])),pa_work_status:workStatus(t),brief:true});

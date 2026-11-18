@@ -24,7 +24,7 @@ export function unifiedWork(app,pa){
 export function workCounts(rows,username){const active=rows.filter(paOpen);return {open:active.length,mine:active.filter(r=>r.assigned_to===username||r.steps?.some(s=>s.assigned_to===username)).length,fenmeat:active.filter(r=>r.scope==='fenmeat').length,private:active.filter(r=>r.scope==='private').length,pending:active.filter(r=>r.status==='Pending').length,waiting:active.filter(r=>r.status==='Waiting').length,scheduled:active.filter(r=>r.status==='Scheduled').length,submitted:rows.filter(r=>r.completion_pending).length};}
 export function selectWork(rows,{username,admin,scope='mine',status='open',search='',person='',date='',priority=''}){
  return rows.filter(r=>(scope==='mine'?(r.assigned_to===username||r.steps?.some(s=>s.assigned_to===username)):scope==='private'?r.scope==='private':scope==='fenmeat'?r.scope==='fenmeat':admin)
- &&(status==='all'||status==='open'&&r.status==='Pending'||status==='scheduled'&&r.status==='Scheduled'||status==='closed'&&['Complete','Cancelled','Archived'].includes(r.status)||status==='waiting'&&r.status==='Waiting'||status==='submitted'&&r.completion_pending)
+ &&(status==='all'||status==='open'&&r.status==='Pending'||status==='scheduled'&&r.status==='Scheduled'||status==='closed'&&['Complete','Cancelled','Archived'].includes(r.status)||status==='complete'&&r.status==='Complete'||status==='cancelled'&&r.status==='Cancelled'||status==='waiting'&&r.status==='Waiting'||status==='submitted'&&r.completion_pending)
  &&(!person||r.assigned_to===person||r.steps?.some(s=>s.assigned_to===person))
  &&(!date||[r.due_date,r.review_date,paDue(r)].includes(date)||r.steps?.some(s=>s.due_date===date))
  &&(!priority||r.priority===priority)

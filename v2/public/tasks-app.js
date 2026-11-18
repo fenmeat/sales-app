@@ -164,9 +164,9 @@ function createAttachments(required=false,report=false){return `<section aria-la
  <input id="take-photo" data-photo-input hidden type="file" accept="image/*" capture="environment"><input id="library-photo" data-photo-input hidden type="file" multiple accept="image/*">
  <input id="attachment" hidden type="file" multiple accept="${report?REPORT_FILE_ACCEPT:TASK_FILE_ACCEPT}"><p class="help">Hoogstens ${MAX_TASK_ATTACHMENTS} lêers op ’n slag. Foto’s word op jou toestel verklein. ${report?'Tot 500 KB per dokument in die PA-gesprek.':'Tot 6 MB per dokument en 6 MB saam wanneer jy taakbesonderhede of ’n nota stoor.'}</p>
  <p id="attachment-status" role="status" aria-live="polite"></p><ul id="attachment-list" aria-label="Selected attachments"></ul></section>`;}
-async function editCurrent(t){
+async function editCurrent(t,focusField){
  if(!t)return;
- try{const [fresh]=await Promise.all([api('/api/tasks?id='+encodeURIComponent(t.id)),prepareOptions()]);if(!fresh.task)throw Error('Die oorspronklike taak kon nie laai nie. Verfris en probeer weer.');edit(fresh.task);}catch(e){toast(e.message);}
+ try{const [fresh]=await Promise.all([api('/api/tasks?id='+encodeURIComponent(t.id)),prepareOptions()]);if(!fresh.task)throw Error('Die oorspronklike taak kon nie laai nie. Verfris en probeer weer.');edit(fresh.task);if(focusField==='assigned_to')dialog.querySelector('[name=assigned_to]')?.focus();}catch(e){toast(e.message);}
 }
 function linkedTasks(item){
  const ids=new Set([item.id,item.subject_key,...(item.pa_task_ids||[])]);
