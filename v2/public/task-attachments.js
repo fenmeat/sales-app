@@ -154,7 +154,7 @@ export function attachmentPicker(form,{taskId,api,prepareFile,report=false}){
   const scan=form.querySelector('[data-scan]');
   if(scan)scan.onclick=()=>{
     if(entries.length>=MAX_TASK_ATTACHMENTS){error.textContent='Verwyder eers ’n lêer. Hoogstens 12 per taak.';return;}
-    closeScanner=openScanner({attach:file=>add([file]),limit:LIMIT});
+    closeScanner=openScanner({attach:file=>add([file]),limit:report?MAX_BYTES:LIMIT});
   };
   render();
   async function prepare(){

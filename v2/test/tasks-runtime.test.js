@@ -303,3 +303,46 @@ test('multi-chunk and losslessly packed task documents reopen byte-for-byte and 
  assert.equal((await call('alex','/api/tasks/file',{...txt,task_id:create.task_id})).status,200);
  assert.match((await readFile('alex',txt.id)).headers.get('Content-Disposition'),/^attachment;/);
 });
+
+test('documents append atomically at every task stage while preserving completion and access',async t=>{
+ const {call,task,readFile,db}=await fixture(t),b={...task({task_type:'legacy',requires_evidence:true}),files:[instructionFile()]};
+ let current=(await call('alex','/api/tasks',b)).data.task;
+ const send=(action,extra={})=>call('xalinda','/api/tasks',{task_id:current.id,revision:current.revision,request_id:crypto.randomUUID(),action,...extra});
+ for(const stage of ['Pending','Waiting','Complete','Cancelled']){
+  if(stage==='Waiting')current=(await send('wait',{note:'Waiting for delivery',review_date:today()})).data.task;
+  if(stage==='Complete')current=(await send('complete',{proof_url:'https://example.com/completion'})).data.task;
+  if(stage==='Cancelled')current=(await call('alex','/api/tasks',{task_id:current.id,revision:current.revision,request_id:crypto.randomUUID(),action:'cancel',note:'Keep history'})).data.task;
+  assert.equal(current.status,stage);
+  const before=structuredClone(current),file=instructionFile(),request={task_id:current.id,revision:current.revision,request_id:crypto.randomUUID(),action:'attach',files:[file]};
+  assert.equal((await call('xavier','/api/tasks',request)).status,404);
+  const saved=await call('xalinda','/api/tasks',request);assert.equal(saved.status,200,JSON.stringify(saved.data));current=saved.data.task;
+  assert.equal(current.status,stage);assert.deepEqual(current.completion,before.completion);
+  assert.deepEqual(current.attachments,[...before.attachments,file.id]);
+  assert.equal((await call('xalinda','/api/tasks',request)).data.replayed,true);
+  assert.equal((await call('xalinda','/api/tasks',{...request,request_id:crypto.randomUUID()})).status,409);
+  const fetched=await readFile('xalinda',file.id);assert.equal(fetched.status,200);assert.deepEqual(Buffer.from(await fetched.arrayBuffer()),Buffer.from(file.base64,'base64'));
+  assert.equal((await readFile('xavier',file.id)).status,404);
+ }
+ const count=(await db.prepare('SELECT COUNT(*) n FROM v2_task_events').first()).n;
+ const collision={...task(),files:[instructionFile()]};await call('alex','/api/tasks',collision);
+ for(const files of [[],[null],Array.from({length:13},()=>instructionFile()),[instructionFile(),collision.files[0]]]){
+  const r=await send('attach',{files});assert.ok([400,409].includes(r.status),JSON.stringify(r));
+ }
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_task_events').first()).n,count+1,'failed batches do not create revisions');
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_task_attachments').first()).n,6,'failed batches do not leave files');
+ const scheduled=(await call('alex','/api/tasks',task({task_type:'reminder',due_date:'2099-12-01',review_date:'2099-12-01'}))).data.task;
+ assert.equal(scheduled.status,'Scheduled');current=scheduled;
+ assert.equal((await send('attach',{files:[instructionFile()]})).data.task.status,'Scheduled');
+});
+
+test('edits, notes and PA requests retain their scanned documents as references, never completion proof',async t=>{
+ const {call,task}=await fixture(t),b={...task({requires_evidence:true}),files:[instructionFile()]};
+ let current=(await call('alex','/api/tasks',b)).data.task;
+ for(const [action,extra] of [['update',{data:{title:'Updated with scan'}}],['note',{note:'Delivery scan attached'}],['pa_request',{note:'Read the attached document'}]]){
+  const file=instructionFile(),r=await call('alex','/api/tasks',{task_id:current.id,revision:current.revision,request_id:crypto.randomUUID(),action,...extra,files:[file]});
+  assert.equal(r.status,200,JSON.stringify(r.data));assert.deepEqual(r.data.task.attachments,[...current.attachments,file.id]);current=r.data.task;
+ }
+ assert.equal(current.pa_work[0].instruction,'Read the attached document');
+ const complete=await call('xalinda','/api/tasks',{task_id:current.id,revision:current.revision,request_id:crypto.randomUUID(),action:'complete',attachments:[current.attachments.at(-1)]});
+ assert.equal(complete.status,400);assert.match(complete.data.error,/instruction photos/);
+});

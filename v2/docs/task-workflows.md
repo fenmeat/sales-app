@@ -122,3 +122,34 @@ and UI suites, and qa-task-editing.mjs (real Worker/D1 saves through shipped
 browser forms on desktop, phone, iPhone and iPad profiles). Device profiles do
 not certify physical Apple hardware. Rollback is a forward fix retaining all
 new events, evidence links and prior data; do not bulk restore the database.
+
+
+## Scanning throughout a task — 0.46.3
+
+PA conversation replies, completion confirmations, assignment requests, update
+requests and reminder forms now use the same Take Photo / Scan Document / Photo
+Library / Choose Files controls as task creation. Task edits, notes, direct PA
+requests and answers to PA also use that picker. Existing completion and workflow
+step evidence continue to use it.
+
+Every task detail screen offers “Scan Document / voeg lêers by”, including
+Scheduled, Waiting, Complete and Cancelled tasks. The `attach` action adds reference
+documents without reopening the task or replacing its recorded completion. Edits
+and notes may supply `files` atomically with their existing action. Append-only
+revisions, request replay and the existing visibility checks apply; conflicting or
+invalid files roll back with the task event. Up to 12 new files can be selected at
+a time, with a bounded total of 120 reference documents. Reference documents never
+satisfy required completion evidence. No schema migration is needed.
+
+PA conversation files retain their existing 500 KB limit and private report
+storage; the scanner respects that limit before attaching a PDF. Task files retain
+their 6 MB document limit and the combined 6 MB limit for atomic task saves. The
+form explains its applicable limit. Existing uploaded files are preserved.
+
+Validation: all 519 automated checks and the deployment dry run passed. Coverage
+includes DOM form coverage at every stage, real scanner image-to-PDF
+conversion inside a PA reply, Worker/D1 persistence, private reads, unchanged
+completion, stale revisions, atomic rollback and identical retries after a lost
+response. The local Chromium visual run could not start because the execution
+host disallows its socket creation. Physical iPad/iPhone/Android camera and layout
+acceptance remain unverified; no live test tasks or messages were created.

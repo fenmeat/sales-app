@@ -342,3 +342,30 @@ test('converted dispatch workflow shows its steps without obsolete sending instr
  assert.ok(ui.dialog.querySelector('[data-step-complete="pay"]'));
  assert.match(ui.dialog.textContent,/Kontroleer die staat/);
 });
+
+test('existing tasks at every stage expose the shared scanner and retain files on a failed save',async()=>{
+ for(const status of ['Pending','Scheduled','Waiting','Complete','Cancelled']){
+  const task=reportTask({status,attachments:['existing-reference']});
+  const ui=await screen('xavier',[task],'?status=all');ui.document.querySelector('[data-task]').onclick();
+  ui.dialog.querySelector('#add-attachments').onclick();
+  const form=ui.dialog.querySelector('form');
+  assert.deepEqual([...form.querySelectorAll('.attachment-tools button')].map(b=>b.textContent),['Take Photo','Scan Document','Photo Library','Choose Files']);
+  assert.equal(typeof form.querySelector('[data-scan]').onclick,'function');
+  selectFiles(ui,[pdf('later-scan.pdf')]);ui.failNext();await form.onsubmit({preventDefault(){}});
+  assert.equal(ui.dialog.open,true);assert.equal(form.querySelectorAll('.attachment-row').length,1);
+  await form.onsubmit({preventDefault(){}});assert.deepEqual(ui.posts[0],ui.posts[1]);
+  assert.equal(ui.posts[1].action,'attach');assert.equal(ui.posts[1].files[0].filename,'later-scan.pdf');
+  assert.equal(ui.posts[1].data,undefined);assert.equal(ui.posts[1].attachments,undefined);
+ }
+});
+
+test('task edits, notes and PA followups share the scanner and submit documents with the message',async()=>{
+ for(const [button,action] of [['#edit','update'],['#add-note','note'],['#ask-pa','pa_request']]){
+  const ui=await screen('xavier',[reportTask({created_by:'xavier'})]);ui.document.querySelector('[data-task]').onclick();await ui.dialog.querySelector(button).onclick();
+  const form=ui.dialog.querySelector('form');assert.ok(form.querySelector('[data-scan]'));
+  if(form.elements.note)form.elements.note.value='Read this document';
+  selectFiles(ui,[pdf('followup.pdf')]);await form.onsubmit({preventDefault(){}});
+  assert.equal(ui.posts[0].action,action);assert.equal(ui.posts[0].files[0].filename,'followup.pdf');
+  assert.deepEqual(ui.postPaths,['/api/tasks']);
+ }
+});

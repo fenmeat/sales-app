@@ -125,7 +125,8 @@ export async function saveTask(env,user,b){
  check((old?.revision??0)===b.revision,'This task changed. Reload before saving.',409);
  check(env.TASK_WORKFLOWS_READ_ONLY!=='true'||!old||taskType(old)!=='workflow'||b.action==='restore_task_revision','Stapwysigings is tydelik gesluit vir onderhoud.',503);
  const action=b.action??'create';let task=old?structuredClone(old):null,files=[];
- check(b.files===undefined||['create','pa_result'].includes(action),'Task photos can only be supplied when creating a task.');
+ const appendFiles=['attach','update','note','respond','pa_request','pa_resume'].includes(action);
+ check(b.files===undefined||appendFiles||['create','pa_result'].includes(action),'Files cannot be added with this task action.');
  if(action==='create'){
   check(!old,'This task already exists.',409);
   check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||k==='area'),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat','Personal PA matters cannot be imported into FenMeat.');
@@ -163,6 +164,11 @@ export async function saveTask(env,user,b){
    check(admin||!['Complete','Cancelled'].includes(old.status),'Reopen this task before changing its instructions.');
    task=validateTask({...old,...b.data},env);
    check(task.task_type===old.task_type&&task.kind===old.kind&&task.parent_cycle_id===old.parent_cycle_id&&task.pa_task_id===old.pa_task_id,'Keep the existing task type and PA identity.');
+  }else if(action==='attach'){
+   // Reference documents can be added after completion without reopening work
+   // or replacing the evidence that was recorded when it was completed.
+   check(Array.isArray(b.files)&&b.files.length>0,'Kies eers ’n dokument of skandeer ’n bladsy.');
+   task.last_update={by:user.username,at,kind:'attachment',text:'Dokumente bygevoeg.'};
   }else if(action==='reminder'){
    check(openTask(old),'Reopen this task before changing its reminder.');
    check(b.data&&Object.keys(b.data).length&&Object.keys(b.data).every(k=>reminderFields.includes(k)),'Only reminder fields can be changed here.');
@@ -228,6 +234,16 @@ export async function saveTask(env,user,b){
    check(action==='cancel'||taskType(task)!=='workflow'||task.status==='Cancelled','Heropen die toepaslike stap.');
    check(admin||managesOwnTask(user,old),'Only admins can reopen or cancel tasks assigned by someone else.',403);text(b.note,2000,true);task.status=action==='reopen'?'Pending':'Cancelled';task.last_reason=b.note;task.completion=null;
   }else throw new UserError('Unsupported task action.');
+ }
+ if(appendFiles&&b.files!==undefined){
+  check(Array.isArray(b.files)&&b.files.length<=12,'Choose up to 12 different attachments.');
+  for(const input of b.files)files.push(await attachmentData(input));
+  check(new Set(files.map(f=>f.id)).size===files.length,'Choose up to 12 different attachments.');
+  const ids=[...(task.attachments||[]),...files.map(f=>f.id)];
+  check(new Set(ids).size===ids.length,'Hierdie dokument is reeds by die taak gevoeg.',409);
+  check(ids.length<=120,'Hierdie taak het reeds baie dokumente. Voeg ’n dokumentskakel by.');
+  task.attachments=ids;
+  if(['attach','note','respond'].includes(action))task.last_update.attachments=files.map(f=>f.id);
  }
  if(['restore_task_revision','undo_complete'].includes(action)&&old?.pa_work)task.pa_work=old.pa_work;
  if(['create','note','respond'].includes(action)&&user.via!=='pa')registerTaskText(task,{...b,action},user,at);

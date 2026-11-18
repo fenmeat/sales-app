@@ -226,3 +226,31 @@ test('the original task edit action is absent for staff and private PA-only subj
  const ui=await screen('xavier',[task],'',null,p);ui.document.querySelector('#pa-status').onchange({target:{value:'all'}});assert.equal(ui.document.querySelector('[data-edit-task]'),null);
  ui.document.querySelector('[data-pa-action="respond"]').onclick();assert.doesNotMatch(ui.dialog.textContent,/Wysig oorspronklike taak/);assert.equal(ui.posts.length,0);
 });
+
+test('PA conversation actions all expose scanning and save the document with feedback',async()=>{
+ for(const action of ['respond','complete','assign','request_update','remind']){
+  const ui=await screen('alex',[],'?view=report',null,paState());
+  ui.document.querySelector('#pa-scope').onchange({target:{value:'all'}});ui.document.querySelector('#pa-status').onchange({target:{value:'all'}});
+  ui.document.querySelector(`[data-pa-action="${action}"]`).onclick();
+  const form=ui.dialog.querySelector('form');
+  assert.deepEqual([...form.querySelectorAll('.attachment-tools button')].map(b=>b.textContent),['Take Photo','Scan Document','Photo Library','Choose Files']);
+  assert.equal(typeof form.querySelector('[data-scan]').onclick,'function');
+  assert.match(form.querySelector('.help').textContent+form.textContent,/500 KB/);
+  form.elements.note.value='Here is the later scan';
+  const input=form.querySelector('#attachment');Object.defineProperty(input,'files',{value:[new File(['%PDF-1.4 synthetic scan'],'later-scan.pdf',{type:'application/pdf'})]});input.onchange();
+  await form.onsubmit({preventDefault(){}});
+  assert.deepEqual(ui.postPaths,['/api/pa-report/file','/api/pa-report/feedback']);
+  assert.equal(ui.posts[0].filename,'later-scan.pdf');assert.equal(ui.posts[1].action,action);assert.deepEqual(ui.posts[1].attachments,[ui.posts[0].id]);
+ }
+});
+
+test('later PA conversation opens the actual scanner, creates a readable PDF and saves it with the reply',async t=>{
+ const {scannerDOM,cameraDocument}=await import('./helpers/scanner-dom.js'),{PDFDocument}=await import('pdf-lib');
+ const ui=await screen('alex',[],'?view=report',null,paState());t.after(scannerDOM(ui.document));
+ ui.document.querySelector('[data-pa-action="respond"]').onclick();const form=ui.dialog.querySelector('form');form.elements.note.value='Scan attached';
+ form.querySelector('[data-scan]').onclick();const scanner=ui.document.querySelector('.scan-dialog');assert.equal(scanner.open,true);
+ const camera=scanner.querySelector('input');assert.equal(camera.getAttribute('capture'),'environment');Object.defineProperty(camera,'files',{value:[cameraDocument()]});await camera.onchange();assert.equal(scanner.querySelector('.error').textContent,'');
+ await scanner.querySelector('[data-use]').onclick();assert.equal(scanner.querySelector('.error').textContent,'');assert.equal(scanner.querySelectorAll('.scan-page').length,1);
+ scanner.querySelector('[data-save]').onclick();assert.equal(ui.document.querySelector('.scan-dialog'),null);assert.equal(form.querySelectorAll('.attachment-row').length,1);
+ await form.onsubmit({preventDefault(){}});assert.equal(ui.posts.length,2);const bytes=Buffer.from(ui.posts[0].base64,'base64');assert.ok(bytes.length<=500000);assert.equal((await PDFDocument.load(bytes)).getPageCount(),1);assert.deepEqual(ui.posts[1].attachments,[ui.posts[0].id]);
+});
