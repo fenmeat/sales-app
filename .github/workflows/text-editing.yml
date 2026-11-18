@@ -1,7 +1,7 @@
 name: Text editing browser acceptance
 on:
   push:
-    branches: [perf/tasks-loading-20261113,fix/task-editing-20261113, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
+    branches: [perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
     paths:
       - 'v2/public/tasks-app.js'
       - 'v2/public/task-attachments.js'
@@ -12,6 +12,7 @@ on:
       - 'v2/scripts/qa-task-scans.mjs'
       - 'v2/src/task-workspace.js'
       - 'v2/public/task-workspace-cache.js'
+      - 'v2/public/task-search-render.js'
       - 'v2/scripts/qa-task-speed.mjs'
       - 'v2/public/pa-report-ui.js'
       - 'v2/scripts/qa-pa-conversations.mjs'

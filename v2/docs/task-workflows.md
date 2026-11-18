@@ -153,3 +153,21 @@ completion, stale revisions, atomic rollback and identical retries after a lost
 response. The local Chromium visual run could not start because the execution
 host disallows its socket creation. Physical iPad/iPhone/Android camera and layout
 acceptance remain unverified; no live test tasks or messages were created.
+
+
+## Continuous task search — 0.46.4 (18 November 2026)
+
+The PA task search keeps the same connected input and ancestors while loading,
+filtering, and receiving background updates. Previously the 220 ms search delay
+replaced the whole page, temporarily removed focus, and later forced the caret
+back to an older position. Slow typists could lose characters between requests.
+The surrounding content is now updated without detaching the input, and old
+requests are invalidated as soon as the query changes. Responses never refocus
+the search or overwrite the user's current text selection.
+
+The browser acceptance script `scripts/qa-task-speed.mjs` covers slow word typing,
+spaces, middle-of-word replacement, delayed overlapping queries, selection
+preservation, leaving the field, clearing, and correct matching task results on
+Chromium desktop/Android and WebKit iPhone/iPad profiles. A DOM regression checks
+retained element identity, ancestor identity, notifications, clearing, and view
+navigation. Test fixtures are isolated; no task data or schema changes are needed.

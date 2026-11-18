@@ -40,6 +40,29 @@ try{
   const listTimes={};for(const status of ['scheduled','closed']){const start=performance.now();await page.locator('#pa-status').selectOption(status);await page.waitForFunction(s=>performance.getEntriesByName('tasks-'+s+'-ready').length>0,status);listTimes[status]=Math.round(performance.now()-start);assert.ok(listTimes[status]<2000,status+' '+listTimes[status]);assert.ok(await page.locator('.pa-work-row').count()<=25);}
   // Cached list paints even while its conditional validation is deliberately slow.
   delayWorkspace=1000;const revalidation=page.waitForResponse(r=>r.url().includes('/api/tasks/workspace'));const cacheStart=performance.now();await page.locator('#pa-status').selectOption('open');await page.waitForFunction(()=>performance.getEntriesByName('tasks-open-ready').length>=3);const cached_ms=Math.round(performance.now()-cacheStart);assert.ok(cached_ms<500,'Cached '+cached_ms);await revalidation;const validation=requests.filter(r=>r.path.startsWith('/api/tasks/workspace')).at(-1);assert.equal(validation.status,304,JSON.stringify(validation));delayWorkspace=0;
+  // Real keystrokes across debounce/loading/result renders must keep the keyboard
+  // attached to the same input, including slow typing and editing in the middle.
+  const search=page.locator('#pa-search');await search.click();
+  await search.evaluate(el=>{window.searchInput=el;window.searchBlurs=0;el.addEventListener('blur',()=>window.searchBlurs++);});
+  await page.keyboard.type('Synthetic task 000',{delay:300});
+  assert.equal(await search.inputValue(),'Synthetic task 000');
+  await page.waitForFunction(()=>document.querySelectorAll('.pa-work-row').length===1);
+  assert.ok(await search.evaluate(el=>el===window.searchInput&&el===document.activeElement));
+  assert.equal(await page.evaluate(()=>window.searchBlurs),0);
+  await search.evaluate(el=>el.setSelectionRange(15,18));await page.keyboard.type('001');
+  await page.waitForFunction(()=>document.querySelector('[data-case="TSK-00002"]'));
+  assert.equal(await search.inputValue(),'Synthetic task 001');
+  // A response to an earlier query must not move a later caret or take focus
+  // back from a filter. Clear also restores the unfiltered list.
+  delayWorkspace=700;await search.fill('Synthetic task 019');
+  await page.waitForTimeout(250);await search.fill('Synthetic task 002');
+  await search.evaluate(el=>el.setSelectionRange(10,14,'backward'));
+  await page.waitForFunction(()=>document.querySelector('[data-case="TSK-00003"]'));
+  assert.deepEqual(await search.evaluate(el=>[el.selectionStart,el.selectionEnd,el.selectionDirection]),[10,14,'backward']);
+  await search.fill('Synthetic task 003');await page.waitForTimeout(250);
+  await page.locator('#pa-status').focus();await page.waitForFunction(()=>document.querySelector('[data-case="TSK-00004"]'));
+  assert.notEqual(await page.evaluate(()=>document.activeElement?.id),'pa-search');
+  delayWorkspace=0;await search.fill('');await page.waitForFunction(()=>document.querySelectorAll('.pa-work-row').length===25);
   const task=rows[0].app_task_id;await page.locator('[data-case="'+rows[0].id+'"] details').evaluate(e=>e.open=true);const detailStart=performance.now();await page.locator('[data-app-task="'+task+'"]').click();await page.locator('#history').waitFor();const details_ms=Math.round(performance.now()-detailStart);assert.ok(details_ms<2000,'Details '+details_ms);assert.equal(requests.filter(r=>r.path.includes('/audit')).length,0);await page.locator('#history').click();await page.waitForSelector('.history-entry');assert.equal(requests.filter(r=>r.path.includes('/audit')).length,1);await page.locator('[data-close]').click();
   // Conversation is lazy; the original edit button still resolves a paged task.
   await page.locator('[data-case="'+rows[0].id+'"] [data-pa-action="respond"]').click();await page.locator('#pa-conversation').waitFor();await page.locator('#dialog').getByRole('button',{name:'Wysig oorspronklike taak',exact:true}).click();await page.getByLabel('Taaktitel',{exact:true}).waitFor();assert.equal(await page.getByLabel('Taaktitel',{exact:true}).inputValue(),rows[0].title);assert.equal((await api('/api/tasks?id='+task)).data.task.revision,1);await page.locator('[data-close]').click();await page.locator('[data-case="'+rows[0].id+'"] [data-pa-action="assign"]').click();await page.locator('#dialog select[name=assigned_to]').waitFor();assert.deepEqual(await page.locator('#dialog select[name=assigned_to] option').evaluateAll(list=>list.map(e=>e.value).sort()),['alex','alinda']);await page.locator('[data-close]').click();await page.locator('#pa-new').click();await page.getByRole('heading',{name:'Nuwe taak',exact:true}).waitFor();
