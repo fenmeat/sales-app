@@ -1,7 +1,7 @@
 name: Payroll browser acceptance
 on:
   push:
-    branches: [payroll/fresh-start-20261116]
+    branches: [payroll/fresh-start-20261116, fix/payroll-hourly-review]
     paths:
       - 'v2/**'
       - '.github/workflows/payroll-acceptance.yml'
@@ -25,5 +25,7 @@ jobs:
       - run: npm test
       - run: npm install --prefix "$RUNNER_TEMP/payroll-browser" playwright@1.62.1 --no-audit --no-fund
       - run: node "$RUNNER_TEMP/payroll-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Exercise the Fen-only hourly week, paid day off and zero-PAYE payslip
+        run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-payroll.mjs --fen-hourly
       - name: Exercise both Friday screens, payslip PDF, CSV and printed month report
         run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-payroll.mjs

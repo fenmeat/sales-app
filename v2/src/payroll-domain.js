@@ -20,7 +20,18 @@ export function validateProfile(raw,people){
  check(['Recorded breaks','60 minutes if no break recorded'].includes(raw.break_rule),'Choose the break rule.');
  check(['Bank','Cash'].includes(raw.payment_method),'Choose a payment method.');
  check(['Liable','Review each week'].includes(raw.uif),'Choose the UIF treatment.');
- return {employee_id,from,basis,rate_cents,fixed_cents,occupation:text(raw.occupation,'occupation',80),break_rule:raw.break_rule,payment_method:raw.payment_method,uif:raw.uif,reason:text(raw.reason,'rate source / reason',300)};
+ if(raw.fen_hourly_only)check(basis==='Hourly' && from>=FRESH_START.start_date,'Choose hourly pay and an effective date from 16 November 2026.');
+ const arrangement={};
+ if(raw.fen_hourly_only===true){
+  arrangement.fen_hourly_only=true;
+  if(raw.tax_birth_date){
+   arrangement.tax_birth_date=dateKey(raw.tax_birth_date);
+   check(arrangement.tax_birth_date<=today(),'Enter the verified payroll date of birth.');
+   const issue=payrollBirthCheck(people.find(p=>p.id===employee_id),arrangement);check(!issue,issue);
+   arrangement.tax_birth_source=text(raw.tax_birth_source,'document or source used to verify the date of birth',200);
+  }
+ }
+ return {employee_id,from,basis,rate_cents,fixed_cents,...arrangement,occupation:text(raw.occupation,'occupation',80),break_rule:raw.break_rule,payment_method:raw.payment_method,uif:raw.uif,reason:text(raw.reason,'rate source / reason',300)};
 }
 export function validateCompany(raw){return {name:text(raw.name,'employer name',150),address:text(raw.address,'employer address',300),first_pay_date:friday(raw.first_pay_date),reference:String(raw.reference??'').trim().slice(0,80)};}
 export function validateOpening(raw,people,company){
@@ -50,7 +61,12 @@ export function calculateRow(raw,profile,prior=zeroTotals(),options={}){
  r.ordinary_cents=profile.basis==='Fixed weekly'?profile.fixed_cents:Math.round(r.ordinary_seconds*profile.rate_cents/3600);
  r.overtime_cents=Math.round(r.overtime_seconds*profile.rate_cents*PAYROLL_RULES.overtime_bps/(3600*10000));
  r.leave_cents=profile.basis==='Fixed weekly'?0:Math.round(r.leave_seconds*profile.rate_cents/3600);
- r.gross_cents=r.ordinary_cents+r.overtime_cents+r.leave_cents+r.bonus_cents+r.commission_cents+r.special_cents;
+ if(profile.fen_hourly_only){
+  check(!r.commission_cents,'Commission is outside this FenMeat hourly arrangement.');
+  r.paid_off_seconds=integer(options.paidOffSeconds??0,'paid day off hours',45*3600);
+  r.paid_off_cents=Math.round(r.paid_off_seconds*profile.rate_cents/3600);
+ }
+ r.gross_cents=(r.paid_off_cents??0)+r.ordinary_cents+r.overtime_cents+r.leave_cents+r.bonus_cents+r.commission_cents+r.special_cents;
  integer(r.gross_cents,'gross pay');r.uif_base_cents=r.uif==='Liable'?r.gross_cents-r.commission_cents:0;
  // Cumulative monthly ceiling and cent reconciliation across 4/5 Friday months.
  // Commission is excluded from UIF remuneration; bonuses remain included.
@@ -85,12 +101,38 @@ export function calculateRow(raw,profile,prior=zeroTotals(),options={}){
  r.net_cents=r.paye_cents===null?null:r.gross_cents-r.uif_employee_cents-r.paye_cents-r.meat_cents-r.other_deduction_cents;
  check(r.net_cents===null||r.net_cents>=0,'Deductions exceed gross pay.');return r;
 }
+export function paidDaySeconds(dates,days,asOf=today()){
+ check(Array.isArray(dates)&&dates.length<=5&&new Set(dates).size===dates.length,'Select each paid day off once.');
+ return dates.reduce((seconds,date)=>{
+  const day=days.find(d=>d.date===date);
+  check(day && date<=asOf && day.scheduled_minutes>0,'Choose a scheduled day off in this week that has already occurred.');
+  check(!day.completed_seconds&&!day.review_seconds&&!day.leave_days&&!day.issues.includes('Open shift'),'A paid day off overlaps attendance or leave. Check '+date+'.');
+  return seconds+day.scheduled_minutes*60;
+ },0);
+}
+export function payrollBirthCheck(person,profile={}){
+ const id=String(person.source_profile?.identity_number??'').trim();
+ const birth=profile.tax_birth_date??person.birth_date;
+ if(!birth)return 'Verify the date of birth from the original document in Pay setup.';
+ if(/^\d{13}$/.test(id) && birth.replaceAll('-','').slice(2)!==id.slice(0,6))return 'The date of birth differs from the original employee ID. Verify the document and record the confirmed payroll date in Pay setup.';
+ return '';
+}
 export function suggestRows(staff,shifts,settings,payDate){
  const from=addDays(payDate,-4),rows=periodHours(staff.people,shifts,staff.leave,from,payDate);
  return rows.filter(r=>{const p=staff.people.find(p=>p.id===r.employee_id);return (p.active&&(!p.start_date||p.start_date<=payDate))||r.completed_seconds||r.review_seconds||r.paid_leave_minutes||shifts.some(s=>s.employee_id===p.id);}).map(source=>{
   const p=staff.people.find(p=>p.id===source.employee_id),profile=profileAt(settings,p.id,from),issues=[...source.issues];
-  let worked=0,automatic_break_seconds=0;
-  for(const d of source.days){let seconds=d.completed_seconds;if(profile?.break_rule==='60 minutes if no break recorded'&&seconds>=4*3600&&d.break_seconds===0){seconds-=3600;automatic_break_seconds+=3600;}worked+=seconds;}
+  let worked=0,dailyOrdinary=0,automatic_break_seconds=0;
+  for(const d of source.days){let seconds=d.completed_seconds;if(profile?.break_rule==='60 minutes if no break recorded'&&seconds>=4*3600&&d.break_seconds===0){seconds-=3600;automatic_break_seconds+=3600;}worked+=seconds;
+   if(profile?.fen_hourly_only){
+    const limit=Math.min(540,d.scheduled_minutes??540)*60;
+    dailyOrdinary+=Math.min(seconds,limit);
+    if(d.scheduled_minutes==null)issues.push('Confirm this day’s ordinary schedule: '+d.date);
+    if(seconds>12*3600)issues.push(d.date+': more than 12 hours after breaks. Check the hours and agreement.');
+   }
+  }
+  const ordinary=Math.min(Math.round(profile?.fen_hourly_only?dailyOrdinary:worked),45*3600);
+  const overtime=Math.round(worked)-ordinary;
+  if(profile?.fen_hourly_only && overtime>10*3600)issues.push('More than 10 overtime hours. All hours are included. Check the agreement.');
   if(!profile)issues.push('Confirm pay setup');
   if(!p.start_date||p.employment_verified===false)issues.push('Confirm employment start');
   if(!worked&&!source.paid_leave_minutes)issues.push('No completed hours; verify attendance or fixed pay');
@@ -100,7 +142,7 @@ export function suggestRows(staff,shifts,settings,payDate){
   if(weekend.length)issues.push('Prior weekend clock records: review separate Sunday / special pay');
   if(shifts.some(s=>s.employee_id===p.id&&s.punches.at(-1).kind!=='out'))issues.push('Open shift');
   if(settings.profiles?.some(x=>x.employee_id===p.id&&x.from>from&&x.from<=payDate))issues.push('Rate changes inside this week; review special pay adjustment');
-  return {employee_id:p.id,name:p.name,code:p.code,included:true,profile,source:{...source,automatic_break_seconds},issues:[...new Set(issues)],ordinary_seconds:Math.min(Math.round(worked),45*3600),overtime_seconds:Math.max(0,Math.round(worked)-45*3600),leave_seconds:source.paid_leave_minutes*60,sunday_seconds:0,holiday_seconds:0,special_cents:0,bonus_cents:0,commission_cents:0,paye_cents:null,meat_cents:0,other_deduction_cents:0,uif:profile?.uif==='Liable'?'Liable':'Review',uif_reason:'',reviewed:false,note:''};
+  return {employee_id:p.id,name:p.name,code:p.code,included:true,profile,source:{...source,automatic_break_seconds},issues:[...new Set(issues)],ordinary_seconds:ordinary,overtime_seconds:overtime,leave_seconds:source.paid_leave_minutes*60,sunday_seconds:0,holiday_seconds:0,special_cents:0,bonus_cents:0,commission_cents:0,paye_cents:null,meat_cents:0,other_deduction_cents:0,uif:profile?.uif==='Liable'?'Liable':'Review',uif_reason:'',reviewed:false,note:''};
  });
 }
 export function totalRows(rows){const out=zeroTotals();for(const r of rows.filter(x=>x.included!==false))for(const k of Object.keys(out))out[k]+=r[k]??0;return out;}

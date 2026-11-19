@@ -103,4 +103,64 @@ test('Fresh start, saved settings and history, November payroll through second F
  assert.deepEqual((await get(oldDate)).run,frozen);
  assert.equal((await snapshot("SELECT revision FROM v2_staff_payroll WHERE action='fresh_start'")).length,1);
  assert.equal((await snapshot("SELECT revision FROM v2_staff_payroll WHERE action='paid' AND entity_key='run:2026-11-20'")).length,1);
+ // Exercise a separate effective-dated arrangement against a draft after the frozen payday.
+ await ok('void',{pay_date:next,note:'Synthetic unpaid second week reopened for the new arrangement'});
+ const schedule=await call('alinda','/api/staff',{action:'schedule',request_id:crypto.randomUUID(),revision:(await get()).source.staff_revision,employee_id,from:'2026-11-23',minutes:[540,540,540,540,540,0,0],reason:'Synthetic confirmed working week'});
+ assert.equal(schedule.status,200,JSON.stringify(schedule.data));
+ await ok('profile',{profile:{...profile,from:'2026-11-23',rate_cents:3828,fen_hourly_only:true}});
+ await ok('refresh',{pay_date:next});
+ const off=await body('paid_days',{employee_id,pay_date:next,dates:['2026-11-23'],note:'Synthetic employer-approved paid day off'});
+ assert.equal((await call('alinda',path,off)).status,200);
+ assert.equal((await call('alinda',path,off)).data.replayed,true);
+ let draft=(await get(next)).run.rows[0];assert.equal(draft.reviewed,false);assert.equal(draft.paye_cents,null);
+ assert.equal(draft.estimate.paid_off_cents,34452);assert.equal(draft.estimate.paye_cents,0);
+ // A later clock record updates the estimate without writing to the saved draft.
+ const shiftId=crypto.randomUUID(),shiftStart='2026-11-24T04:00:00Z',shiftEnd='2026-11-24T17:00:00Z';
+ const shift={id:shiftId,employee_id,punches:[{kind:'in',at:shiftStart},{kind:'out',at:shiftEnd}]};
+ await db.prepare('INSERT INTO v2_staff_time VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),employee_id,shiftId,1,shiftStart,shiftEnd,'out',JSON.stringify(shift),'synthetic','tester',shiftEnd).run();
+ let updated=await get(next);assert.equal(updated.stale,true);assert.equal(updated.run.rows[0].estimate.overtime_seconds,4*3600);
+ await ok('paid_days',{employee_id,pay_date:next,dates:['2026-11-23'],note:'Paid day still supported by test evidence'});
+ assert.equal((await get(next)).stale,true);await ok('refresh',{pay_date:next});
+ draft=(await get(next)).run.rows[0];assert.deepEqual(draft.paid_days,['2026-11-23']);
+ const checked={...draft,paye_method:'SARS weekly table',standard_week_confirmed:true,confirmed:true,attendance_resolved:true,cutover_uif:'Full weekly share',note:'Synthetic pay review, remaining scheduled days verified absent'};
+ assert.equal((await post('row',{pay_date:next,row:{...checked,commission_cents:100}})).status,400);
+ await ok('row',{pay_date:next,row:checked});
+ assert.equal((await post('approve',{pay_date:next,note:'Synthetic attempted approval'},'alex')).status,400);
+ await ok('approve',{pay_date:next,note:'Synthetic Alinda approval'});
+ const approved=(await get(next)).run.rows[0];assert.equal(approved.paye_cents,0);assert.equal(approved.gross_cents,91872);assert.equal(approved.net_cents,90953);
+ assert.deepEqual((await get(oldDate)).run,frozen);assert.equal((await get(date)).run.status,'Paid');
+
+});
+
+test('Effective-dated Fen hourly arrangement, daily overtime, full gross, weekly tax and UIF',async()=>{
+ const {calculateRow,suggestRows,profileAt,paidDaySeconds,payrollBirthCheck}=await import('../src/payroll-domain.js');
+ const person={id:crypto.randomUUID(),name:'Synthetic route worker',active:true,start_date:'2020-01-01',birth_date:'1980-01-01',schedules:[{from:'2026-11-16',minutes:[540,540,540,540,540,0,0]}]};
+ const old={employee_id:person.id,from:'2020-01-01',basis:'Hourly',rate_cents:2000,break_rule:'Recorded breaks',uif:'Liable'};
+ const profile={...old,from:'2026-11-16',rate_cents:3828,fen_hourly_only:true};
+ const settings={profiles:[old,profile]};
+ assert.equal(profileAt(settings,person.id,'2026-11-13'),old);
+ const shift=(day,hours)=>({employee_id:person.id,punches:[{kind:'in',at:`2026-11-${day}T05:00:00Z`},{kind:'out',at:`2026-11-${day}T${String(5+hours).padStart(2,'0')}:00:00Z`}]});
+ const draft=shifts=>suggestRows({people:[person],leave:[]},shifts,settings,'2026-11-20')[0];
+ const weeklyTax=c=>weeklyPaye(c,'2026-11-20',person,'2026-11-16');
+ for(const [daily,ot,gross,tax,uif,net] of [[9,0,172260,0,1723,170537],[10,5,200970,1800,2010,197160],[11,10,229680,7000,2297,220383]]){
+  const row=draft([16,17,18,19,20].map(d=>shift(d,daily)));
+  assert.equal(row.ordinary_seconds,45*3600);assert.equal(row.overtime_seconds,ot*3600);
+  assert.equal(row.paye_cents,null);assert.equal(row.reviewed,false);
+  const actual=calculateRow({...row,standard_week_confirmed:true,cutover_uif:'Full weekly share'},profile,undefined,{weeklyTax,externalHistory:true});
+  assert.deepEqual([actual.ordinary_cents,actual.gross_cents,actual.paye_cents,actual.uif_employee_cents,actual.net_cents],[172260,gross,tax,uif,net]);
+  assert.equal(actual.uif_employer_cents,uif);
+  assert.throws(()=>calculateRow({...row,commission_cents:500},profile),/outside/);
+ }
+ const partial=draft([shift(17,15),shift(18,15)]);
+ assert.equal(partial.ordinary_seconds,18*3600);assert.equal(partial.overtime_seconds,12*3600);
+ assert.ok(partial.issues.some(i=>i.includes('More than 10 overtime hours')));
+ const away=paidDaySeconds(['2026-11-16'],partial.source.days,'2026-11-20');
+ assert.equal(away,9*3600);assert.throws(()=>paidDaySeconds(['2026-11-17'],partial.source.days,'2026-11-20'),/overlaps/);
+ assert.throws(()=>paidDaySeconds(['2026-11-16','2026-11-16'],partial.source.days),/once/);
+ assert.equal(calculateRow(partial,profile,undefined,{paidOffSeconds:away}).paid_off_cents,34452);
+ assert.equal(payrollBirthCheck(person),'');
+ const different={...person,source_profile:{identity_number:'8101010000000'}};
+ assert.match(payrollBirthCheck(different),/differs/);
+ assert.equal(payrollBirthCheck(different,{tax_birth_date:'1981-01-01'}),'');
+ assert.equal(different.birth_date,'1980-01-01');
 });

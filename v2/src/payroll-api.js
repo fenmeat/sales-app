@@ -1,7 +1,7 @@
 import {check,dateKey,addDays,today,UserError} from './domain.js';
 import {text,uuid} from './staff-domain.js';
 import {isAdmin} from "./auth.js";
-import {FRESH_START,PAYROLL_RULES,friday,nextFriday,validateCompany,validateProfile,validateOpening,profileAt,calculateRow,priorFor,suggestRows,totalRows,monthlyReport} from './payroll-domain.js';
+import {FRESH_START,PAYROLL_RULES,friday,nextFriday,validateCompany,validateProfile,validateOpening,profileAt,calculateRow,priorFor,paidDaySeconds,payrollBirthCheck,suggestRows,totalRows,monthlyReport} from './payroll-domain.js';
 
 export const PAYROLL_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_staff_payroll (revision INTEGER PRIMARY KEY, entity_key TEXT NOT NULL, payload TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL)`,
@@ -11,6 +11,15 @@ async function savedState(db){
  const all=(await db.prepare(`SELECT p.* FROM v2_staff_payroll p WHERE NOT EXISTS (SELECT 1 FROM v2_staff_payroll n WHERE n.entity_key=p.entity_key AND n.revision>p.revision)`).all()).results;
  const records=all.map(r=>({...JSON.parse(r.payload),saved_revision:r.revision,saved_at:r.saved_at,saved_by:r.actor}));
  return {revision:Math.max(0,...all.map(r=>r.revision)),settings:records.find(r=>r.key==='settings')??{key:'settings',company:null,profiles:[]},openings:records.filter(r=>r.key.startsWith('opening:')),runs:records.filter(r=>r.key.startsWith('run:'))};
+}
+function carryDraftInputs(row,old){
+ if(!old)return row;
+ const inputs=['paid_days','paid_days_note','included','sunday_seconds','holiday_seconds','special_cents','bonus_cents','commission_cents','paye_cents','meat_cents','other_deduction_cents','uif','uif_reason','note','paye_method','standard_week_confirmed','cutover_uif','current_employee_cents','current_employer_cents'];
+ for(const key of inputs)if(old[key]!==undefined)row[key]=old[key];
+ for(const key of Object.keys(row.suggested_hours)){
+  if(old.suggested_hours?old[key]!==old.suggested_hours[key]:old.reviewed)row[key]=old[key];
+ }
+ return row;
 }
 export async function payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,env}){
  const state=await savedState(db),timeVersion=(await db.prepare('SELECT COALESCE(MAX(rowid),0) revision FROM v2_staff_time').first()).revision;
@@ -23,15 +32,19 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
   for(const row of rows)row.suggested_hours={ordinary_seconds:row.ordinary_seconds,overtime_seconds:row.overtime_seconds,leave_seconds:row.leave_seconds};
   return {key:'run:'+date,pay_date:date,from:addDays(date,-4),to:date,status:'Draft',source,rules:fresh?{...PAYROLL_RULES,version:'2026-11-16.1'}:PAYROLL_RULES,company:state.settings.company,rows,totals:totalRows([])};
  };
- const reviewedAmounts=async(raw,profile,person,date)=>{
+ const reviewedAmounts=async(raw,profile,person,date,clockRow)=>{
   const operational=!!fresh && date>=fresh.first_pay_date;
   const prior=priorFor(person.id,date,operational?state.runs.filter(r=>r.pay_date>=fresh.first_pay_date):state.runs,operational?[]:state.openings);
   const externalHistory=operational && date.slice(0,7)===fresh.start_date.slice(0,7) && person.start_date<fresh.start_date;
   const options={externalHistory};
+  if(profile.fen_hourly_only){
+   const identityIssue=payrollBirthCheck(person,profile);check(!identityIssue,identityIssue);
+   options.paidOffSeconds=paidDaySeconds(clockRow.paid_days??[],clockRow.source.days);
+  }
   if(raw.paye_method==='SARS weekly table'){
    check(operational,'Start the new payroll before using weekly tax tables.');
    const {weeklyPaye}=await import('./weekly-paye.js');
-   options.weeklyTax=cents=>weeklyPaye(cents,date,person,addDays(date,-4));
+   options.weeklyTax=cents=>weeklyPaye(cents,date,{...person,birth_date:profile.tax_birth_date??person.birth_date},addDays(date,-4));
   }
   return calculateRow(raw,profile,prior,options);
  };
@@ -41,6 +54,31 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
   const historical=fresh && payDate<fresh.first_pay_date;
   const stored=state.runs.find(r=>r.pay_date===payDate);
   const run=stored??(historical?{status:'Reference',pay_date:payDate,from:addDays(payDate,-4),to:payDate,rows:[],totals:null}:await preview(payDate));
+  if(run.status==='Draft'){
+   if(stale(run) && run.rows.some(r=>profileAt(state.settings,r.employee_id,run.from)?.fen_hourly_only)){
+    const currentWeek=await preview(payDate);
+    run.rows=run.rows.map(old=>{
+     const updated=currentWeek.rows.find(r=>r.employee_id===old.employee_id);
+     return updated?.profile?.fen_hourly_only?carryDraftInputs(updated,old):old;
+    });
+   }
+   for(const row of run.rows.filter(r=>r.profile?.fen_hourly_only && !r.reviewed)){
+    const person=current.state.people.find(p=>p.id===row.employee_id);
+    const issue=payrollBirthCheck(person,row.profile);
+    try{
+     const paidOffSeconds=paidDaySeconds(row.paid_days??[],row.source.days);
+     const prior=priorFor(person.id,payDate,state.runs.filter(r=>!fresh||r.pay_date>=fresh.first_pay_date),fresh?[]:state.openings);
+     const amounts=calculateRow({...row,paye_cents:null},row.profile,prior,{paidOffSeconds});
+     row.estimate=amounts;
+     if(issue)throw new UserError(issue);
+     const {weeklyPaye}=await import('./weekly-paye.js');
+     if(!row.special_cents){
+      const tax=weeklyPaye(amounts.gross_cents,payDate,{...person,birth_date:row.profile.tax_birth_date??person.birth_date},run.from);
+      row.estimate={...amounts,paye_cents:tax,net_cents:amounts.gross_cents-tax-amounts.uif_employee_cents-amounts.meat_cents-amounts.other_deduction_cents};
+     }
+    }catch(error){if(!(error instanceof UserError))throw error;row.issues=[...row.issues,error.message];}
+   }
+  }
   return {can_start_fresh:isAdmin(user.username),revision:state.revision,source,settings:state.settings,openings:state.openings,run,stale:stale(run),saved:!!run.saved_revision,runs:state.runs.map(({pay_date,status,totals,saved_at})=>({pay_date,status,totals,saved_at})).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)),month:monthlyReport(url.searchParams.get('month')??payDate.slice(0,7),state.runs,state.openings,state.settings.company,current.state.people,fresh)};
  }
  check(request.method==='POST','Not found.',404);
@@ -66,6 +104,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
   record={...state.settings,company};
  }else if(b.action==='profile'){
   const profile={...validateProfile(b.profile,current.state.people),confirmed_by:user.username,confirmed_at:stamp};
+  if(profile.fen_hourly_only)check(fresh,'Activate the existing payroll start before selecting this arrangement.');
   record={...state.settings,profiles:[...state.settings.profiles.filter(p=>!(p.employee_id===profile.employee_id&&p.from===profile.from)),profile]};
  }else if(b.action==='opening'){
   check(!fresh,'Earlier payroll is kept for reference by the auditors.');
@@ -79,16 +118,24 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
    check(!existing||['Draft','Voided'].includes(existing.status),'Approved payroll is locked.');
    record=await preview(date);
    // Keep saved manual inputs, but require review against the fresh evidence.
-   if(existing?.status==='Draft')record.rows=record.rows.map(row=>{
-    const old=existing.rows.find(x=>x.employee_id===row.employee_id);
-    if(!old)return row;
-    const inputs=['included','sunday_seconds','holiday_seconds','special_cents','bonus_cents','commission_cents','paye_cents','meat_cents','other_deduction_cents','uif','uif_reason','note','paye_method','standard_week_confirmed','cutover_uif','current_employee_cents','current_employer_cents'];
-    for(const key of inputs)if(old[key]!==undefined)row[key]=old[key];
-    for(const key of Object.keys(row.suggested_hours)){
-     if(old.suggested_hours?old[key]!==old.suggested_hours[key]:old.reviewed)row[key]=old[key];
-    }
-    return row;
-   });
+   if(existing?.status==='Draft')record.rows=record.rows.map(row=>carryDraftInputs(row,existing.rows.find(x=>x.employee_id===row.employee_id)));
+  }else if(b.action==='paid_days'){
+   record=existing??await preview(date);
+   check(record.status==='Draft','Approved payroll is locked.');
+   const id=uuid(b.employee_id),index=record.rows.findIndex(r=>r.employee_id===id);
+   check(index>=0,'This employee is not in the draft.');
+   if(stale(record)){
+    const updated=(await preview(date)).rows.find(r=>r.employee_id===id);
+    check(updated?.profile?.fen_hourly_only,'Confirm the current pay profile first.');
+    record.rows[index]=carryDraftInputs(updated,record.rows[index]);
+   }
+   const row=record.rows[index];
+   check(row?.profile?.fen_hourly_only,'Choose the FenMeat hourly arrangement under Pay setup first.');
+   paidDaySeconds(b.dates,row.source.days);
+   row.paid_days=[...b.dates].sort();row.paid_days_note=text(b.note,'source for paid days off',500);
+   row.reviewed=false;delete row.reviewed_by;delete row.reviewed_at;
+   for(const key of ['ordinary_cents','overtime_cents','paid_off_cents','paid_off_seconds','leave_cents','gross_cents','uif_base_cents','uif_employee_cents','uif_employer_cents','net_cents','attendance_resolved','standard_week_confirmed','cutover_uif','current_employee_cents','current_employer_cents'])delete row[key];
+   row.paye_cents=null;
   }else if(b.action==='row'){
    record=existing??await preview(date);check(record.status==='Draft','Approved payroll is locked.');check(!stale(record),'Payroll inputs changed. Use Refresh draft, then review the rows again.',409);
    const id=uuid(b.row.employee_id),index=record.rows.findIndex(r=>r.employee_id===id);check(index>=0,'This employee is not in the draft.');
@@ -98,7 +145,12 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
     const profile=profileAt(state.settings,id,record.from);check(profile,'Confirm the pay setup first.');
     const p=current.state.people.find(x=>x.id===id);check(p.start_date&&p.employment_verified!==false,'Confirm this employee’s employment start under People first.');
     for(const key of ['paye_method','standard_week_confirmed','cutover_uif','current_employee_cents','current_employer_cents'])delete row[key];
-    row={...row,...await reviewedAmounts(b.row,profile,p,date),profile};
+    if(profile.fen_hourly_only){
+     check(date<=today() && !old.issues.includes('Open shift'),'Finish the week and close open shifts before reviewing final pay. Paid days off can be saved as a draft now.');
+     check(b.row.attendance_resolved===true,'Check every scheduled day, actual breaks, overtime and exceptions first.');
+     row.attendance_resolved=true;
+    }
+    row={...row,...await reviewedAmounts(b.row,profile,p,date,old),profile};
     check(row.paye_cents!==null,'Enter the PAYE confirmed by the auditors, including an explicit 0 where applicable.');
     check(b.row.confirmed===true,'Confirm the hours, rate, breaks, bonus, deductions and tax treatment.');
    }
@@ -108,13 +160,15 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
    const company=state.settings.company;check(company,'Save employer details first.');check(date>=company.first_pay_date,'This pay date is before the first Fen payroll date.');check(date<=today(),'Future payroll cannot be approved.');
    check(existing.rows.length&&existing.rows.every(r=>r.reviewed),'Review every employee, including exclusions.');
    check(existing.rows.some(r=>r.included),'Include at least one employee.');
+   if(existing.rows.some(r=>r.profile?.fen_hourly_only))check(user.username==='alinda','Alinda must approve this week after checking the hourly arrangement.');
    check(!state.runs.some(r=>['Approved','Paid'].includes(r.status)&&r.pay_date>date),'A later payroll is already approved. Earlier payroll cannot be inserted behind it.');
    const previous=addDays(date,-7);check(previous<company.first_pay_date||state.runs.some(r=>r.pay_date===previous&&['Approved','Paid'].includes(r.status)),'Approve the previous Friday first so the monthly UIF history is complete.');
    check(existing.rows.filter(r=>r.included).every(r=>!r.issues.includes('Open shift')),'Complete or correct open shifts before approving payroll.');
    const rows=await Promise.all(existing.rows.map(async r=>{
     if(!r.included)return r;
     check(fresh||date.slice(0,7)!==company.first_pay_date.slice(0,7)||state.openings.some(o=>o.month===date.slice(0,7)&&o.employee_id===r.employee_id),'Record the verified month opening for '+r.name+', including explicit zeros for a new worker.');
-    return {...r,...await reviewedAmounts(r,r.profile,current.state.people.find(p=>p.id===r.employee_id),date)};
+    if(r.profile.fen_hourly_only)check(r.reviewed_by==='alinda'&&r.attendance_resolved,'Alinda must review and approve this employee’s pay.');
+    return {...r,...await reviewedAmounts(r,r.profile,current.state.people.find(p=>p.id===r.employee_id),date,r)};
    }));
    record={...existing,rows,status:'Approved',company,approved_by:user.username,approved_at:stamp,approval_note:text(b.note,'approval note',500)};
   }else if(b.action==='paid'){
@@ -125,7 +179,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
    check(!state.runs.some(r=>['Approved','Paid'].includes(r.status)&&r.pay_date>date),'Void later unpaid runs first; subsequent UIF calculations depend on this run.');
    record={...existing,status:'Voided',void_reason:text(b.note,'void reason',500),void_by:user.username,void_at:stamp};
   }else throw new UserError('Unknown payroll action.');
-  record.totals=totalRows(record.status==='Draft'?record.rows.filter(r=>r.reviewed):record.rows);if(record.status==='Draft')record.source={...source,payroll_revision:next};
+  record.totals=totalRows(record.status==='Draft'?record.rows.filter(r=>r.reviewed):record.rows);if(record.status==='Draft' && !(b.action==='paid_days' && stale(record)))record.source={...source,payroll_revision:next};
  }
  delete record.saved_revision;delete record.saved_at;delete record.saved_by;
  check(JSON.stringify(record).length<650000,'Payroll record is too large.');
