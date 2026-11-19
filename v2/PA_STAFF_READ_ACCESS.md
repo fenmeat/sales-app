@@ -33,7 +33,7 @@ callback, audience, PKCE, browser-bound consent and revocation checks apply.
 - `source_rows`: requires a `sheet_id` from summary; optional `q`, `offset` and
   `import_id`. Returns up to 50 original cells/row numbers without executing
   formulas or interpreting historical aggregates as native leave usage.
-- `hours`: `from`/`to`, at most 31 calendar days, using native clock/leave logic.
+- `hours`: `from`/`to`, at most 31 calendar days, using native clock/leave logic. A date range within one operational Monday–Friday week includes the daily workplace, recorded and automatic breaks, and payable hours from the payroll calculation.
 - `leave`: one `employee_id`, paged native requests and approved ledger.
 
 `get_access_status` reports `staff_read_access` without returning HR data.

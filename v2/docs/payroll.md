@@ -74,7 +74,17 @@ review; a missing schedule is never silently treated as an absence or paid day.
   this initial split as automatic approval.
 - Recorded breaks are deducted once. An explicitly selected driver policy
   subtracts 60 minutes only for a day with at least four completed hours and
-  no recorded break. No employees or driver names are hardcoded.
+  no recorded break. From 16 November 2026, gaps between same-day clock-outs
+  and clock-ins also count as recorded breaks. For rotating road crew, a Monday
+  start from 03:00 to before 07:00 suggests Route. A start from 07:30 through
+  08:30 suggests Factory. Other times need confirmation before row review.
+  Pay setup can explicitly include or exclude a worker from the rotation.
+  A dated manual workplace decision takes precedence over the clock suggestion.
+- Under **Daaglikse ure en pouses**, select the day to save a workplace choice
+  or a signed minute correction with its reason. A correction is a delta on that
+  day's payable hours and stays with that date after refresh. A changed baseline
+  requires checking the correction again. The audit history retains each save.
+  The ordinary final tax checks still apply at Review pay.
 - Approved half-day paid leave retains its actual paid minutes. Unpaid leave
   is zero. Fixed weekly pay does not pay approved leave a second time.
 - Sunday/public-holiday hours and their reviewed special payment are explicit.

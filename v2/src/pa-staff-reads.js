@@ -1,5 +1,5 @@
 import {check,dateKey,addDays,today} from './domain.js';
-import {isAdmin} from './auth.js';
+import {isAdmin,keys} from './auth.js';
 import {readOnlyDatabase} from './pa-reads.js';
 import {staffState,staffApi} from './staff-api.js';
 import {loadBundle,deriveImport,staffImportApi} from './staff-import.js';
@@ -56,6 +56,7 @@ export async function readStaffData(args,env,username,scopes){
   const settings=JSON.parse(latestSettings?.payload??'{}');
   const active=state.people.filter(p=>p.active && (!p.start_date||p.start_date<=FRESH_START.first_pay_date));
   const setup={
+   configured_payroll_admins:Object.keys(keys(env)).filter(isAdmin),
    week_start:FRESH_START.start_date, first_friday_configured:settings.company?.first_pay_date??null,
    fresh_start_active:!!settings.fresh_start, settings_revision:latestSettings?.revision??null,
    saved_profiles:settings.profiles?.length??0, active_people:active.length,
