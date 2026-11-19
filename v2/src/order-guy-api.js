@@ -62,14 +62,16 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
  }
  check(request.method==='GET','Method not allowed.',405);
  const from=dateKey(url.searchParams.get('from')??today()),to=dateKey(url.searchParams.get('to')??from);check(to>=from&&to<=addDays(from,30),'Choose at most 31 production days.');
- const saved=await db.prepare('SELECT e.* FROM v2_production_events e JOIN (SELECT production_date,MAX(revision) revision FROM v2_production_events WHERE production_date BETWEEN ? AND ? GROUP BY production_date) latest ON latest.production_date=e.production_date AND latest.revision=e.revision ORDER BY e.production_date').bind(from,to).all();
+ const r=await readRegister(db,catalog);
+ const bases=r.register.materials.map(m=>m.stock.available_from??m.stock.date).filter(d=>d&&d<from&&d>=addDays(from,-31));
+ const historyFrom=bases.length?bases.sort()[0]:from;
+ const saved=await db.prepare('SELECT e.* FROM v2_production_events e JOIN (SELECT production_date,MAX(revision) revision FROM v2_production_events WHERE production_date BETWEEN ? AND ? GROUP BY production_date) latest ON latest.production_date=e.production_date AND latest.revision=e.revision ORDER BY e.production_date').bind(historyFrom,to).all();
  const plans=[];for(const e of saved.results){try{plans.push(await readPlan(e.production_date));}catch{plans.push({plan:JSON.parse(e.payload),revision:e.revision,saved_at:e.saved_at,actor:e.actor,stale:null,source_warning:'Current route demand could not be verified.'});}}
  // A forecast is a read-only purchasing estimate, never a synthetic saved plan.
  // Confirmed plans claim their route coverage first, including explicit zero.
- const r=await readRegister(db,catalog);
  const claimed=new Map();for(const p of plans.filter(p=>p.plan.phase==='confirmed'))for(const route of p.plan.routes)claimed.set(p.plan.target_date+'|'+route,p.plan.date);
  const forecast_days=[];
- for(let date=from;date<=to;date=addDays(date,1)){
+ for(let date=historyFrom;date<=to;date=addDays(date,1)){
   const savedPlan=plans.find(p=>p.plan.date===date);if(savedPlan?.plan.phase==='confirmed')continue;
   const target_date=savedPlan?.plan.target_date??nextProductionTarget(date,catalog.routes);
   const requested=(savedPlan?.plan.routes??catalog.routes.map(r=>r.code)).filter(code=>routeScheduled(catalog.routes.find(r=>r.code===code),target_date));

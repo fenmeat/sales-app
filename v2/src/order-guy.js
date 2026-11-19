@@ -48,7 +48,7 @@ export function validateRegister(input){
   if(m.minimum_stock!==undefined)check(qty(m.minimum_stock),'Minimum stock must be a non-negative quantity.');
   if(m.pack_spec!==undefined){check(m.pack_spec&&typeof m.pack_spec==='object','Invalid purchase pack description.');for(const field of ['label','unit_label','note','source'])text(m.pack_spec[field],field==='unit_label'?60:1500);for(const field of ['count_label','loose_label'])if(m.pack_spec[field]!==undefined)text(m.pack_spec[field],100);}
   const p=m.price;check(p&&optional(p.amount)&&['verified','reference','expired','unknown'].includes(p.status),'Invalid price.');text(p.source,1500);if(p.date!==null)dateKey(p.date);if(p.valid_until!==null)dateKey(p.valid_until);check(p.status!=='verified'||(p.amount!==null&&p.date&&p.source.trim()),'A verified price needs an amount, date and source.');
-  const s=m.stock;check(s&&optional(s.qty)&&optional(s.reserve)&&Array.isArray(s.incoming)&&s.incoming.length<=100,'Invalid material stock.');if(s.date!==null)dateKey(s.date);check(s.qty===null||s.date,'Date the usable stock count.');text(s.source,1500);for(const x of s.incoming){check(qty(x.qty),'Invalid incoming quantity.');dateKey(x.date);text(x.reference,200);check(x.reference.trim().length>0,'Incoming stock needs a PO or delivery reference.');}unique(s.incoming,x=>x.reference);
+  const s=m.stock;check(s&&optional(s.qty)&&optional(s.reserve)&&Array.isArray(s.incoming)&&s.incoming.length<=100,'Invalid material stock.');if(s.date!==null)dateKey(s.date);check(s.qty===null||s.date,'Date the usable stock count.');text(s.source,1500);for(const x of s.incoming){check(qty(x.qty),'Invalid incoming quantity.');dateKey(x.date);if(x.confirmed!==undefined)check(typeof x.confirmed==='boolean','Incoming confirmation must be explicit.');text(x.reference,200);check(x.reference.trim().length>0,'Incoming stock needs a PO or delivery reference.');}unique(s.incoming,x=>x.reference);
   if(s.available_from!==undefined){dateKey(s.available_from);check(s.date&&s.available_from>=s.date&&s.available_from<=addDays(s.date,31),'Invalid stock availability date.');check(s.available_from===s.date||s.availability_confirmed===true,'Confirm availability when using an earlier count.');}
  }
  unique(r.materials.filter(m=>m.resale_product),m=>m.resale_product);
@@ -104,7 +104,7 @@ function forecastRequirements(plan,register){
  return {items,groups};
 }
 
-export function orderGuyReport({register,registry_revision,plans,forecast_days=[],from,to,catalog,asOf=today()}){
+export function orderGuyReport({register,registry_revision,plans,forecast_days=[],from,to,catalog,asOf=today(),project_stock=true}){
  dateKey(from);dateKey(to);check(to>=from&&to<=addDays(from,30),'Choose at most 31 production days.');
  const materials=new Map(register.materials.map(m=>[m.id,m])),totals=new Map(),warnings=[],coverage=[],requirements=[];
  let unmapped=false,coverageMissing=false,missingRecipe=false,missingPackaging=false;
@@ -165,14 +165,52 @@ export function orderGuyReport({register,registry_revision,plans,forecast_days=[
  const referenced=new Set([...register.recipes.flatMap(r=>[...r.ingredients,...r.consumables]),...register.packaging.flatMap(p=>p.lines)].map(l=>l.material));
  const manufacturing=new Set(register.recipes.flatMap(r=>[...r.ingredients,...r.consumables]).map(l=>l.material));
  const packaging=new Set(register.packaging.flatMap(p=>p.lines).map(l=>l.material));
+ // Project read-only opening balances separately from the physical stock record.
+ // A physical count already includes count-day activity; an explicitly carried
+ // opening balance starts at available_from. Never consume either interval twice.
+ const historyDays=new Map();
+ function historyDay(date){
+  if(!historyDays.has(date))historyDays.set(date,orderGuyReport({register,registry_revision,plans,forecast_days,from:date,to:date,catalog,asOf,project_stock:false}));
+  return historyDays.get(date);
+ }
+ function projectOpening(m){
+  const s=m.stock,base=s.available_from??s.date;
+  if(!project_stock||!base||base>=from)return null;
+  const result={date:from,count_date:s.date,basis_date:base,estimated:true,qty:null,consumption:0,incoming:0,days:[],reason:null};
+  const fail=reason=>({...result,reason});
+  if(base<addDays(from,-31))return fail('Die telling is meer as 31 dae oud. Bevestig ’n nuwe telling voordat voorraad vooruitbereken word.');
+  if(!s.count||s.availability_confirmed!==true)return fail('Bevestig die bestaande volle-paktelling voordat die saldo vooruitbereken word.');
+  const start=base===s.date?addDays(base,1):base;
+  let balance=s.qty;
+  for(let date=start;date<from;date=addDays(date,1)){
+   const h=historyDay(date),row=h.rows.find(r=>r.material===m.id),coverage=h.coverage[0];
+   if(coverage?.status==='forecast_unavailable'||(row&&!row.quantity_ready)||(!row&&h.unmapped_requirements))return fail('Verbruik vir '+date+' is onvolledig. Bevestig dié dag se produksie of voorspelling.');
+   // A delivery date/reference alone does not prove receipt before this window.
+   const deliveries=s.incoming.filter(x=>x.date===date&&!s.count.included_incoming?.includes(x.reference));
+   if(deliveries.some(x=>x.confirmed!==true))return fail('Bevestig die inkomende voorraad van '+date+' voordat dit by die berekende saldo getel word.');
+   const incoming=deliveries.reduce((n,x)=>n+x.qty,0),use=row?.gross??0;
+   // Historical buffers are not physical consumption. Retain reserves once,
+   // below, and apply the buying window's buffer only to that window.
+   balance+=incoming-use;
+   result.consumption+=use;result.incoming+=incoming;
+   result.days.push({date,gross:use,incoming,basis:coverage?.status??'unknown',contributions:row?.contributions??[]});
+   if(balance< -1e-6)return fail('Die berekende verbruik op '+date+' oorskry die bewese voorraad. Bevestig ontbrekende ontvangste of ’n nuwe telling.');
+  }
+  // A negative estimate means the earlier count cannot explain recorded usage.
+  // Do not invent a delivery or move a historical shortage into a new order.
+  if(balance< -1e-6)return fail('Die berekende verbruik oorskry die bewese voorraad. Bevestig ontbrekende ontvangste of ’n nuwe telling.');
+  return {...result,qty:round(Math.max(0,balance)),consumption:round(result.consumption),incoming:round(result.incoming)};
+ }
  const rows=[...totals.values()].map(row=>{
   const m=materials.get(row.material),p=priceFor(m,asOf),s=m.stock;
   const countBasisChanged=s.count&&((s.count.packs>0&&s.count.pack_qty!==m.pack_qty)||s.count.unit!==m.unit);
   const legacyCount=needsFullPackConfirmation(m);
-  const inventory_ready=!legacyCount&&!countBasisChanged&&s.qty!==null&&(s.available_from??s.date)===from&&(s.date===from||s.availability_confirmed===true)&&s.reserve!==null&&s.source.trim().length>0;
-  const inventory_reason=inventory_ready?null:legacyCount?'Die vorige telling bevat los voorraad of deelpakke. Bevestig slegs die volle pakke in Voorraadtelling voordat hierdie bestelling bereken word.':countBasisChanged?'Die pakgrootte of eenheid het sedert hierdie telling verander. Bevestig die telling met die korrekte pakgrootte; die ou telling is bewaar.':s.qty===null?'Hierdie produk het nog geen gestoorde voorraadtelling nie':(s.available_from??s.date)!==from?'Die telling is gestoor en beskikbaar vanaf '+(s.available_from??s.date)+', maar hierdie bestelling begin '+from+'. Pas die begindatum aan of bevestig die voorraad vir daardie datum in Voorraadtelling':s.date!==from&&s.availability_confirmed!==true?'Die telling is gestoor; bevestig dat die voorraad nog op die produksiedatum beskikbaar is':'Die telling is gestoor; voltooi die datum, voorraad wat uitgesit is en die telbron';
+  const projection=!legacyCount&&!countBasisChanged&&s.qty!==null?projectOpening(m):null;
+  const opening_qty=projection?projection.qty:s.qty;
+  const inventory_ready=!legacyCount&&!countBasisChanged&&opening_qty!==null&&((s.available_from??s.date)===from||(projection!==null&&projection.qty!==null))&&(s.date===from||s.availability_confirmed===true)&&s.reserve!==null&&s.source.trim().length>0;
+  const inventory_reason=inventory_ready?null:legacyCount?'Die vorige telling bevat los voorraad of deelpakke. Bevestig slegs die volle pakke in Voorraadtelling voordat hierdie bestelling bereken word.':countBasisChanged?'Die pakgrootte of eenheid het sedert hierdie telling verander. Bevestig die telling met die korrekte pakgrootte; die ou telling is bewaar.':projection?.reason?projection.reason:s.qty===null?'Hierdie produk het nog geen gestoorde voorraadtelling nie':(s.available_from??s.date)!==from?'Die telling is gestoor en beskikbaar vanaf '+(s.available_from??s.date)+', maar hierdie bestelling begin '+from+'. Pas die begindatum aan of bevestig die voorraad vir daardie datum in Voorraadtelling':s.date!==from&&s.availability_confirmed!==true?'Die telling is gestoor; bevestig dat die voorraad nog op die produksiedatum beskikbaar is':'Die telling is gestoor; voltooi die datum, voorraad wat uitgesit is en die telbron';
   const minimum=m.minimum_stock??0,retained=Math.max(s.reserve??0,minimum),minimumOnly=minimum>0&&!referenced.has(m.id);
-  let stock=inventory_ready?s.qty-retained:null,shortage=0,high=0,extra=0;
+  let stock=inventory_ready?opening_qty-retained:null,shortage=0,high=0,extra=0;
   const daily=[];for(let date=from;date<=to;date=addDays(date,1)){
    const contributions=row.contributions.filter(c=>c.date===date),use=contributions.reduce((n,c)=>n+c.qty,0);
    const eligibleUse=m.procure&&Number(date.slice(8))<=EARLY_MONTH_BUFFER.last_day?contributions.filter(c=>!c.resale).reduce((n,c)=>n+c.qty,0):0;
@@ -182,7 +220,7 @@ export function orderGuyReport({register,registry_revision,plans,forecast_days=[
    daily.push({date,gross:round(use),early_month_reserve:round(buffer),incoming:round(incoming),shortage:short===null?null:round(short)});
   }
   const quantity_ready=(minimumOnly||(!coverageMissing&&(!missingRecipe||!manufacturing.has(m.id))&&(!missingPackaging||!packaging.has(m.id))))&&!row.unresolved.length,net=inventory_ready&&quantity_ready?round(shortage):null,pack=m.pack_qty;
-  return {...row,gross:round(row.gross),provisional:round(row.provisional),early_month_gross:round(high),early_month_reserve:round(extra),required_with_reserve:round(row.gross+extra),daily,price:p,known_cost:p===null?null:round(row.gross*p),required_cost:p===null?null:round((row.gross+extra)*p),price_status:m.price.status,price_source:m.price.source,price_date:m.price.date,stock:s,minimum_stock:minimum,retained_stock:retained,minimum_only:minimumOnly,inventory_ready,inventory_reason,quantity_ready,net,pack_qty:pack,pack_spec:m.pack_spec??null,order_packs:!m.procure||net===null||pack===null?null:Math.ceil(Math.max(0,net/pack-1e-10)),quantity_review:row.provisional>0||!inventory_ready||!quantity_ready};
+  return {...row,gross:round(row.gross),provisional:round(row.provisional),early_month_gross:round(high),early_month_reserve:round(extra),required_with_reserve:round(row.gross+extra),daily,price:p,known_cost:p===null?null:round(row.gross*p),required_cost:p===null?null:round((row.gross+extra)*p),price_status:m.price.status,price_source:m.price.source,price_date:m.price.date,stock:s,projection,opening_qty:inventory_ready?opening_qty:null,minimum_stock:minimum,retained_stock:retained,minimum_only:minimumOnly,inventory_ready,inventory_reason,quantity_ready,net,pack_qty:pack,pack_spec:m.pack_spec??null,order_packs:!m.procure||net===null||pack===null?null:Math.ceil(Math.max(0,net/pack-1e-10)),quantity_review:!!projection||row.provisional>0||!inventory_ready||!quantity_ready};
  }).sort((a,b)=>a.supplier.localeCompare(b.supplier)||a.material.localeCompare(b.material));
- return {source:'FenMeat Sales V2',calculation_version:'2.2',generated_at:new Date().toISOString(),from,to,registry_revision,buffer_policy:EARLY_MONTH_BUFFER,coverage,requirements,warnings,unmapped_requirements:unmapped,rows,complete:warnings.length===0&&rows.every(r=>!r.procure||(!r.quantity_review&&r.order_packs!==null)),cost_basis:'ZAR including VAT. Missing/expired prices are blank, never zero.',note:'Confirmed production decisions take precedence. Other days use the current app forecast once per route/date, without future finished-stock counts. Gross forecast quantities are purchasing estimates, not saved production plans. Extra 15% reserve applies only to purchased materials needed on production dates 1–14, before stock netting and pack rounding. Ordinary material reserve is separate and must exclude this extra reserve. Bought-in products use gross route demand less their supplier count once; buy/repack My plan values are not added or deducted again. Resale contributions are excluded from the manufacturing reserve, including materials also used in recipes. Read target_date for the route date covered by each contribution. This is not a purchase order.'};
+ return {source:'FenMeat Sales V2',calculation_version:'2.3',generated_at:new Date().toISOString(),from,to,registry_revision,buffer_policy:EARLY_MONTH_BUFFER,coverage,requirements,warnings,unmapped_requirements:unmapped,rows,complete:warnings.length===0&&rows.every(r=>!r.procure||(!r.quantity_review&&r.order_packs!==null)),cost_basis:'ZAR including VAT. Missing/expired prices are blank, never zero.',note:'Projected opening stock is a read-only estimate, not a new physical count. It excludes count-day consumption, deducts subsequent gross use without historical buffers, and credits only explicitly confirmed incoming before the buying window. Missing history or receipt evidence keeps net quantities unknown. Confirmed production decisions take precedence. Other days use the current app forecast once per route/date, without future finished-stock counts. Gross forecast quantities are purchasing estimates, not saved production plans. Extra 15% reserve applies only to purchased materials needed on production dates 1–14, before stock netting and pack rounding. Ordinary material reserve is separate and must exclude this extra reserve. Bought-in products use gross route demand less their supplier count once; buy/repack My plan values are not added or deducted again. Resale contributions are excluded from the manufacturing reserve, including materials also used in recipes. Read target_date for the route date covered by each contribution. This is not a purchase order.'};
 }
