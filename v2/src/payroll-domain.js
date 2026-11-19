@@ -118,6 +118,8 @@ export function payrollBirthCheck(person,profile={}){
  return '';
 }
 export function suggestRows(staff,shifts,settings,payDate){
+ const start=settings.fresh_start?.start_date;
+ shifts=shifts.filter(s=>!s.exclusion&&(!start||s.punches[0].at>=new Date(dayStart(start)).toISOString()));
  const from=addDays(payDate,-4),rows=periodHours(staff.people,shifts,staff.leave,from,payDate);
  return rows.filter(r=>{const p=staff.people.find(p=>p.id===r.employee_id);return (p.active&&(!p.start_date||p.start_date<=payDate))||r.completed_seconds||r.review_seconds||r.paid_leave_minutes||shifts.some(s=>s.employee_id===p.id);}).map(source=>{
   const p=staff.people.find(p=>p.id===source.employee_id),profile=profileAt(settings,p.id,from),issues=[...source.issues];

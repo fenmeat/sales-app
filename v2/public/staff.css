@@ -7,3 +7,6 @@
 
 /* Source history remains readable on the shared mobile layout. */
 .history-tabs{margin:16px 0}.history-day{border-bottom:1px solid var(--border);margin:0}#history-detail code{white-space:pre-wrap;overflow-wrap:anywhere}#history-detail td{vertical-align:top;min-width:100px;max-width:450px;overflow-wrap:anywhere}#history-detail .payroll-values dt{font-size:15px;color:#142b3b}#history-detail .payroll-values dd{font-size:18px}#history-detail section+section{min-width:0}#history-person-form select{max-width:100%}.history-tabs button{flex:1}#history-date-error{color:#842121;margin:0}@media(max-width:650px){#history-person-form{grid-template-columns:1fr}.history-tabs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}.history-tabs button{font-size:15px}#history-detail th,#history-detail td{font-size:15px}#history-detail .stats span{font-size:14px}}
+
+[data-search-person][hidden], [data-no-employees][hidden]{display:none}
+[data-employee-search]{width:100%;max-width:28rem;font-size:1rem}

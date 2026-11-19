@@ -84,7 +84,7 @@ export async function readStaffData(args,env,username,scopes){
  }
  if(resource==='hours'){
   const from=dateKey(args.from),to=dateKey(args.to);check(from<=to&&to<=addDays(from,30),'Choose at most 31 calendar days.');
-  const url=new URL('https://fenmeat.invalid/api/staff/hours');url.searchParams.set('from',from);url.searchParams.set('to',to);
+  const url=new URL('https://fenmeat.invalid/api/staff/hours');url.searchParams.set('from',from);url.searchParams.set('to',to);if(args.employee_id)url.searchParams.set('employee_id',args.employee_id);
   return result({...await staffApi({request:new Request(url),url,env:{DB:db},user:{username},bodyOf}),source_kind:'native_clock_and_approved_leave'});
  }
  if(resource==='leave'){
