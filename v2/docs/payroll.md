@@ -34,6 +34,12 @@ Sources: [SARS weekly PAYE tables](https://www.sars.gov.za/tax-rates/employers/t
 [2027 employer guide](https://www.sars.gov.za/guide-for-employers-in-respect-of-employees-tax-2027/),
 [SARS UIF](https://www.sars.gov.za/types-of-tax/unemployment-insurance-fund/).
 
+## FenMeat hourly wages with daily overtime
+
+In **Staff → Payroll → Pay setup**, open the existing worker, select the effective date and hourly rate, and tick **FenMeat pays 100% of hourly wages**. This dated setting applies to that person. Opening **Week wages** shows ordinary and overtime pay, paid days off, PAYE, employee UIF, deductions and net. A provisional net assumes standard weekly tax treatment and the indicated deductions. Check the monthly UIF headroom during the review.
+
+Use **Save paid days off** for an employer-approved scheduled day without work or leave. Select the date and record the source. The amount is preserved when clock records change. The provisional estimate uses the latest completed clock records when the week is reopened. Final review requires the completed week, checked clock records, agreed breaks, overtime and any special earnings. If People and the original ID disagree, record the verified payroll date and the document checked under Pay setup. The clocking date stays intact. Alinda reviews and approves the run before payment is recorded.
+
 ## Original setup before activating Begin vars
 
 1. Pay setup: confirm legal employer name/address and the first Fen Friday.
