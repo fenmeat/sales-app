@@ -1,3 +1,4 @@
+import {taskOwner} from './task-workflow.js';
 import {originalFileBytes} from './task-files.js';
 import {check,UserError,dateKey,today} from './domain.js';
 import {workPage} from './task-pa-work.js';
@@ -52,8 +53,8 @@ export async function visiblePaRows(env,user,rows){
  return rows.filter(r=>{
   if(r.scope!=='fenmeat')return false;
   const linked=sources.filter(t=>t.id===r.app_task_id||t.pa_task_id===r.id||t.parent_cycle_id===r.id);
-  if(!linked.length)return r.assigned_to===user.username;
-  return linked.every(t=>fullTaskAccess(user,t))&&(r.assigned_to===user.username||
+  if(!linked.length)return r.assigned_to===user.username||r.responsibility?.owner===user.username;
+  return linked.every(t=>fullTaskAccess(user,t))&&(r.assigned_to===user.username||r.responsibility?.owner===user.username||
    linked.every(t=>isTaskManager(user.username)&&taskVisibility(t)==='operational'));
  });
 }
@@ -232,6 +233,10 @@ function validateRegister(data,env){
   check(r.scope!=='fenmeat'||r.area==='Fen Meat','Only Fen Meat records may be shared with staff.');
   check(!r.assigned_to||users(env).includes(r.assigned_to),'Use an existing assignee, or leave an unverified owner empty.');
   const row={id:r.id,scope:r.scope,area:txt(r.area,100,true),title:txt(r.title,500,true),status:r.status,assigned_to:r.assigned_to||'',priority:txt(r.priority||'Normal',30),next_action:txt(r.next_action||'',16000),review_group:txt(r.review_group||'',200),due_date:r.due_date?dateKey(r.due_date):'',review_date:r.review_date?dateKey(r.review_date):'',source_url:link(r.source_url),app_task_id:txt(r.app_task_id||'',90),outcome:txt(r.outcome||'',4000)};
+  if(r.responsibility!==undefined){
+   const v=r.responsibility;check(v&&[...users(env),'pa'].includes(v.owner)&&Number.isSafeInteger(v.version)&&v.version>=1,'Lees die huidige verantwoordelike persoon en taakbeskrywing.');
+   row.responsibility={owner:v.owner,action:txt(v.action,4000,true),situation:txt(v.situation,4000,true),version:v.version};
+  }
   check(row.source_url.startsWith('https://docs.google.com/spreadsheets/'),'Keep the canonical PA row link.');return row;
  });
  const source_at=iso(data.source_at);check(Date.parse(source_at)<=Date.now()+60000,'Source time is in the future.');
@@ -289,6 +294,16 @@ export async function savePaReport(env,user,b){
    payload={...old,source_at:patch.source_at,source_url:patch.source_url,rows:[...old.rows.map(r=>changes.get(r.id)||r),...patch.rows.filter(r=>!old.rows.some(o=>o.id===r.id))]};delete payload.revision;delete payload.saved_at;
   }else payload=validateRegister(b.data,env);check(!old||Date.parse(payload.source_at)>=Date.parse(old.source_at),'Do not publish an older register.',409);
   check(!old||old.rows.every(r=>payload.rows.some(n=>n.id===r.id)),'Do not silently drop existing PA identities. Preserve closed or archived records.',409);
+  const priorRows=new Map((old?.rows||[]).map(row=>[row.id,row]));
+  for(const row of payload.rows){
+   const previous=priorRows.get(row.id);
+   if(!previous?.responsibility)continue;
+   const version=row.responsibility?.version||0;
+   check(version>=previous.responsibility.version,'Lees die bygewerkte taakbeskrywing voordat jy publiseer.',409);
+   if(version===previous.responsibility.version){
+    check(['title','next_action','outcome','responsibility'].every(k=>JSON.stringify(row[k])===JSON.stringify(previous[k])),'Lees die nuutste taak en verhoog die teksweergawe vir ’n wysiging.',409);
+   }
+  }
  }else {
   const register=await latest(env.DB,'register');
   payload=validateReport(b.data,register);
@@ -328,7 +343,7 @@ async function saveAnswer(env,user,b){
  const register=await latest(env.DB,'register');check(b.revision===register?.revision,'Lees die huidige taaklys weer.',409);
  if(TSK.test(r.subject_key)){
   check(a.task_status===current.status&&next_action===current.next_action&&follow_up_date===(current.review_date||''),'Werk eers die bestaande taak se status, volgende stap en opvolgdatum by en lees dit terug.',409);
-  check(!current.assigned_to||responsible.toLowerCase()===current.assigned_to,'Gebruik die taak se bestaande verantwoordelike persoon.');
+  const owner=taskOwner(current);check(!owner||responsible.toLowerCase()===owner,'Gebruik die taak se bestaande verantwoordelike persoon.');
  }
  const answer={kind:a.kind,text,recommendation,next_action,responsible,follow_up_date,task_status:txt(a.task_status||'Inligting',50,true),source_url:link(b.source_url),source_subject_hash:current.subject_hash,register_revision:register.revision};
  check(answer.source_url,'Gee die nagegane bron.');
@@ -366,6 +381,11 @@ async function respond(env,user,b){
  for(const id of attachments){const f=await file(env,user,id);check(f.subject_key===s.subject_key&&f.actor===user.username,'Use your evidence for this item.');}
  const payload={action:b.action,note:txt(b.note??'',5000,!['remind','complete'].includes(b.action)),attachments,proof_url:link(b.proof_url),assigned_to:'',remind_at:'',source_task_ids:TSK.test(s.subject_key)?[s.id]:s.pa_task_ids??[]};
  if(b.reply_to){const previous=await feedbackById(env.DB,b.reply_to);check(previous&&previous.answer_payload&&(previous.subject_key===s.subject_key||JSON.parse(previous.payload).source_task_ids?.includes(s.subject_key)),'Kies ’n bestaande PA-antwoord in hierdie gesprek.');await subject(env,user,previous.subject_key);payload.reply_to=b.reply_to;}
+ if(b.action==='complete'&&b.completion_scope!==undefined){
+  if(b.completion_scope==='part')check(taskOwner(s)===user.username,'Bevestig net jou eie aandeel.',403);
+  check(['part','whole'].includes(b.completion_scope),'Kies wat klaar is.');
+  payload.completion_scope=b.completion_scope;
+ }
  if(b.action==='complete')check(TSK.test(s.subject_key)&&opened(s),'Choose an open PA obligation. This records your confirmation for PA verification.');
  if(b.action==='assign'){check(isAdmin(user.username)&&TSK.test(s.subject_key),'Only admins can reassign an existing task.',403);check(s.scope!=='private','Private PA work cannot be assigned to staff.',403);check(users(env).includes(b.assigned_to),'Choose an existing app user.');payload.assigned_to=b.assigned_to;}
  if(b.action==='request_update')check(isAdmin(user.username)&&TSK.test(s.subject_key)&&s.assigned_to&&s.assigned_to!==user.username&&s.scope==='fenmeat','Choose another staff member’s task.',403);
@@ -416,10 +436,10 @@ export function reportFollowup(rows,feedback,day,since=''){
   const f=latest.get(r.id),date=r.review_date||r.due_date||'',closed=['Complete','Cancelled','Archived'].includes(r.status);
   const future=date>day,answered=!!f?.answer,reply_in_window=answered&&(!since||f.answered_at>since);
   const category=closed?'completed':future?'scheduled':r.status==='Waiting'&&(!date||date>day)?'waiting':reply_in_window?'answered':'action';
-  return {id:r.id,title:r.title,...(r.email?{email:r.email}:{}),category,status:r.status,assigned_to:r.assigned_to,next_action:r.next_action,follow_up_date:date,
+  return {id:r.id,title:r.title,next_owner:taskOwner(r),responsibility:r.responsibility,...(r.email?{email:r.email}:{}),category,status:r.status,assigned_to:r.assigned_to,next_action:r.next_action,follow_up_date:date,
    waiting_on:r.status==='Waiting'?r.next_action:'',awaiting_answer:!!f&&requiresAnswer(f)&&!answered,
    answer:answered?{feedback_id:f.id,text:f.answer.text,recommendation:f.answer.recommendation,answered_at:f.answered_at}:null,
-   include_in_action_list:!closed&&!future&&category!=='waiting',include_answer_update:reply_in_window,
+   include_in_action_list:!closed&&!future&&category!=='waiting'&&taskOwner(r)==='alex',include_answer_update:reply_in_window,
    source_url:r.source_url,app_task_id:r.app_task_id};
  });
 }

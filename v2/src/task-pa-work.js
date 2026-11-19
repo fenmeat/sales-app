@@ -64,7 +64,7 @@ export async function workPage(db, {offset=0, since=null, report=false}={}) {
   const rows=await db.prepare(`SELECT e.task_id,e.revision,json_extract(e.payload,'$.title') title,j.value job
     FROM v2_task_events e JOIN json_each(e.payload,'$.pa_work') j
     WHERE e.revision=(SELECT MAX(n.revision) FROM v2_task_events n WHERE n.task_id=e.task_id)
-    AND ${report?'1':"json_extract(e.payload,'$.status') NOT IN ('Complete','Cancelled')"} AND ${filter}
+    AND ${report?'1':"json_extract(e.payload,'$.status') NOT IN ('Complete','Cancelled')"} AND ${report?'1':"(COALESCE(json_extract(e.payload,'$.pa_does_work'),0)=0 OR COALESCE(NULLIF(json_extract(e.payload,'$.due_date'),''),json_extract(e.payload,'$.review_date'),'')<=date('now','+2 hours'))"} AND ${filter}
     ORDER BY json_extract(j.value,'$.updated_at'),e.task_id,j.key LIMIT 51 OFFSET ?`).bind(report?(since || '1970-01-01'):at,offset).all();
   return {items:rows.results.slice(0,50).map(({job,...r})=>({...r,work:JSON.parse(job)})),next_offset:rows.results.length>50?offset+50:null};
 }

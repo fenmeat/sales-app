@@ -1,8 +1,9 @@
 name: Text editing browser acceptance
 on:
   push:
-    branches: [feature/task-access-0480, feature/task-steps,perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
+    branches: [fix/task-responsibility, feature/task-access-0480, feature/task-steps,perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
     paths:
+      - 'v2/scripts/qa-task-responsibility.mjs'
       - 'v2/src/task-access.js'
       - 'v2/test/task-access.test.js'
       - 'v2/public/task-workflow-ui.js'
@@ -56,6 +57,10 @@ jobs:
         run: npm install --prefix "$RUNNER_TEMP/text-browser" --no-audit --no-fund playwright@1.62.1
       - name: Install browser
         run: node "$RUNNER_TEMP/text-browser/node_modules/playwright/cli.js" install --with-deps "${{ matrix.browser }}"
+      - name: Check iPad task ownership, replies, reminders and completion
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-responsibility.mjs
       - name: Check real text editing and mobile touch profiles
         env:
           TEXT_BROWSER: ${{ matrix.browser }}

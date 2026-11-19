@@ -4,6 +4,7 @@ import {isAdmin,keys,hash} from './auth.js';
 import {isTaskManager,taskVisibility,taskReadScope,canSeeTask,canManageTask,fullTaskAccess,taskView,stepFileAccess} from './task-access.js';
 import {isInvoiceRep} from './invoice-auth.js';
 import {projectTask,taskType,syncRequired,stepReminder} from './task-workflow.js';
+import {taskOwner} from './task-workflow.js';
 import {registerTaskText,changePaWork,unfinishedWork} from './task-pa-work.js';
 import {workflowAction,validateSteps,completeReminder} from './task-workflow-actions.js';
 import {MAIL_SCHEMA,mailAction,readTaskMail} from './tasks-mail.js';
@@ -29,8 +30,8 @@ const ID=/^[a-zA-Z0-9-]{8,90}$/,PA_ID=/^TSK-\d{5,}$/;
 const statusSet=new Set(['Pending','Scheduled','Waiting','Complete','Cancelled']);
 const reminderFields=['reminder_mode','reminder_at'];
 const workflowFields=['task_type','repeat','pa_required'];
-const editable=['visibility',...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','required_materials','po_number','po_revision','document_url','evidence_url','source_url','parent_cycle_id','pa_task_id','requires_evidence',...reminderFields];
-const selfEditable=[...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','document_url','evidence_url','requires_evidence',...reminderFields];
+const editable=['pa_does_work','visibility',...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','required_materials','po_number','po_revision','document_url','evidence_url','source_url','parent_cycle_id','pa_task_id','requires_evidence',...reminderFields];
+const selfEditable=['pa_does_work',...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','document_url','evidence_url','requires_evidence',...reminderFields];
 export const managesOwnTask=(user,task)=>!(task.steps||[]).some(s=>s.assigned_to!==user.username)&&task.created_by===user.username&&task.assigned_to===user.username&&task.kind!=='po_dispatch';
 export const latestSQL=`SELECT e.*,(SELECT MAX(c.revision) FROM v2_task_events c WHERE c.task_id=e.task_id AND c.action NOT IN ('reminder','followup_reminder','set_visibility')) AS pa_revision,s.acknowledged_revision,s.pa_task_id AS synced_pa_task_id,s.source_url AS synced_source_url,s.synced_at,s.last_error FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON e.task_id=l.task_id AND e.revision=l.revision LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`;
 const text=(value,max,required=false)=>{check(typeof value==='string'&&value.length<=max&&(!required||value.trim()),'Enter the required task details.');return value.trim();};
@@ -60,6 +61,7 @@ export function currentTaskNotification(task,n,now=new Date()){
  }
  if(n.kind==='update_requested')return openTask(task)&&task.feedback_request?.status==='pending'&&task.feedback_request.to===n.username&&n.id===task.feedback_request.id+'-'+n.username;
  if(['step_due','step_overdue'].includes(n.kind))return !!task.steps?.some(step=>step.assigned_to===n.username&&stepReminder(task,step,now)?.id===n.id);
+ if(['assigned','due'].includes(n.kind)&&taskOwner(task)==='pa')return false;
  if(n.kind!=='due')return true;
  if(!openTask(task)||n.username!==task.assigned_to)return false;
  const mode=task.reminder_mode??'daily';
@@ -93,6 +95,7 @@ function validateReminder(task){
 }
 function validateTask(raw,env){
  const t=validateReminder(raw);check(['operational','assigned','confidential'].includes(taskVisibility(t)),'Kies wie die taak mag sien.');t.task_type=t.task_type||taskType(t);check(['reminder','workflow','legacy'].includes(t.task_type),'Kies ’n taaksoort.');t.repeat=t.repeat||'none';check(['none','daily','weekly','monthly'].includes(t.repeat),'Kies ’n herhaling.');check(t.task_type==='reminder'||t.repeat==='none','Slegs herinneringe kan herhaal.');if(t.task_type==='reminder')check(!t.pa_task_id&&!t.parent_cycle_id&&t.kind==='general','Gekoppelde werk kan nie ’n gewone herinnering wees nie.');t.pa_required=t.task_type==='reminder'?false:!!t.pa_required;t.title=text(t.title,180,true);t.details=optionalText(t.details,5000);
+ if(t.pa_does_work!==undefined)check(typeof t.pa_does_work==='boolean'&&(!t.pa_does_work||t.task_type==='reminder'),'Gebruik PA se werk vir ’n gewone taak.');
  check(taskUsers(env).includes(t.assigned_to),'Choose a current app user.');
  check(['general','stocktake','po_dispatch'].includes(t.kind),'Choose a task type.');
  check(['Critical','High','Normal','Low'].includes(t.priority),'Choose a priority.');
@@ -282,6 +285,14 @@ export async function saveTask(env,user,b){
   if(['attach','note','respond'].includes(action))task.last_update.attachments=files.map(f=>f.id);
  }
  if(['restore_task_revision','undo_complete'].includes(action)&&old?.pa_work)task.pa_work=old.pa_work;
+ if(action==='note'&&b.completion_scope==='part'){
+  check(task.kind==='general'&&task.task_type!=='workflow'&&openTask(task),'Gebruik die toepaslike taakstap.');
+  check(user.username===task.assigned_to,'Bevestig net jou eie aandeel.',403);
+  task.part_confirmation={by:user.username,at,note:text(b.note,2000,true),proof_url:safeURL(b.proof_url),attachments:task.last_update?.attachments||[]};
+  await changePaWork(task,{action:'pa_request',request_id:b.request_id,note:'My aandeel is klaar: '+task.part_confirmation.note+'. Gaan na wie die volgende stap doen.'},user,env.DB,at,files,safeURL);
+ }
+ if(task.pa_does_work&&(action==='create'||action==='update'&&!old?.pa_does_work))
+  await changePaWork(task,{action:'pa_request',request_id:b.request_id,note:task.details||task.title},user,env.DB,at,files,safeURL);
  if(['create','note','respond'].includes(action)&&user.via!=='pa')registerTaskText(task,{...b,action},user,at);
  if(old?.assigned_to!==task.assigned_to&&task.feedback_request?.status==='pending')task.feedback_request={...task.feedback_request,status:'cancelled',cancelled_at:at};
  if(task.task_type!=='legacy')task=projectTask(task);

@@ -1,3 +1,4 @@
+import {taskOwner} from './task-workflow.js';
 import {check,today} from './domain.js';
 import {mailSummaries,projectMail} from './pa-email.js';
 import {isTaskManager,taskReadScope,taskView} from './task-access.js';
@@ -9,12 +10,16 @@ import {unifiedWork,selectWork,workCounts} from '../public/pa-report-model.js';
 
 const statuses=new Set(['open','scheduled','waiting','closed','complete','cancelled','submitted','all']);
 const sourceFields=['id','title','kind','task_type','status','revision','pa_task_id','parent_cycle_id','assigned_to','created_by','due_date','review_date','next_action_date','requires_evidence','document_url','pa_sync','step_only','visibility','priority','can_manage'];
-const workStatus=t=>t.pa_work?.find(j=>j.status!=='answered')?.status||t.pa_work?.at(-1)?.status;
+const workStatus=t=>{
+ const job=t.pa_work?.find(j=>j.status!=='answered')||t.pa_work?.at(-1);
+ return job?.status==='working'&&job.lease_until&&Date.parse(job.lease_until)<=Date.now()?'queued':job?.status;
+};
 const brief=t=>({...Object.fromEntries(sourceFields.filter(k=>t[k]!==undefined).map(k=>[k,t[k]])),pa_work_status:workStatus(t),brief:true});
 function compact(row){
  const {pa_work,last_edit,completion,attachments,last_update,last_reason,feedback_request,...r}=row;
  if(pa_work?.length)r.pa_work_status=workStatus(row);
  if(r.steps)r.steps=r.steps.map(({completion,notes,...step})=>step);
+ if(!r.is_pa)r.display_owner=taskOwner(row);
  if(r.stages)r.stages=r.stages.map(brief);
  return r;
 }
@@ -22,12 +27,12 @@ function compact(row){
 export async function readTaskWorkspace(env,user,query={}){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
  const admin=isAdmin(user.username),rep=isInvoiceRep(user.username),status=query.status||'open',scope=query.scope||'mine',search=String(query.search||'').trim().slice(0,200),offset=Number(query.offset||0),size=25;
- check(statuses.has(status)&&['mine','fenmeat','private','all'].includes(scope),'Choose a task list.');
- check(admin||scope==='mine'||isTaskManager(user.username)&&scope==='fenmeat','Only admins can view other task lists.',403);check(scope!=='private'||user.username==='alex','Private tasks are for Alex only.',403);
+ check(statuses.has(status)&&['mine','pa','others','fenmeat','private','all'].includes(scope),'Choose a task list.');
+ check(admin||scope==='mine'||isTaskManager(user.username)&&['pa','others','fenmeat'].includes(scope),'Only admins can view other task lists.',403);check(scope!=='private'||user.username==='alex','Private tasks are for Alex only.',403);
  check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  const access=taskReadScope(user);
  const statements=[env.DB.prepare(latestSQL+' WHERE '+access.sql).bind(...access.params)];
- if(!rep)statements.push(env.DB.prepare("SELECT * FROM v2_pa_report_versions WHERE resource_key='register' ORDER BY revision DESC LIMIT 1"),env.DB.prepare(`SELECT f.id,f.subject_key,f.actor,f.created_at,f.acknowledged_at,json_extract(f.payload,'$.action') action,
+ if(!rep)statements.push(env.DB.prepare("SELECT * FROM v2_pa_report_versions WHERE resource_key='register' ORDER BY revision DESC LIMIT 1"),env.DB.prepare(`SELECT f.id,f.subject_key,f.actor,f.created_at,f.acknowledged_at,json_extract(f.payload,'$.completion_scope') completion_scope,json_extract(f.payload,'$.action') action,
  instr(COALESCE(json_extract(f.payload,'$.note'),''),'?')>0 question,a.feedback_id answered
  FROM v2_pa_report_feedback f LEFT JOIN v2_pa_report_answers a ON a.feedback_id=f.id
  WHERE json_extract(f.payload,'$.action') IN ('respond','complete') AND NOT EXISTS
@@ -48,9 +53,31 @@ export async function readTaskWorkspace(env,user,query={}){
  const canonicalById=new Map(canonical.map(r=>[r.id,r])),included=new Set();
  const page=await Promise.all(items.map(async r=>{
   const source=canonicalById.get(r.id),copy=compact(r);
+  if(!r.is_pa&&r.pa_does_work){
+   const job=r.pa_work?.find(w=>['blocked','approval'].includes(w.status));if(job?.results?.length)copy.work_next_action=job.results.at(-1).next_action;
+  }
+  if(!r.is_pa)copy.display_progress=r.completion?.note||r.part_confirmation?.note||r.last_update?.text||'';
   if(source){copy.subject_key=source.id;copy.subject_hash=await hash(JSON.stringify(source));included.add(source.id);}
   return copy;
  }));
+ // Load only answers for visible page subjects. Report-only replies stay private to Alex.
+ const keys=JSON.stringify([...included]);
+ if(included.size){
+  const replies=await env.DB.prepare("SELECT f.subject_key, f.payload, json_extract(a.payload,'$.text') text, a.created_at FROM v2_pa_report_answers a JOIN v2_pa_report_feedback f ON f.id=a.feedback_id WHERE f.subject_key IN (SELECT value FROM json_each(?)) OR (?='alex' AND EXISTS (SELECT 1 FROM json_each(f.payload,'$.source_task_ids') WHERE value IN (SELECT value FROM json_each(?)))) ORDER BY a.created_at DESC,a.feedback_id DESC").bind(keys,user.username,keys).all();
+  const byId=new Map(page.map(r=>[r.id,r]));
+  for(const answer of replies.results){
+   const sourceIds=user.username==='alex'?JSON.parse(answer.payload).source_task_ids||[]:[];
+   for(const key of [answer.subject_key,...sourceIds]){
+    const row=byId.get(key);if(row&&!row.latest_answer)row.latest_answer=answer.text;
+   }
+  }
+ }
+ for(const row of page){
+  const original=items.find(r=>r.id===row.id);
+  const results=(original.stages||[original]).flatMap(t=>(t.pa_work||[]).flatMap(j=>j.results||[]));
+  const latest=results.sort((a,b)=>b.at.localeCompare(a.at))[0];
+  if(latest)row.latest_work_answer=latest.answer;
+ }
  const pageTasks=new Map();for(const r of items){for(const t of r.stages||[])pageTasks.set(t.id,brief(t));if(!r.is_pa)pageTasks.set(r.id,brief(r));}
  pa.rows=canonical.filter(r=>included.has(r.id)).map(r=>({...r,subject_key:r.id,subject_hash:page.find(p=>p.id===r.id).subject_hash}));
  pa.feedback=[];pa.report=null;pa.history=[];pa.rabbi=null;pa.rabbi_history=[];pa.alerts=[];pa.reminders=[];

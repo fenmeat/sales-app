@@ -48,3 +48,45 @@ export function nextOccurrence(date,repeat,day=localDate()){
  throw Error('Kies ’n geldige herhaling.');
 }
 export const statusLabel=s=>({Pending:'Doen nou',Scheduled:'Scheduled Tasks · Later',Waiting:'Wag vir iemand',Complete:'Klaar',Cancelled:'Gekanselleer'}[s]||s);
+
+// The contact controls access. The next action determines whose list shows the task.
+export function taskOwner(task) {
+  if (task.display_owner) return task.display_owner;
+  if (task.next_assigned_to) return task.next_assigned_to;
+  if (task.email && !['completed','cancelled'].includes(task.email.phase)) {
+    return ['approval','draft'].includes(task.email.phase) ? 'alex' : 'pa';
+  }
+  if (task.part_pending) return 'pa';
+  if (task.app_edit_pending) return task.assigned_to;
+  if (task.responsibility) return task.responsibility.owner;
+  const job = task.pa_work?.find(w => w.status !== 'answered');
+  if (job && (task.pa_does_work || task.part_confirmation)) {
+    return ['approval','blocked'].includes(job.status) ? job.actor : 'pa';
+  }
+  if (task.pa_does_work && !job) return 'pa';
+  return task.assigned_to;
+}
+
+export function ownStep(task, username, status) {
+  return task.steps?.find(step => step.assigned_to === username && step.status !== 'Complete'
+    && (!status || (status === 'open' ? !step.blocked && ['Pending','In Progress'].includes(step.effective_status || step.status)
+      : status === 'scheduled' ? step.effective_status === 'Scheduled' : true)));
+}
+
+export function taskBrief(task, username) {
+  const owner = taskOwner(task), step = ownStep(task,username,'open');
+  const closed = ['Complete','Cancelled','Archived','Klaar gemeld'].includes(task.status);
+  const job=(task.pa_work||[]).find(w=>['blocked','approval'].includes(w.status));
+  const result=job?.results?.at(-1);
+  const next = task.work_next_action || (result&&task.pa_does_work?result.next_action:'') || (task.part_pending ? 'PA moet die bevestiging nagaan en vasstel wat nog oorbly.' :
+    task.next_action || task.details || task.title);
+  const current = task.next_assigned_to || task.email || task.app_edit_pending;
+  const single = current ? next : task.responsibility?.action || next;
+  const progress = task.progress && typeof task.progress === 'object' ?
+    task.progress.done+' van '+task.progress.total+' stappe klaar.' :
+    task.outcome || task.display_progress || task.part_confirmation?.note || task.completion?.note || task.last_update?.text || 'Geen vordering is nog aangeteken nie.';
+  return {owner, situation: task.responsibility?.situation || task.details || task.title,
+    action: !closed && task.status !== 'Scheduled' && (step || owner === username) ?
+      step?.description || single : 'Niks op hierdie stadium nie',
+    progress: task.part_pending ? 'Jou aandeel is as klaar aangemeld.' : progress, next};
+}

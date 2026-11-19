@@ -39,3 +39,8 @@
 .workflow p{margin:.5rem 0}.workflow a{display:inline-block;margin:4px 8px 4px 0}
 
 .task-choice{padding:14px;border:1px solid var(--line);border-radius:9px;background:#f2f7f4;margin-bottom:18px}.task-choice label{margin-top:0}.task-choice h3{margin:0 0 8px}.task-choice p{line-height:1.45}.special-task-choice{display:flex;align-items:center;flex-wrap:wrap;gap:10px;border-top:1px solid var(--line);padding-top:12px}.special-task-choice span{font-size:15px;color:#455e53}
+
+.task-brief {display:grid;gap:.55rem;margin:.7rem 0;max-width:76ch}
+.task-brief div {display:grid;grid-template-columns:minmax(10rem,12rem) minmax(0,1fr);gap:.7rem}
+.task-brief dt {font-weight:700}.task-brief dd {margin:0;white-space:pre-line;overflow-wrap:anywhere}
+@media(max-width:630px){.task-brief div{grid-template-columns:1fr;gap:.1rem}}
