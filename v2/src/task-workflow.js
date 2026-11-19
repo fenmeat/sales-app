@@ -57,7 +57,7 @@ export function taskOwner(task) {
     return ['approval','draft'].includes(task.email.phase) ? 'alex' : 'pa';
   }
   if (task.part_pending) return 'pa';
-  if (task.app_edit_pending) return task.assigned_to;
+  if (task.app_owner_changed) return task.assigned_to;
   if (task.responsibility) return task.responsibility.owner;
   const job = task.pa_work?.find(w => w.status !== 'answered');
   if (job && (task.pa_does_work || task.part_confirmation)) {

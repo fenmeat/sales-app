@@ -48,3 +48,14 @@ test('new PA work waits for its turn, human tasks stay personal and a reported s
  const denied=await call('alinda','/api/tasks',{action:'note',task_id:other.id,revision:part.data.task.revision,request_id:crypto.randomUUID(),completion_scope:'part',note:'Signed.'});
  assert.equal(denied.status,403);
 });
+
+import {unifiedWork} from '../public/pa-report-model.js';
+import {taskOwner} from '../src/task-workflow.js';
+test('keep ownership through wording edits and show outstanding dispatch evidence on a closed case',()=>{
+ const r={id:'TSK-00993',scope:'fenmeat',area:'Fen Meat',title:'Confirm old delivery',status:'Pending',assigned_to:'alex',responsibility:{owner:'pa',version:1}};
+ const task={id:'example-stage',kind:'general',title:'Edited words',status:'Pending',assigned_to:'alex',pa_task_id:r.id,pa_sync:{status:'pending'},last_edit:{changes:[{field:'title'}]}};
+ const combine=(r,t)=>unifiedWork({tasks:[t]}, {rows:[r]});
+ assert.equal(taskOwner(combine(r,task)[0]),'pa');
+ const rows=combine({...r,status:'Complete'},{...task,kind:'po_dispatch'});
+ assert.equal(rows.length,2);assert.equal(rows[0].status,'Complete');assert.equal(rows[1].id,task.id);
+});
