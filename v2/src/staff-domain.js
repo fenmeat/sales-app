@@ -135,7 +135,7 @@ export function appendPunch(shift,kind,at){const next={...shift,punches:[...shif
 export function periodHours(people,shifts,leave,from,to,now=Date.now()){
  const start=dayStart(from),end=dayStart(to)+86400000;check(from<=to&&end-start<=31*86400000,'Review up to 31 days at a time.');
  return people.map(p=>{
-  const own=shifts.filter(s=>s.employee_id===p.id),days=[];
+  const own=shifts.filter(s=>s.employee_id===p.id&&!s.exclusion),days=[];
   for(let day=start;day<end;day+=86400000){const date=dayAt(day),issues=new Set();let seconds=0,breakSeconds=0,reviewSeconds=0;
    for(const s of own){const z=shiftSummary(s,{from:day,to:day+86400000});if(Date.parse(z.start_at)>=day+86400000||(z.end_at?Date.parse(z.end_at)<=day:now<day))continue;
     const unresolved=z.issues.filter(x=>x==='Open shift'||!s.reviewed);unresolved.forEach(x=>issues.add(x));if(z.state==='out'&&!unresolved.length)seconds+=z.worked_seconds;else reviewSeconds+=z.worked_seconds;breakSeconds+=z.break_seconds;

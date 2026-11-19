@@ -1,7 +1,7 @@
 name: Payroll browser acceptance
 on:
   push:
-    branches: [payroll/fresh-start-20261116, fix/payroll-hourly-review]
+    branches: [payroll/fresh-start-20261116, fix/payroll-hourly-review, fix/staff-clock-history]
     paths:
       - 'v2/**'
       - '.github/workflows/payroll-acceptance.yml'
@@ -24,8 +24,10 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm test
       - run: npm install --prefix "$RUNNER_TEMP/payroll-browser" playwright@1.62.1 --no-audit --no-fund
-      - run: node "$RUNNER_TEMP/payroll-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - run: node "$RUNNER_TEMP/payroll-browser/node_modules/playwright/cli.js" install --with-deps chromium webkit
       - name: Exercise the Fen-only hourly week, paid day off and zero-PAYE payslip
         run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-payroll.mjs --fen-hourly
       - name: Exercise both Friday screens, payslip PDF, CSV and printed month report
         run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-payroll.mjs
+      - name: Check Staff history on iPhone, iPad, Android and desktop browser profiles
+        run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-staff-history.mjs

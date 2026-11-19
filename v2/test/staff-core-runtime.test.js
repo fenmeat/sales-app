@@ -77,4 +77,40 @@ test('native Staff: real D1 permissions, device isolation, PINs, idempotency, co
  r=await save('/api/staff/device',{action:'revoke',device_id:device});assert.equal(r.status,200);assert.equal((await call('/api/staff-clock/state',{cookie:clock})).status,401);assert.equal((await call('/api/staff-clock/punch',{cookie:clock,body:punch})).status,401,'revocation applies even to retries');
  db=await mf.getD1Database('DB');assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_events').first()).n,0);assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_production_events').first()).n,0,'Staff does not mutate production');
  assert.doesNotMatch(JSON.stringify((await db.prepare('SELECT * FROM v2_staff_register').all()).results),/\"pin\"\s*:/);
+ // A Friday clock-out paired to Monday must remain auditable after refreshing payroll.
+ const insertShift=async(revision,punches)=>{
+  const shift={id:crypto.randomUUID(),employee_id:employee,punches};
+  await db.prepare('INSERT INTO v2_staff_time VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),employee,shift.id,revision,punches[0].at,punches.at(-1).at,'out',JSON.stringify(shift),'punch','test-device',punches.at(-1).at).run();
+  return shift;
+ };
+ const entry=(kind,date,time)=>({kind,at:`2026-11-${date}T${time}:00.000Z`});
+ const old=await insertShift(4,[entry('in','13','05:59'),entry('out','16','06:01')]);
+ const monday=await insertShift(5,[entry('in','16','06:01'),entry('break_start','16','08:00'),entry('break_end','16','08:55'),entry('out','16','14:02')]);
+ const readHours=()=>call('/api/staff/hours?employee_id='+employee+'&from=2026-11-16&to=2026-11-16&navigation=1',{cookie:admin}).then(r=>r.data);
+ let evidence=await readHours();
+ assert.equal(evidence.rows[0].review_seconds,481*60);
+ assert.equal(evidence.previous,'2026-11-13');
+ const exclusion={request_id:crypto.randomUUID(),revision:rev,employee_id:employee,shift_id:old.id,clock_revision:5,reason:'Previous clock-out unknown'};
+ assert.equal((await save('/api/staff/exclude-shift',{...exclusion,reason:''})).status,400);
+ assert.equal((await save('/api/staff/exclude-shift',exclusion)).status,200);
+ assert.equal((await call('/api/staff/exclude-shift',{cookie:admin,body:exclusion})).data.replayed,true);
+ evidence=await readHours();
+ assert.equal(evidence.rows[0].completed_seconds,426*60);
+ assert.equal(evidence.rows[0].review_seconds,0);
+ assert.deepEqual(evidence.shifts.find(s=>s.id===monday.id).punches,monday.punches);
+ const excluded=evidence.shifts.find(s=>s.id===old.id);
+ assert.equal(excluded.exclusion.actor,'alinda');
+ assert.equal(excluded.exclusion.reason,exclusion.reason);
+ assert.ok(Date.parse(excluded.exclusion.at));
+ assert.deepEqual(excluded.punches,old.punches);
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_staff_time WHERE shift_id=?').bind(old.id).first()).n,2);
+ assert.equal((await save('/api/staff/correction',{employee_id:employee,shift_id:old.id,clock_revision:6,punches:old.punches,reason:'Replay old times'})).status,409);
+ const payPath='/api/staff/payroll?pay_date=2026-11-20';
+ const preview=(await call(payPath,{cookie:admin})).data;
+ assert.equal((await save('/api/staff/payroll',{action:'refresh',pay_date:'2026-11-20',payroll_revision:preview.revision,time_version:preview.source.time_version})).status,200);
+ const refreshed=(await call(payPath,{cookie:admin})).data.run.rows.find(row=>row.employee_id===employee);
+ assert.equal(refreshed.ordinary_seconds,426*60);
+ assert.equal(refreshed.overtime_seconds,0);
+ assert.ok(!refreshed.issues.some(i=>/midnight|long shift|prior weekend/i.test(i)));
+
 });
