@@ -77,7 +77,7 @@ try{
  const inboxGate=new Promise(r=>{releaseInbox=r;});
  await page.route('**/api/tasks/inbox',async route=>{await inboxGate;await route.continue();});
  await page.reload();
- await page.getByText('Ons het twee rolle nodig.',{exact:true}).waitFor();
+ await page.locator('dialog[open]').getByText('Ons het twee rolle nodig.',{exact:true}).waitFor();
  assert.equal(await page.getByRole('link',{name:'Proefverslag'}).getAttribute('href'),'https://example.com/report.pdf');
  const inboxReply=page.waitForResponse(r=>r.url().endsWith('/api/tasks/inbox'));
  releaseInbox();
@@ -86,7 +86,7 @@ try{
  await page.locator('dialog [data-close]').last().click();
  await page.locator('.notifications summary').click();
  await page.getByRole('button',{name:/Plaaslike proef.*PA se antwoord is gereed/}).click();
- await page.getByText('Ons het twee rolle nodig.',{exact:true}).waitFor();
+ await page.locator('dialog[open]').getByText('Ons het twee rolle nodig.',{exact:true}).waitFor();
  console.log('Task instruction, original answer, document and delayed inbox verified.');
 }finally{
  await browser?.close();await new Promise(r=>service.close(r));await mf.dispose();
