@@ -113,6 +113,8 @@ test('Fresh start, saved settings and history, November payroll through second F
  assert.equal((await call('alinda',path,off)).status,200);
  assert.equal((await call('alinda',path,off)).data.replayed,true);
  let draft=(await get(next)).run.rows[0];assert.equal(draft.reviewed,false);assert.equal(draft.paye_cents,null);
+ assert.ok(!draft.issues.some(i=>i==='Missing attendance record'||i==='2026-11-23: missing attendance record'));
+ assert.ok(draft.issues.includes('2026-11-24: missing attendance record'));
  assert.equal(draft.estimate.paid_off_cents,34452);assert.equal(draft.estimate.paye_cents,0);
  // A later clock record updates the estimate without writing to the saved draft.
  const shiftId=crypto.randomUUID(),shiftStart='2026-11-24T04:00:00Z',shiftEnd='2026-11-24T17:00:00Z';

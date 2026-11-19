@@ -67,6 +67,11 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
     const issue=payrollBirthCheck(person,row.profile);
     try{
      const paidOffSeconds=paidDaySeconds(row.paid_days??[],row.source.days);
+     if(row.paid_days?.length && row.issues.includes('Missing attendance record')){
+      const missing=row.source.days.filter(day=>day.issues.includes('Missing attendance record') && !row.paid_days.includes(day.date));
+      row.issues=row.issues.filter(issue=>issue!=='Missing attendance record');
+      row.issues.push(...missing.map(day=>day.date+': missing attendance record'));
+     }
      const prior=priorFor(person.id,payDate,state.runs.filter(r=>!fresh||r.pay_date>=fresh.first_pay_date),fresh?[]:state.openings);
      const amounts=calculateRow({...row,paye_cents:null},row.profile,prior,{paidOffSeconds});
      row.estimate=amounts;

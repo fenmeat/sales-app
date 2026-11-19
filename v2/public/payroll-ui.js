@@ -28,7 +28,7 @@ function startPanel(){
 function hourlySummary(row){
  const amounts=row.reviewed?row:row.estimate;
  const entries=[['Ordinary pay','ordinary_cents'],['Paid day off','paid_off_cents'],['Overtime pay','overtime_cents'],['Gross','gross_cents'],['PAYE','paye_cents'],['Employee UIF','uif_employee_cents'],['Meat deduction','meat_cents'],['Other deductions','other_deduction_cents'],['Net','net_cents']];
- return `<p><strong>FenMeat pays 100%</strong> · ${row.reviewed?'Reviewed':'Provisional · calculated from the available hours and saved adjustments. Check breaks, deductions and the monthly UIF limit.'}</p>${row.paid_days?.length?`<p>Paid day off: ${row.paid_days.map(esc).join(', ')} · ${esc(row.paid_days_note)}</p>`:''}<dl class="payroll-values">${entries.map(([label,key])=>`<div><dt>${label}</dt><dd>${money(amounts?.[key])}</dd></div>`).join('')}</dl>`;
+ return `<p><strong>FenMeat pays 100%</strong> · ${row.reviewed?'Reviewed':'Provisional · calculated from the available hours and saved adjustments. Check breaks, deductions and the monthly UIF limit.'}</p>${!row.reviewed&&row.source.automatic_break_seconds?`<p>Assumed unpaid breaks: ${hoursLabel(row.source.automatic_break_seconds)}. Check the actual breaks before approving overtime.</p>`:''}${row.paid_days?.length?`<p>Paid day off: ${row.paid_days.map(esc).join(', ')} · ${esc(row.paid_days_note)}</p>`:''}<dl class="payroll-values">${entries.map(([label,key])=>`<div><dt>${label}</dt><dd>${money(amounts?.[key])}</dd></div>`).join('')}</dl>`;
 }
 function paidDaysForm(id){
  const row=rowBy(id);
