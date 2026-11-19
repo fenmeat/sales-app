@@ -31,3 +31,5 @@ jobs:
         run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-payroll.mjs
       - name: Check Staff history on iPhone, iPad, Android and desktop browser profiles
         run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-staff-history.mjs
+      - name: Verify published Cloudflare Staff screens with isolated attendance data
+        run: STAFF_CHECK_PUBLISHED=1 STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-staff-history.mjs

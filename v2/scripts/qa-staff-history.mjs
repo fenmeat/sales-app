@@ -7,6 +7,7 @@ import {employeeHistory} from '../src/staff-history.js';
 import {sourceFixture} from '../test/fixtures/staff-source.js';
 const {chromium,webkit,devices}=await import(process.env.STAFF_PLAYWRIGHT_MODULE??'playwright');
 const origin='http://127.0.0.1:8796',key='isolated-staff-history-test-'.repeat(3);
+const published=process.env.STAFF_CHECK_PUBLISHED==='1'?'https://fenmeat-sales-test.alexander-fenwick.workers.dev':'';
 const bundle=await build({entryPoints:['src/worker.js'],bundle:true,platform:'browser',format:'esm',write:false});
 const mf=new Miniflare(convertV4MiniflareOptions({
  name:'staff-history-browser',host:'127.0.0.1',port:8796,modules:true,script:bundle.outputFiles[0].text,
@@ -32,10 +33,21 @@ try{
   try{
    const context=await browser.newContext({...devices[device],timezoneId:'Africa/Johannesburg'});
    const [name,value]=cookie.split('=');
-   await context.addCookies([{name,value,url:origin}]);
+   if(!published)await context.addCookies([{name,value,url:origin}]);
    const page=await context.newPage(),errors=[];
    page.on('pageerror',error=>errors.push(error.message));
-   await page.goto(origin+'/staff');
+   if(published){
+    const health=await page.request.get(published+'/api/health');
+    assert.equal((await health.json()).pilot_build,'0.49.4');
+    // Use the published pages and assets. All private reads run against the isolated QA database.
+    await page.route('**/api/**',async route=>{
+     const url=new URL(route.request().url());
+     assert.equal(route.request().method(),'GET');
+     const response=await mf.dispatchFetch(origin+url.pathname+url.search,{headers:{Cookie:cookie}});
+     await route.fulfill({status:response.status,contentType:'application/json',body:await response.text()});
+    });
+   }
+   await page.goto((published||origin)+'/staff');
    const button=name=>page.getByRole('button',{name,exact:true});
    const search=page.locator('[data-employee-search]');
    await button('People').click();
