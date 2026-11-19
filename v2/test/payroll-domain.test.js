@@ -33,3 +33,32 @@ test('native clock draft preserves half-day paid leave, unpaid leave and one bre
  const r=suggestRows(staff,[shift('2026-10-19'),shift('2026-10-20',true)],{profiles:[{...profile,break_rule:'60 minutes if no break recorded'}]},'2026-10-23')[0];assert.equal(r.ordinary_seconds,18*3600);assert.equal(r.source.automatic_break_seconds,3600);assert.equal(r.leave_seconds,4.5*3600);assert.equal(r.paye_cents,null);assert.equal(r.reviewed,false);
 });
 test('dates and confirmed pay profiles reject ambiguity',()=>{assert.equal(nextFriday('2026-10-23'),'2026-10-23');assert.equal(nextFriday('2026-10-24'),'2026-10-30');assert.throws(()=>friday('2026-10-22'));assert.throws(()=>validateProfile({...profile,rate_cents:0},[person]));assert.equal(validateProfile(profile,[person]).rate_cents,4000);});
+
+test('Monday workplace follows local punches and overrides; split shifts retain sub-minute precision across the week',()=>{
+ const route={...profile,break_rule:'60 minutes if no break recorded'};
+ const shifts=(day,periods)=>periods.map(([start,end])=>({employee_id:id,punches:[
+  {kind:'in',at:new Date(day+'T'+start+'+02:00').toISOString()},
+  {kind:'out',at:new Date(day+'T'+end+'+02:00').toISOString()}]}));
+ const monday='2026-11-16';
+ const week=(clock,p=route,edits={})=>suggestRows({people:[person],leave:[]},clock,{profiles:[p]},'2026-11-20',edits)[0];
+ let d=week(shifts(monday,[['05:30:00','16:30:00']])).source.days[0];
+ assert.deepEqual([d.workplace,d.automatic_break_seconds,d.payable_seconds],['Route',3600,36000]);
+ d=week(shifts(monday,[['05:30:00','10:00:00'],['10:20:00','15:00:00']])).source.days[0];
+ assert.equal(d.recorded_break_seconds,1200);assert.equal(d.automatic_break_seconds,0);
+ const factory=shifts(monday,[['07:55:30.125','10:07:20.500'],['10:17:40.750','12:40:13.875'],['13:20:10.250','15:35:33.550']]);
+ const full=[...factory,...['17','18','19','20'].flatMap(n=>shifts('2026-11-'+n,[['05:00:00','16:00:00']]))];
+ const row=week(full);d=row.source.days[0];
+ assert.equal(d.workplace,'Factory');assert.ok(Math.abs(d.recorded_break_seconds-3016.625)<0.001);
+ assert.equal(d.automatic_break_seconds,0);assert.equal(Math.round(d.payable_seconds*1000),24586800);
+ assert.equal(row.source.automatic_break_seconds,14400);assert.equal(row.ordinary_seconds,162000);
+ assert.equal(row.overtime_seconds,6587);
+ const amounts=calculateRow({...row,paye_cents:0},route);
+ assert.equal(amounts.gross_cents,180000+Math.round(6587*4000*1.5/3600));
+ d=week(shifts(monday,[['07:12:00','16:00:00']])).source.days[0];
+ assert.equal(d.needs_workplace,true);assert.equal(d.automatic_break_seconds,0);
+ assert.equal(week(factory,route,{[id]:{[monday]:{workplace:'Route'}}}).source.days[0].workplace_basis,'Confirmed');
+ const normal=week(shifts(monday,[['05:30:00','16:30:00']]),profile).source.days[0];
+ assert.equal(normal.workplace,'Factory');assert.equal(normal.automatic_break_seconds,0);
+ const tuesday=week(shifts('2026-11-17',[['08:00:00','16:00:00']])).source.days[1];
+ assert.equal(tuesday.workplace,'Route');assert.equal(tuesday.automatic_break_seconds,3600);
+});

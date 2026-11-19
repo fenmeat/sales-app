@@ -74,6 +74,26 @@ test('Fresh start, saved settings and history, November payroll through second F
  assert.equal((await post('refresh',{pay_date:oldDate})).status,400);
  assert.equal((await post('opening',{opening:{employee_id}})).status,400);
  assert.equal((await post('company',{company:initial.settings.company})).status,400);
+ // A rotating worker with an ambiguous 07:00 clock-in can be confirmed by
+ // the administrator before tax is known; refresh retains the dated decision.
+ await ok('profile',{profile:{...profile,break_rule:'60 minutes if no break recorded',from:FRESH_START.start_date}});
+ await ok('refresh');s=await get();
+ assert.equal(s.run.rows[0].source.days[0].needs_workplace,true);
+ const correction={employee_id,day:FRESH_START.start_date,workplace:'Factory',minutes:15,note:'Confirmed Monday factory assignment; add missed quarter hour'};
+ const draftRequest=await body('day_edit',correction);
+ assert.equal((await call('alinda',path,draftRequest)).status,200);
+ assert.equal((await call('alinda',path,draftRequest)).data.replayed,true);
+ await ok('refresh');s=await get();
+ const edited=s.run.rows[0],monday=edited.source.days[0];
+ assert.equal(edited.reviewed,false);assert.equal(edited.paye_cents,null);
+ assert.equal(monday.automatic_break_seconds,0);assert.equal(monday.payable_seconds,36900);
+ assert.equal(monday.workplace,'Factory');assert.equal(edited.day_edits[monday.date].by,'alinda');
+ assert.ok(edited.day_edits[monday.date].at);assert.equal(edited.day_edits[monday.date].reason,correction.note);
+ assert.ok((await call('alinda',path+'/history')).data.events.some(e=>e.reason?.includes(correction.note)));
+ assert.equal((await post('approve',{note:'Unreviewed draft'})).status,400);
+ assert.deepEqual(await snapshot('SELECT * FROM v2_staff_time ORDER BY rowid'),clocks);
+ await ok('day_edit',{...correction,minutes:0,note:'Remove the example adjustment'});
+ await ok('profile',{profile:{...profile,from:FRESH_START.start_date}});
  await ok('refresh');s=await get();
  const clock=s.run.rows[0];assert.equal(clock.ordinary_seconds,45*3600);assert.equal(clock.overtime_seconds,5*3600);
  const row={...clock,confirmed:true,note:'Verified November ceiling, weekly earnings and hours',bonus_cents:10000,meat_cents:5000,other_deduction_cents:2000,paye_method:'SARS weekly table',standard_week_confirmed:true};
