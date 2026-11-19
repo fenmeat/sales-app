@@ -10,3 +10,5 @@
 
 [data-search-person][hidden], [data-no-employees][hidden]{display:none}
 [data-employee-search]{width:100%;max-width:28rem;font-size:1rem}
+
+.daily-breaks>summary{cursor:pointer;padding:.75rem 0;font-weight:700}.daily-pay{border-top:1px solid #ccc;padding:.75rem 0}.daily-pay button{min-height:44px}.daily-pay p{overflow-wrap:anywhere}

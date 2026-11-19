@@ -22,13 +22,15 @@ try{
  const employees=['First Example','Second Test'].map((name,i)=>({id:crypto.randomUUID(),code:'QA-'+i,name,active:true,team:'Factory',start_date:'2026-01-01',schedules:[]}));
  const db=await mf.getD1Database('DB');
  await db.prepare('INSERT INTO v2_staff_register VALUES(?,?,?,?,?,?)').bind(1,JSON.stringify({people:employees,leave:[],ledger:[]}),'fixture','fixture',new Date().toISOString(),'{}').run();
+ const settings={key:'settings',profiles:[{employee_id:employees[0].id,from:'2026-11-16',basis:'Hourly',rate_cents:4000,break_rule:'60 minutes if no break recorded',uif:'Liable'}]};
+ await db.prepare('INSERT INTO v2_staff_payroll VALUES(?,?,?,?,?,?)').bind(1,'settings',JSON.stringify(settings),'fixture','fixture',new Date().toISOString()).run();
  for(const [index,day] of ['13','16'].entries()){
   const start='2026-11-'+day+'T06:01:00.000Z',end='2026-11-'+day+'T14:02:00.000Z';
   const shift={id:crypto.randomUUID(),employee_id:employees[0].id,punches:[{kind:'in',at:start},{kind:'out',at:end}]};
   await db.prepare('INSERT INTO v2_staff_time VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),shift.employee_id,shift.id,index+1,start,end,'out',JSON.stringify(shift),'fixture','fixture',end).run();
  }
  for(const [device,engine] of [['iPhone 13',webkit],['iPad (gen 7)',webkit],['Pixel 7',chromium],['Desktop Chrome',chromium]]){
-  const browser=await engine.launch();
+  const browser=process.env.STAFF_BROWSER_EXECUTABLE?await chromium.launch({executablePath:process.env.STAFF_BROWSER_EXECUTABLE}):await engine.launch();
   try{
    const context=await browser.newContext({...devices[device],timezoneId:'Africa/Johannesburg'});
    const [name,value]=cookie.split('=');
@@ -72,6 +74,23 @@ try{
    assert.equal(await page.locator('[data-pay-person]:visible').count(),1);
    assert.equal(await page.locator('[data-pay-person]:visible h3').innerText(),'Second Test');
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+   await search.fill('First');
+   await page.getByLabel('Friday pay date').fill('2026-11-20');await button('Load week').click();
+   const card=page.locator('[data-pay-person]').first();
+   const details=card.locator('.daily-breaks');
+   await details.locator('summary').click();
+   const monday=details.locator('.daily-pay').first();
+   await monday.getByRole('button',{name:'Werkplek of ure wysig'}).click();
+   await page.getByLabel('Werkplek',{exact:true}).selectOption('Factory');
+   await page.getByLabel(/Uurregstelling in minute/).fill('12');
+   await page.getByLabel('Rede vir die regstelling').fill('Synthetic adjustment '+device);
+   await button('Save').click();await page.locator('#action-dialog').waitFor({state:'hidden'});
+   await button('Refresh draft from clock').click();await button('Save').click();
+   await page.locator('#action-dialog').waitFor({state:'hidden'});
+   await details.locator('summary').click();
+   await monday.getByText('8h 13m',{exact:true}).waitFor();
+   await monday.getByText('Synthetic adjustment '+device,{exact:false}).waitFor();
+   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
    assert.deepEqual(errors,[]);
    console.log('PASS '+device+' employee search, profile, native and archive periods, pagination and payroll');
   }finally{await browser.close();}

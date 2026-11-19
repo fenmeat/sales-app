@@ -3,7 +3,7 @@ import {isAdmin} from './auth.js';
 import {readOnlyDatabase} from './pa-reads.js';
 import {staffState,staffApi} from './staff-api.js';
 import {loadBundle,deriveImport,staffImportApi} from './staff-import.js';
-import {FRESH_START,profileAt} from './payroll-domain.js';
+import {FRESH_START,nextFriday,profileAt} from './payroll-domain.js';
 import {LEAVE_TYPES,balance} from './staff-domain.js';
 
 export const STAFF_READ_SCOPE='fenmeat:staff:read';
@@ -85,7 +85,23 @@ export async function readStaffData(args,env,username,scopes){
  if(resource==='hours'){
   const from=dateKey(args.from),to=dateKey(args.to);check(from<=to&&to<=addDays(from,30),'Choose at most 31 calendar days.');
   const url=new URL('https://fenmeat.invalid/api/staff/hours');url.searchParams.set('from',from);url.searchParams.set('to',to);if(args.employee_id)url.searchParams.set('employee_id',args.employee_id);
-  return result({...await staffApi({request:new Request(url),url,env:{DB:db},user:{username},bodyOf}),source_kind:'native_clock_and_approved_leave'});
+  const hours=await staffApi({request:new Request(url),url,env:{DB:db},user:{username},bodyOf});
+  // A bounded week read can reconcile the displayed payroll hours with punches.
+  // Expose attendance fields only. Weekly pay, tax and review notes stay in Staff.
+  const friday=nextFriday(from);
+  if(from>=FRESH_START.start_date && from>=addDays(friday,-4) && to<=friday &&
+    await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='v2_staff_payroll'").first()){
+   const payrollUrl=new URL('/api/staff/payroll',url);payrollUrl.searchParams.set('pay_date',friday);
+   const week=await staffApi({request:new Request(payrollUrl),url:payrollUrl,env:{DB:db},user:{username},bodyOf});
+   hours.payroll_hours={status:week.run.status,refresh_needed:week.stale,saved:week.saved,rows:week.run.rows
+    .filter(r=>!args.employee_id||r.employee_id===args.employee_id)
+    .map(r=>({employee_id:r.employee_id,rotating:r.profile?.monday_rotation??(r.profile?.break_rule==='60 minutes if no break recorded'),
+     days:r.source.days.filter(d=>d.date>=from&&d.date<=to).map(d=>({date:d.date,workplace:d.workplace,
+      basis:d.workplace_basis,confirm:d.needs_workplace,first_in:d.first_in,last_out:d.last_out,
+      recorded_break_seconds:d.recorded_break_seconds,automatic_break_seconds:d.automatic_break_seconds,
+      adjustment_minutes:d.adjustment_minutes,payable_seconds:d.payable_seconds,paid_day_off:r.paid_days?.includes(d.date)??false}))}))};
+  }
+  return result({...hours,source_kind:'native_clock_and_approved_leave'});
  }
  if(resource==='leave'){
   check(args.employee_id,'Choose an employee ID to read private leave details.');check(state.people.some(p=>p.id===args.employee_id),'Employee not found.',404);

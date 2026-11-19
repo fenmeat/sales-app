@@ -22,6 +22,7 @@ export function validateProfile(raw,people){
  check(['Liable','Review each week'].includes(raw.uif),'Choose the UIF treatment.');
  if(raw.fen_hourly_only)check(basis==='Hourly' && from>=FRESH_START.start_date,'Choose hourly pay and an effective date from 16 November 2026.');
  const arrangement={};
+ if(typeof raw.monday_rotation==='boolean')arrangement.monday_rotation=raw.monday_rotation;
  if(raw.fen_hourly_only===true){
   arrangement.fen_hourly_only=true;
   if(raw.tax_birth_date){
@@ -117,14 +118,72 @@ export function payrollBirthCheck(person,profile={}){
  if(/^\d{13}$/.test(id) && birth.replaceAll('-','').slice(2)!==id.slice(0,6))return 'The date of birth differs from the original employee ID. Verify the document and record the confirmed payroll date in Pay setup.';
  return '';
 }
-export function suggestRows(staff,shifts,settings,payDate){
+export const BREAK_RULE_VERSION='2026-11-16.2';
+const roadBreakRule='60 minutes if no break recorded';
+
+// Gaps between a clock-out and the next clock-in are already unpaid, just
+// like explicit break punches. Keep both durations separate from worked time.
+function dailyPayrollEvidence(day,shifts,profile,edit){
+ const start=dayStart(day.date),end=start+86400000;
+ const periods=shifts.filter(s=>Date.parse(s.punches[0].at)<end &&
+  Date.parse(s.punches.at(-1).at)>=start).sort((a,b)=>a.punches[0].at.localeCompare(b.punches[0].at));
+ const first=periods[0]?.punches[0].at??null;
+ const last=periods.at(-1)?.punches.at(-1);
+ let gaps=0,previousEnd=null,overlap=false;
+ for(const shift of periods){
+  const clockIn=Date.parse(shift.punches[0].at),out=shift.punches.at(-1);
+  if(previousEnd!==null){
+   if(clockIn<previousEnd)overlap=true;
+   else gaps+=(clockIn-previousEnd)/1000;
+  }
+  previousEnd=out.kind==='out'?Math.min(end,Date.parse(out.at)):null;
+ }
+ const recorded=day.break_seconds+gaps,road=profile?.break_rule===roadBreakRule;
+ const rotating=profile?.monday_rotation??road;
+ const monday=rotating && new Date(start+43200000).getUTCDay()===1;
+ const minutes=first?(Date.parse(first)-start)/60000:null;
+ let workplace=road?'Route':profile?'Factory':'Unconfirmed',basis='Profile';
+ if(monday){
+  basis='Clock';
+  if(edit?.workplace){workplace=edit.workplace;basis='Confirmed';}
+  else if(minutes===null || overlap || minutes<180)workplace='Unconfirmed';
+  else if(minutes<420)workplace='Route';
+  else if(minutes>=450 && minutes<511)workplace='Factory';
+  else workplace='Unconfirmed';
+ }
+ const needsWorkplace=monday && !!first && workplace==='Unconfirmed';
+ const standard=workplace==='Route' && (road||monday) && day.completed_seconds>=14400 && recorded===0?3600:0;
+ const baseline=day.completed_seconds-standard;
+ const adjustment=(edit?.minutes??0)*60;
+ const evidenceChanged=!!edit?.minutes && edit.baseline_seconds!=null && Math.abs(baseline-edit.baseline_seconds)>0.001;
+ const reason=needsWorkplace?'Bevestig waar die werknemer gewerk het.':standard?'Geen pouse is geklok nie. Die gewone roetepouse van 60 minute is afgetrek.':
+  recorded?'Die geklokte pouses is reeds uit die werkure gehaal.':
+  workplace==='Factory'?'Fabrieksure volg die klokrekord.':'Geen ekstra pouse afgetrek nie.';
+ return {...day,first_in:first,last_out:last?.kind==='out'?last.at:null,recorded_break_seconds:recorded,
+  clock_gap_seconds:gaps,workplace,workplace_basis:basis,monday_rotation:monday,needs_workplace:needsWorkplace,
+  automatic_break_seconds:standard,clock_payable_seconds:baseline,adjustment_minutes:edit?.minutes??0,
+  payable_seconds:Math.max(0,baseline+adjustment),needs_adjustment_review:evidenceChanged,break_reason:reason};
+}
+
+export function suggestRows(staff,shifts,settings,payDate,edits={}){
  const start=settings.fresh_start?.start_date;
  shifts=shifts.filter(s=>!s.exclusion&&(!start||s.punches[0].at>=new Date(dayStart(start)).toISOString()));
  const from=addDays(payDate,-4),rows=periodHours(staff.people,shifts,staff.leave,from,payDate);
  return rows.filter(r=>{const p=staff.people.find(p=>p.id===r.employee_id);return (p.active&&(!p.start_date||p.start_date<=payDate))||r.completed_seconds||r.review_seconds||r.paid_leave_minutes||shifts.some(s=>s.employee_id===p.id);}).map(source=>{
   const p=staff.people.find(p=>p.id===source.employee_id),profile=profileAt(settings,p.id,from),issues=[...source.issues];
   let worked=0,dailyOrdinary=0,automatic_break_seconds=0;
-  for(const d of source.days){let seconds=d.completed_seconds;if(profile?.break_rule==='60 minutes if no break recorded'&&seconds>=4*3600&&d.break_seconds===0){seconds-=3600;automatic_break_seconds+=3600;}worked+=seconds;
+  const dayEdits=edits[p.id]??{},own=shifts.filter(s=>s.employee_id===p.id);
+  for(const d of source.days){
+   let seconds=d.completed_seconds;
+   if(d.date>=FRESH_START.start_date){
+    Object.assign(d,dailyPayrollEvidence(d,own,profile,dayEdits[d.date]));
+    seconds=d.payable_seconds;automatic_break_seconds+=d.automatic_break_seconds;
+    if(d.needs_workplace)issues.push(d.date+' · Bevestig Route of Factory.');
+    if(d.needs_adjustment_review)issues.push(d.date+' · Klokure het verander. Gaan die konsepregstelling na.');
+   }else if(profile?.break_rule===roadBreakRule && seconds>=14400 && d.break_seconds===0){
+    seconds-=3600;automatic_break_seconds+=3600;
+   }
+   worked+=seconds;
    if(profile?.fen_hourly_only){
     const limit=Math.min(540,d.scheduled_minutes??540)*60;
     dailyOrdinary+=Math.min(seconds,limit);
@@ -144,7 +203,7 @@ export function suggestRows(staff,shifts,settings,payDate){
   if(weekend.length)issues.push('Prior weekend clock records: review separate Sunday / special pay');
   if(shifts.some(s=>s.employee_id===p.id&&s.punches.at(-1).kind!=='out'))issues.push('Open shift');
   if(settings.profiles?.some(x=>x.employee_id===p.id&&x.from>from&&x.from<=payDate))issues.push('Rate changes inside this week; review special pay adjustment');
-  return {employee_id:p.id,name:p.name,code:p.code,included:true,profile,source:{...source,automatic_break_seconds},issues:[...new Set(issues)],ordinary_seconds:ordinary,overtime_seconds:overtime,leave_seconds:source.paid_leave_minutes*60,sunday_seconds:0,holiday_seconds:0,special_cents:0,bonus_cents:0,commission_cents:0,paye_cents:null,meat_cents:0,other_deduction_cents:0,uif:profile?.uif==='Liable'?'Liable':'Review',uif_reason:'',reviewed:false,note:''};
+  return {employee_id:p.id,name:p.name,code:p.code,included:true,profile,day_edits:dayEdits,source:{...source,automatic_break_seconds},issues:[...new Set(issues)],ordinary_seconds:ordinary,overtime_seconds:overtime,leave_seconds:source.paid_leave_minutes*60,sunday_seconds:0,holiday_seconds:0,special_cents:0,bonus_cents:0,commission_cents:0,paye_cents:null,meat_cents:0,other_deduction_cents:0,uif:profile?.uif==='Liable'?'Liable':'Review',uif_reason:'',reviewed:false,note:''};
  });
 }
 export function totalRows(rows){const out=zeroTotals();for(const r of rows.filter(x=>x.included!==false))for(const k of Object.keys(out))out[k]+=r[k]??0;return out;}
