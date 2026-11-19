@@ -1013,12 +1013,23 @@ const bands = [
   [33319, 33369, 11331, 11143, 11080],
 ];
 
-export function weeklyPaye(cents, date, person, firstDay) {
+function checkWeek(date,person,firstDay){
   check(date >= '2026-03-01' && date <= '2027-02-28', 'Use auditor-confirmed PAYE for this tax year.');
-  check(person.birth_date && person.birth_date <= date, 'Add the confirmed date of birth in People or use auditor-confirmed PAYE.');
   check(person.start_date <= firstDay && person.active, 'Use auditor-confirmed PAYE for a partial employment period.');
+}
+export function weeklyPaye(cents, date, person, firstDay) {
+  checkWeek(date,person,firstDay);
+  check(person.birth_date && person.birth_date <= date, 'Add the confirmed date of birth in People or use auditor-confirmed PAYE.');
   const age = 2027 - Number(person.birth_date.slice(0,4)) - (person.birth_date.slice(5) > '02-28' ? 1 : 0);
-  const column = age >= 75 ? 4 : age >= 65 ? 3 : 2;
+  return weeklyBandAmount(cents,age >= 75 ? 4 : age >= 65 ? 3 : 2);
+}
+// A draft may show an estimate before identity reconciliation only if every age column agrees.
+export function ageIndependentEstimate(cents,date,person,firstDay){
+  checkWeek(date,person,firstDay);
+  const amounts=[2,3,4].map(column=>weeklyBandAmount(cents,column));
+  return amounts.every(value=>value===amounts[0])?amounts[0]:null;
+}
+function weeklyBandAmount(cents,column){
   const rand = Math.floor(cents / 100);
   if (rand > 33369) {
     const base = bands.at(-1)[column];

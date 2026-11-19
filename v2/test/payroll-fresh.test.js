@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
-import {weeklyPaye} from '../src/weekly-paye.js';
+import {weeklyPaye,ageIndependentEstimate} from '../src/weekly-paye.js';
 import {FRESH_START} from '../src/payroll-domain.js';
 
 test('SARS 2027 weekly table, age at tax year end, printed ambiguity and year boundary',()=>{
  const person={birth_date:'1980-01-01',start_date:'2020-01-01',active:true};
  const tax=(cents,p=person,date='2026-11-20')=>weeklyPaye(cents,date,p,'2026-11-16');
+ assert.equal(ageIndependentEstimate(143960,'2026-11-20',person,'2026-11-16'),0);
+ assert.equal(ageIndependentEstimate(229680,'2026-11-20',person,'2026-11-16'),null);
  assert.equal(tax(193400),700);assert.equal(tax(194999),700);assert.equal(tax(195000),1000);
  assert.equal(tax(477100,{...person,birth_date:'1962-02-28'}),33500);
  assert.equal(tax(477100,{...person,birth_date:'1952-02-28'}),27300);

@@ -75,11 +75,11 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
      const prior=priorFor(person.id,payDate,state.runs.filter(r=>!fresh||r.pay_date>=fresh.first_pay_date),fresh?[]:state.openings);
      const amounts=calculateRow({...row,paye_cents:null},row.profile,prior,{paidOffSeconds});
      row.estimate=amounts;
-     if(issue)throw new UserError(issue);
-     const {weeklyPaye}=await import('./weekly-paye.js');
+     if(issue)row.issues.push(issue);
+     const {weeklyPaye,ageIndependentEstimate}=await import('./weekly-paye.js');
      if(!row.special_cents){
-      const tax=weeklyPaye(amounts.gross_cents,payDate,{...person,birth_date:row.profile.tax_birth_date??person.birth_date},run.from);
-      row.estimate={...amounts,paye_cents:tax,net_cents:amounts.gross_cents-tax-amounts.uif_employee_cents-amounts.meat_cents-amounts.other_deduction_cents};
+      const tax=issue?ageIndependentEstimate(amounts.gross_cents,payDate,person,run.from):weeklyPaye(amounts.gross_cents,payDate,{...person,birth_date:row.profile.tax_birth_date??person.birth_date},run.from);
+      if(tax!==null)row.estimate={...amounts,paye_cents:tax,net_cents:amounts.gross_cents-tax-amounts.uif_employee_cents-amounts.meat_cents-amounts.other_deduction_cents};
      }
     }catch(error){if(!(error instanceof UserError))throw error;row.issues=[...row.issues,error.message];}
    }
