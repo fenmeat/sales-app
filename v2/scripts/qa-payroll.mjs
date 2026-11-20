@@ -78,7 +78,7 @@ try{
   await wageCard.locator('[data-clock-day="'+clockDay+'"]').click();
   const time=page.getByLabel('Plaaslike kloktyd').last();
   const at=await time.inputValue(),hour=at.slice(0,14);
-  await time.fill(hour+(delta?'01':'00')+':00');
+  await time.fill(hour+(delta?'01':'00'));
   await page.locator('#editor [name=reason]').fill('Verified synthetic clock correction');
   await save();
  };
