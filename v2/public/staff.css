@@ -12,3 +12,9 @@
 [data-employee-search]{width:100%;max-width:28rem;font-size:1rem}
 
 .daily-breaks>summary{cursor:pointer;padding:.75rem 0;font-weight:700}.daily-pay{border-top:1px solid #ccc;padding:.75rem 0}.daily-pay button{min-height:44px}.daily-pay p{overflow-wrap:anywhere}
+
+.wage-table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+.wage-table th,.wage-table td { padding:.45rem .4rem; text-align:left; vertical-align:middle; }
+.wage-table .wage-link { min-height:44px; background:transparent; border:0; color:inherit; font-weight:650; padding:.15rem; text-decoration:underline; text-underline-offset:.2em; }
+.wage-detail { padding:.6rem; white-space:normal; }
+.wage-detail .row-actions { flex-wrap:wrap; }

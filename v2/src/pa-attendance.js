@@ -121,15 +121,17 @@ async function execute(env,row){
  const versions=await db.prepare(`SELECT ${timeVersion} AS clock, ${payVersion} AS payroll`).first();
  const current=await staffState(db);
  const payDate=nextFriday(day);
- const run=await db.prepare('SELECT json_extract(payload,\'$.status\') AS status FROM v2_staff_payroll WHERE entity_key=? ORDER BY revision DESC LIMIT 1').bind('run:'+payDate).first();
+ const run=await db.prepare('SELECT json_extract(payload,\'$.status\') AS status,json_extract(payload,\'$.rows\') AS wage_rows FROM v2_staff_payroll WHERE entity_key=? ORDER BY revision DESC LIMIT 1').bind('run:'+payDate).first();
  if(['Approved','Paid'].includes(run?.status))
   return finish(db,row,'blocked',{reason:'Hierdie loonweek is reeds goedgekeur of betaal.'},stamp);
  const shifts=await shiftsBetween(db,day,day),ids=cmd.group?current.state.people.filter(p=>p.active&&isCasual(p)).map(p=>p.id):cmd.ids;
+ const frozen=new Set(JSON.parse(run?.wage_rows??'[]').filter(r=>['Paid','Approved'].includes(r.wage_state)).map(r=>r.employee_id));
  const statements=[],employees=[];
  const revisions=ids.length?(await db.prepare('SELECT employee_id,MAX(revision) AS revision,MAX(CASE WHEN '+latestCondition+' THEN start_at END) AS latest_start FROM v2_staff_time t WHERE employee_id IN ('+ids.map(()=>'?').join(',')+') GROUP BY employee_id').bind(...ids).all()).results:[];
  for(const id of ids){
   const person=current.state.people.find(p=>p.id===id),item={employee_id:id,name:person?.name??null};
   try{
+   check(!frozen.has(id),'Die werknemer se loon is reeds goedgekeur of betaal.');
    const history=revisions.find(r=>r.employee_id===id);
    if(cmd.action==='in')check(!history?.latest_start||history.latest_start<=row.effective_at,'Daar is reeds ’n latere skof. Kies die bestaande rekord vir ’n regstelling.');
    const proposed=propose(person,shifts.filter(s=>s.employee_id===id),cmd,row.effective_at,row.actor,stamp);

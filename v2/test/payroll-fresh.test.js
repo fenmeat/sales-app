@@ -142,7 +142,7 @@ test('Fresh start, saved settings and history, November payroll through second F
  const shiftId=crypto.randomUUID(),shiftStart='2026-11-24T04:00:00Z',shiftEnd='2026-11-24T17:00:00Z';
  const shift={id:shiftId,employee_id,punches:[{kind:'in',at:shiftStart},{kind:'out',at:shiftEnd}]};
  await db.prepare('INSERT INTO v2_staff_time VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),employee_id,shiftId,1,shiftStart,shiftEnd,'out',JSON.stringify(shift),'synthetic','tester',shiftEnd).run();
- let updated=await get(next);assert.equal(updated.stale,true);assert.equal(updated.run.rows[0].estimate.overtime_seconds,4*3600);
+ let updated=await get(next);assert.equal(updated.stale,true);assert.equal(updated.run.rows[0].estimate.overtime_seconds,0);
  await ok('paid_days',{employee_id,pay_date:next,dates:['2026-11-23'],note:'Paid day still supported by test evidence'});
  assert.equal((await get(next)).stale,true);await ok('refresh',{pay_date:next});
  draft=(await get(next)).run.rows[0];assert.deepEqual(draft.paid_days,['2026-11-23']);
@@ -151,12 +151,12 @@ test('Fresh start, saved settings and history, November payroll through second F
  await ok('row',{pay_date:next,row:checked});
  assert.equal((await post('approve',{pay_date:next,note:'Synthetic attempted approval'},'alex')).status,400);
  await ok('approve',{pay_date:next,note:'Synthetic Alinda approval'});
- const approved=(await get(next)).run.rows[0];assert.equal(approved.paye_cents,0);assert.equal(approved.gross_cents,91872);assert.equal(approved.net_cents,90953);
+ const approved=(await get(next)).run.rows[0];assert.equal(approved.paye_cents,0);assert.equal(approved.gross_cents,84216);assert.equal(approved.net_cents,83374);
  assert.deepEqual((await get(oldDate)).run,frozen);assert.equal((await get(date)).run.status,'Paid');
 
 });
 
-test('Effective-dated Fen hourly arrangement, daily overtime, full gross, weekly tax and UIF',async()=>{
+test('Effective-dated Fen hourly arrangement, weekly overtime, full gross, weekly tax and UIF',async()=>{
  const {calculateRow,suggestRows,profileAt,paidDaySeconds,payrollBirthCheck}=await import('../src/payroll-domain.js');
  const person={id:crypto.randomUUID(),name:'Synthetic route worker',active:true,start_date:'2020-01-01',birth_date:'1980-01-01',schedules:[{from:'2026-11-16',minutes:[540,540,540,540,540,0,0]}]};
  const old={employee_id:person.id,from:'2020-01-01',basis:'Hourly',rate_cents:2000,break_rule:'Recorded breaks',uif:'Liable'};
@@ -176,8 +176,8 @@ test('Effective-dated Fen hourly arrangement, daily overtime, full gross, weekly
   assert.throws(()=>calculateRow({...row,commission_cents:500},profile),/outside/);
  }
  const partial=draft([shift(17,15),shift(18,15)]);
- assert.equal(partial.ordinary_seconds,18*3600);assert.equal(partial.overtime_seconds,12*3600);
- assert.ok(partial.issues.some(i=>i.includes('More than 10 overtime hours')));
+ assert.equal(partial.ordinary_seconds,30*3600);assert.equal(partial.overtime_seconds,0);
+ assert.ok(partial.issues.some(i=>i.includes('more than 12 hours')));
  const away=paidDaySeconds(['2026-11-16'],partial.source.days,'2026-11-20');
  assert.equal(away,9*3600);assert.throws(()=>paidDaySeconds(['2026-11-17'],partial.source.days,'2026-11-20'),/overlaps/);
  assert.throws(()=>paidDaySeconds(['2026-11-16','2026-11-16'],partial.source.days),/once/);

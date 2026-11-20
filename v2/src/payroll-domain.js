@@ -22,6 +22,17 @@ export function validateProfile(raw,people){
  check(['Liable','Review each week'].includes(raw.uif),'Choose the UIF treatment.');
  if(raw.fen_hourly_only)check(basis==='Hourly' && from>=FRESH_START.start_date,'Choose hourly pay and an effective date from 16 November 2026.');
  const arrangement={};
+ if(raw.hours_agreement)arrangement.hours_agreement=text(raw.hours_agreement,'written agreement reference',200);
+ if(raw.tax_treatment){
+  check(['Standard weekly','Directive','Other'].includes(raw.tax_treatment),'Select a valid tax treatment.');
+  arrangement.tax_treatment=raw.tax_treatment;
+  if(raw.tax_treatment==='Directive'){
+   arrangement.directive_from=dateKey(raw.directive_from);arrangement.directive_to=dateKey(raw.directive_to);
+   check(arrangement.directive_from<=arrangement.directive_to,'Check the directive dates.');
+   arrangement.directive_bps=integer(raw.directive_bps,'directive rate',10000);
+   arrangement.directive_ref=text(raw.directive_ref,'directive reference',130);
+  }
+ }
  if(typeof raw.monday_rotation==='boolean')arrangement.monday_rotation=raw.monday_rotation;
  if(raw.fen_hourly_only===true){
   arrangement.fen_hourly_only=true;
@@ -49,7 +60,7 @@ export function validateOpening(raw,people,company){
 const zeroTotals=()=>Object.fromEntries([...MONEY_KEYS,...HOUR_KEYS].map(k=>[k,0]));
 export function priorFor(id,date,runs,openings){
  const rows=[...openings.filter(o=>o.employee_id===id&&o.month===date.slice(0,7)),...runs.filter(r=>['Approved','Paid'].includes(r.status)&&r.pay_date<date&&r.pay_date.slice(0,7)===date.slice(0,7)).flatMap(r=>r.rows.filter(x=>x.employee_id===id&&x.included))];
- return rows.reduce((a,r)=>{for(const k of MONEY_KEYS)a[k]+=r[k]??0;return a;},zeroTotals());
+ return rows.reduce((a,r)=>{for(const k of [...MONEY_KEYS,...HOUR_KEYS])a[k]+=r[k]??0;return a;},zeroTotals());
 }
 export function calculateRow(raw,profile,prior=zeroTotals(),options={}){
  const r={};for(const k of HOUR_KEYS)r[k]=integer(raw[k],k.replaceAll('_',' '),7*24*3600);
@@ -118,7 +129,7 @@ export function payrollBirthCheck(person,profile={}){
  if(/^\d{13}$/.test(id) && birth.replaceAll('-','').slice(2)!==id.slice(0,6))return 'The date of birth differs from the original employee ID. Verify the document and record the confirmed payroll date in Pay setup.';
  return '';
 }
-export const BREAK_RULE_VERSION='2026-11-16.2';
+export const BREAK_RULE_VERSION='2026-11-20.1';
 const roadBreakRule='60 minutes if no break recorded';
 
 // Gaps between a clock-out and the next clock-in are already unpaid, just
@@ -160,7 +171,7 @@ function dailyPayrollEvidence(day,shifts,profile,edit){
   recorded?'Die geklokte pouses is reeds uit die werkure gehaal.':
   workplace==='Factory'?'Fabrieksure volg die klokrekord.':'Geen ekstra pouse afgetrek nie.';
  return {...day,first_in:first,last_out:last?.kind==='out'?last.at:null,recorded_break_seconds:recorded,
-  clock_gap_seconds:gaps,workplace,workplace_basis:basis,monday_rotation:monday,needs_workplace:needsWorkplace,
+  clock_gap_seconds:gaps,overlap,workplace,workplace_basis:basis,monday_rotation:monday,needs_workplace:needsWorkplace,
   automatic_break_seconds:standard,clock_payable_seconds:baseline,adjustment_minutes:edit?.minutes??0,
   payable_seconds:Math.max(0,baseline+adjustment),needs_adjustment_review:evidenceChanged,break_reason:reason};
 }
@@ -171,7 +182,7 @@ export function suggestRows(staff,shifts,settings,payDate,edits={}){
  const from=addDays(payDate,-4),rows=periodHours(staff.people,shifts,staff.leave,from,payDate);
  return rows.filter(r=>{const p=staff.people.find(p=>p.id===r.employee_id);return (p.active&&(!p.start_date||p.start_date<=payDate))||r.completed_seconds||r.review_seconds||r.paid_leave_minutes||shifts.some(s=>s.employee_id===p.id);}).map(source=>{
   const p=staff.people.find(p=>p.id===source.employee_id),profile=profileAt(settings,p.id,from),issues=[...source.issues];
-  let worked=0,dailyOrdinary=0,automatic_break_seconds=0;
+  let worked=0,automatic_break_seconds=0;
   const dayEdits=edits[p.id]??{},own=shifts.filter(s=>s.employee_id===p.id);
   for(const d of source.days){
    let seconds=d.completed_seconds;
@@ -185,13 +196,11 @@ export function suggestRows(staff,shifts,settings,payDate,edits={}){
    }
    worked+=seconds;
    if(profile?.fen_hourly_only){
-    const limit=Math.min(540,d.scheduled_minutes??540)*60;
-    dailyOrdinary+=Math.min(seconds,limit);
     if(d.scheduled_minutes==null)issues.push('Confirm this day’s ordinary schedule: '+d.date);
     if(seconds>12*3600)issues.push(d.date+': more than 12 hours after breaks. Check the hours and agreement.');
    }
   }
-  const ordinary=Math.min(Math.round(profile?.fen_hourly_only?dailyOrdinary:worked),45*3600);
+  const ordinary=Math.min(Math.round(worked),45*3600);
   const overtime=Math.round(worked)-ordinary;
   if(profile?.fen_hourly_only && overtime>10*3600)issues.push('More than 10 overtime hours. All hours are included. Check the agreement.');
   if(!profile)issues.push('Confirm pay setup');
@@ -200,6 +209,11 @@ export function suggestRows(staff,shifts,settings,payDate,edits={}){
   if(worked>45*3600)issues.push('Verify overtime against the work schedule');
   if(source.days.some(d=>d.completed_seconds>9*3600))issues.push('Daily hours above 9; review overtime allocation');
   const weekend=shifts.filter(s=>s.employee_id===p.id&&s.punches[0].at<new Date(dayStart(from)).toISOString());
+  if(weekend.length && from>=FRESH_START.start_date){
+   source.weekend_days=periodHours([p],weekend,[],addDays(from,-2),addDays(from,-1))[0].days
+    .filter(d=>d.completed_seconds||d.review_seconds||d.issues.some(i=>i==='Open shift'))
+    .map(d=>dailyPayrollEvidence(d,weekend,profile,null));
+  }
   if(weekend.length)issues.push('Prior weekend clock records: review separate Sunday / special pay');
   if(shifts.some(s=>s.employee_id===p.id&&s.punches.at(-1).kind!=='out'))issues.push('Open shift');
   if(settings.profiles?.some(x=>x.employee_id===p.id&&x.from>from&&x.from<=payDate))issues.push('Rate changes inside this week; review special pay adjustment');
@@ -218,8 +232,8 @@ export function monthlyReport(month,runs,openings,company,people,fresh=null){
  }
  const selected=runs.filter(r=>r.pay_date.slice(0,7)===month&&['Approved','Paid'].includes(r.status));
  const ids=new Set([...selected.flatMap(r=>r.rows.filter(x=>x.included).map(x=>x.employee_id)),...openings.filter(o=>o.month===month).map(o=>o.employee_id)]);
- const rows=[...ids].map(id=>{const native=selected.flatMap(r=>r.rows.filter(x=>x.employee_id===id&&x.included).map(x=>({...x,status:r.status}))),opening=openings.find(o=>o.employee_id===id&&o.month===month),p=people.find(p=>p.id===id),totals=totalRows([...native,...(opening?[opening]:[])]);return {employee_id:id,name:native.at(-1)?.name??p?.name??id,code:native.at(-1)?.code??p?.code??'',...totals,paid_net_cents:native.filter(r=>r.status==='Paid').reduce((s,r)=>s+r.net_cents,0)+(opening?.net_cents??0),opening:!!opening,uif_total_cents:totals.uif_employee_cents+totals.uif_employer_cents,uif_expected_cents:partialStart?null:Math.round(Math.min(totals.uif_base_cents,1771200)/100),exemption_review:native.some(r=>r.uif==='Exempt')};});
- const approvedDates=selected.map(r=>r.pay_date),missing=[];for(let d=nextFriday(month+'-01');d.slice(0,7)===month;d=addDays(d,7)){if(!fresh && d>today())continue;if(company&&d<company.first_pay_date)continue;if(!approvedDates.includes(d))missing.push(d);}
+ const rows=[...ids].map(id=>{const native=selected.flatMap(r=>r.rows.filter(x=>x.employee_id===id&&x.included).map(x=>({...x,status:x.wage_state??r.status}))),opening=openings.find(o=>o.employee_id===id&&o.month===month),p=people.find(p=>p.id===id),totals=totalRows([...native,...(opening?[opening]:[])]);return {employee_id:id,name:native.at(-1)?.name??p?.name??id,code:native.at(-1)?.code??p?.code??'',...totals,paid_net_cents:native.filter(r=>r.status==='Paid').reduce((s,r)=>s+r.net_cents,0)+(opening?.net_cents??0),opening:!!opening,uif_total_cents:totals.uif_employee_cents+totals.uif_employer_cents,uif_expected_cents:partialStart?null:Math.round(Math.min(totals.uif_base_cents,1771200)/100),exemption_review:native.some(r=>r.uif==='Exempt')};});
+ const approvedDates=selected.filter(r=>!r.partial_approval).map(r=>r.pay_date),missing=[];for(let d=nextFriday(month+'-01');d.slice(0,7)===month;d=addDays(d,7)){if(!fresh && d>today())continue;if(company&&d<company.first_pay_date)continue;if(!approvedDates.includes(d))missing.push(d);}
  let coverage='Approved Fen runs by Friday pay date, plus verified opening amounts. Drafts excluded.';
  if(historical)coverage='Historical payroll is held by the auditors. See Employee history and Imported records.';
  else if(partialStart)coverage='Incomplete November report. App payroll from 16 November only. Earlier payments are held by the auditors and excluded. This is not a full statutory report.';

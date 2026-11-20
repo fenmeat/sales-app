@@ -1,5 +1,6 @@
 import {check,dateKey,addDays,today,UserError} from './domain.js';
 import {text,uuid} from './staff-domain.js';
+import {posted,postedRun,rebuildWages,selectWageRows,wageTotals} from './pay-wages.js';
 import {isAdmin} from "./auth.js";
 import {BREAK_RULE_VERSION,FRESH_START,PAYROLL_RULES,friday,nextFriday,validateCompany,validateProfile,validateOpening,profileAt,calculateRow,priorFor,paidDaySeconds,payrollBirthCheck,suggestRows,totalRows,monthlyReport} from './payroll-domain.js';
 
@@ -55,13 +56,16 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
   }
   return calculateRow(raw,profile,prior,options);
  };
+ const wages=async(date,stored,edits)=>rebuildWages(await preview(date,edits),stored,current.state,state.settings,state.runs,state.openings);
  const payDate=friday(url.searchParams.get('pay_date')??nextFriday());
  if(request.method==='GET'){
   if(url.pathname.endsWith('/history'))return {events:(await db.prepare("SELECT revision,entity_key,action,actor,saved_at,json_extract(payload, '$.change_note') AS reason FROM v2_staff_payroll ORDER BY revision DESC LIMIT 100").all()).results};
   const historical=fresh && payDate<fresh.first_pay_date;
   const stored=state.runs.find(r=>r.pay_date===payDate);
-  const run=stored??(historical?{status:'Reference',pay_date:payDate,from:addDays(payDate,-4),to:payDate,rows:[],totals:null}:await preview(payDate));
-  if(run.status==='Draft'){
+  const operational=fresh && payDate>=fresh.first_pay_date;
+  const wageView=operational && (url.searchParams.get('view')==='wages'||stored?.individual_wages) && (!stored||stored.individual_wages||['Draft','Voided'].includes(stored.status));
+  const run=wageView?await wages(payDate,stored):stored??(historical?{status:'Reference',pay_date:payDate,from:addDays(payDate,-4),to:payDate,rows:[],totals:null}:await preview(payDate));
+  if(!wageView && run.status==='Draft'){
    if(stale(run) && payDate>=FRESH_START.first_pay_date){
     const currentWeek=await preview(payDate);
     run.rows=run.rows.map(old=>{
@@ -92,7 +96,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
     }catch(error){if(!(error instanceof UserError))throw error;row.issues=[...row.issues,error.message];}
    }
   }
-  return {can_start_fresh:isAdmin(user.username),revision:state.revision,source,settings:state.settings,openings:state.openings,run,stale:stale(run),saved:!!run.saved_revision,runs:state.runs.map(({pay_date,status,totals,saved_at})=>({pay_date,status,totals,saved_at})).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)),month:monthlyReport(url.searchParams.get('month')??payDate.slice(0,7),state.runs,state.openings,state.settings.company,current.state.people,fresh)};
+  return {can_start_fresh:isAdmin(user.username),revision:state.revision,source,settings:state.settings,openings:state.openings,run,stale:!wageView&&stale(run),saved:!!run.saved_revision,runs:state.runs.map(({pay_date,status,totals,saved_at})=>({pay_date,status,totals,saved_at})).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)),month:monthlyReport(url.searchParams.get('month')??payDate.slice(0,7),state.runs.map(postedRun),state.openings,state.settings.company,current.state.people,fresh)};
  }
  check(request.method==='POST','Not found.',404);
  const b=await bodyOf(request),op=await operation(db,user.username,url.pathname,b,env);if(op.old)return op.old;
@@ -127,7 +131,78 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
  }else{
   check(date,'Choose a pay date.');
   check(!fresh||date>=fresh.first_pay_date,'This payroll is historical and read-only.');
-  if(b.action==='refresh'){
+  if(b.action.startsWith('wages_')){
+   check(isAdmin(user.username),'Only Alex or Alinda may change wages.',403);
+   check(fresh && date>=fresh.first_pay_date,'Start the new payroll first.');
+   check(!existing||existing.individual_wages||['Draft','Voided'].includes(existing.status),'This payroll is already closed.');
+   record=await wages(date,existing);
+   const allEdits=Object.fromEntries(record.rows.map(x=>[x.employee_id,{...x.day_edits}]));
+   if(b.action==='wages_uif_bound'){
+    check(date.slice(0,7)===fresh.start_date.slice(0,7),'Choose the first app payroll month.');
+    const rows=selectWageRows(record,b.employee_ids);
+    check(Number.isSafeInteger(b.upper_cents)&&b.upper_cents>=0,'Enter a verified upper limit for earlier UIF remuneration.');
+    const reason=text(b.note,'source of the earlier remuneration limit',400);
+    for(const r of rows){check(!posted(r),'This employee already has an approved wage.');r.wage_facts={...r.wage_facts,opening_bound:b.upper_cents,opening_source:reason};}
+    record=await wages(date,record,allEdits);record.change_note=reason;
+   }else if(b.action==='wages_approve'||b.action==='wages_paid'||b.action==='wages_reopen'){
+    const rows=selectWageRows(record,b.employee_ids);
+    check(date<=today() && state.settings.company,'Check the pay date and employer details.');
+    for(const r of rows){
+     if(b.action==='wages_approve'){
+      check(r.ready && !posted(r),r.name+' is not ready. Reload this week.',409);
+      check(!state.runs.some(other=>other.pay_date>date && postedRun(other).rows.some(x=>x.employee_id===r.employee_id && (posted(x)||(!other.individual_wages&&['Approved','Paid'].includes(other.status))))),'A later pay week for '+r.name+' has already been approved.');
+      r.wage_state='Approved';r.approved_by=user.username;r.approved_at=stamp;r.reviewed=true;
+      r.employer=state.settings.company;
+     }else if(b.action==='wages_paid'){
+      check(r.wage_state==='Approved','Record only approved, unpaid wages.',409);
+      const paid=dateKey(b.paid_on);check(paid>=date&&paid<=today(),'Enter the actual payment date.');
+      check(['Bank','Cash'].includes(b.method),'Choose the actual payment method.');
+      Object.assign(r,{wage_state:'Paid',paid_on:paid,paid_by:user.username,paid_at:stamp,payment_method:b.method,payment_reference:String(b.note??'').trim().slice(0,300)});
+     }else{
+      check(r.wage_state==='Approved','Only an unpaid approval can be reopened.');
+      check(!state.runs.some(other=>other.pay_date>date && postedRun(other).rows.some(x=>x.employee_id===r.employee_id&&(posted(x)||(!other.individual_wages&&['Approved','Paid'].includes(other.status))))),'A later approval already uses these amounts.');
+      record.change_note=r.name+' · '+text(b.note,'correction reason',300);
+      delete r.wage_state;delete r.approved_at;delete r.approved_by;r.reviewed=false;
+     }
+    }
+   }else{
+    const [row]=selectWageRows(record,[uuid(b.employee_id)]);
+    check(!posted(row),'Reopen the unpaid approval first. Paid payslips are frozen.');
+    const reason=text(b.note,'source or reason',400);
+    if(b.action==='wages_day'){
+     const day=row.source.days.find(d=>d.date===b.day);
+     check(day && day.date<=today(),'Choose a completed day in this week.');
+     check(['hours','absent','workplace'].includes(b.kind),'Choose a correction.');
+     const edit={...row.day_edits[b.day],reason,by:user.username,at:stamp};
+     if(b.kind==='workplace'){
+      check(day.monday_rotation && ['Factory','Route'].includes(b.workplace),'Choose the Monday workplace.');edit.workplace=b.workplace;
+     }else{
+      check(Number.isInteger(b.minutes)&&b.minutes>=0&&b.minutes<=1440,'Enter total paid minutes for this day.');
+      check(b.kind!=='absent'||(!day.first_in&&!day.review_seconds&&!day.leave_days&&b.minutes===0),'A clocked or leave day cannot be marked absent.');
+      edit.absent=b.kind==='absent';edit.minutes=(b.minutes*60-day.clock_payable_seconds)/60;
+      edit.baseline_seconds=day.clock_payable_seconds;
+     }
+     allEdits[row.employee_id][b.day]=edit;
+    }else if(b.action==='wages_facts'){
+     const f={...row.wage_facts};
+     if(b.extra_cents!=null){check(Number.isSafeInteger(b.extra_cents)&&b.extra_cents>=0,'Enter the extra pay in cents.');row.special_cents=b.extra_cents;row.entered_special_cents=b.extra_cents;}
+     for(const k of ['special_checked','short_day_checked','daily_resolved','legacy_checked','fixed_checked','weekly_bonus'])if(b[k]===true)f[k]=true;
+     if(b.uif){check(['Liable','Exempt'].includes(b.uif),'Choose UIF treatment.');row.uif=b.uif;row.uif_reason=reason;}
+     if(b.cutover_uif){check(['Full weekly share','Confirmed current amounts'].includes(b.cutover_uif),'Choose the current UIF treatment.');row.cutover_uif=b.cutover_uif;if(b.cutover_uif==='Confirmed current amounts'){row.current_employee_cents=b.employee_uif;row.current_employer_cents=b.employer_uif;}}
+     for(const k of ['bonus_cents','commission_cents','meat_cents','other_deduction_cents'])if(b[k]!=null){check(Number.isSafeInteger(b[k])&&b[k]>=0,'Enter a valid amount.');row[k]=b[k];}
+     if(b.paid_days){check(row.profile?.fen_hourly_only,'Check the paid day arrangement.');paidDaySeconds(b.paid_days,row.source.days);row.paid_days=b.paid_days;row.paid_days_note=reason;}
+     row.wage_facts=f;
+    }else if(b.action==='wages_tax'){
+     check(row.gross_cents!=null && Number.isSafeInteger(b.paye_cents)&&b.paye_cents>=0&&b.paye_cents<=row.gross_cents,'Check gross and PAYE first.');
+     row.wage_facts={...row.wage_facts,paye_cents:b.paye_cents,taxable_snapshot:row.gross_cents,tax_source:reason};
+    }else throw new UserError('Unknown wage action.');
+    record.change_note=row.name+' · '+(b.day??'')+' · '+reason;
+    record=Object.assign(await wages(date,record,allEdits),{change_note:record.change_note});
+   }
+   record.status=record.rows.every(r=>r.wage_state==='Paid')?'Paid':record.rows.every(posted)?'Approved':'Draft';
+   record.totals=wageTotals(record.rows);
+  }else if(existing?.individual_wages){throw new UserError('Open Pay Wages to change this week.',409);
+  }else if(b.action==='refresh'){
    check(!existing||['Draft','Voided'].includes(existing.status),'Approved payroll is locked.');
    record=await preview(date);
    // Keep saved manual inputs, but require review against the fresh evidence.
@@ -215,9 +290,9 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
    check(!state.runs.some(r=>['Approved','Paid'].includes(r.status)&&r.pay_date>date),'Void later unpaid runs first; subsequent UIF calculations depend on this run.');
    record={...existing,status:'Voided',void_reason:text(b.note,'void reason',500),void_by:user.username,void_at:stamp};
   }else throw new UserError('Unknown payroll action.');
-  record.totals=totalRows(record.status==='Draft'?record.rows.filter(r=>r.reviewed):record.rows);if(record.status==='Draft' && !(b.action==='paid_days' && stale(record)))record.source={...source,payroll_revision:next};
+  if(!record.individual_wages)record.totals=totalRows(record.status==='Draft'?record.rows.filter(r=>r.reviewed):record.rows);if(record.status==='Draft' && !(b.action==='paid_days' && stale(record)))record.source={...source,payroll_revision:next};
  }
- if(b.action!=='row' && b.action!=='day_edit')delete record.change_note;
+ if(!b.action.startsWith('wages_') && b.action!=='row' && b.action!=='day_edit')delete record.change_note;
  delete record.saved_revision;delete record.saved_at;delete record.saved_by;
  check(JSON.stringify(record).length<650000,'Payroll record is too large.');
  // Serialized global payroll revision protects monthly UIF against two runs
