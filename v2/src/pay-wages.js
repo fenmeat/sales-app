@@ -138,7 +138,10 @@ export function wagePreview(row,person,run,settings,runs,openings) {
   raw.overtime_seconds+=weekendOvertime-(holidaySeconds-holidayOrdinary);
   raw.holiday_seconds=holidaySeconds;raw.sunday_seconds=sundaySeconds;
   if(profile.basis==='Hourly' && shortDayGuarantee && !days.some(d=>holidays.has(d.date)))holidayPay+=Math.round(shortDayGuarantee*profile.rate_cents/3600);
-  raw.special_cents+=holidayPay;
+  const adjustments=facts.amendments??[];
+  raw.special_cents+=holidayPay+sum(adjustments.filter(a=>a.kind==='Earnings'),a=>a.cents);
+  answer.entered_deduction_cents=row.other_deduction_cents;
+  raw.other_deduction_cents+=sum(adjustments.filter(a=>a.kind==='Authorised repayment'),a=>a.cents);
   answer.entered_special_cents=row.special_cents;
   answer.statutory_special_cents=holidayPay;
   amounts=calculateRow(raw,profile,prior,{paidOffSeconds:paidDaySeconds(row.paid_days??[],days),
@@ -158,7 +161,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
   if(facts.paye_cents!=null && facts.taxable_snapshot===amounts.gross_cents)tax=facts.paye_cents;
   else if(taxProfile==='Directive' && profile.directive_from<=run.pay_date && profile.directive_to>=run.pay_date && profile.directive_bps!=null)
    tax=Math.round(amounts.gross_cents*profile.directive_bps/10000);
-  else if(taxProfile==='Other' || taxProfile==='Directive' || row.commission_cents || (row.bonus_cents&&!facts.weekly_bonus) ||
+  else if((facts.amendments??[]).some(a=>a.kind==='Earnings') || taxProfile==='Other' || taxProfile==='Directive' || row.commission_cents || (row.bonus_cents&&!facts.weekly_bonus) ||
     (!taxProfile && sum(ordinaryDays,n=>n)<22*60))
    stop('Confirm the applicable PAYE basis or this week’s directive amount.');
   else {
@@ -168,8 +171,8 @@ export function wagePreview(row,person,run,settings,runs,openings) {
   }
  }catch(e){if(!(e instanceof UserError))throw e;stop(e.message);}
  answer.paye_cents=tax;
- if(tax!=null && uifKnown && !uifAvailable)answer.estimate_net_cents=amounts.gross_cents-tax-amounts.uif_employee_cents-row.meat_cents-row.other_deduction_cents;
- if(tax!=null && uifAvailable)answer.net_cents=amounts.gross_cents-tax-answer.uif_employee_cents-row.meat_cents-row.other_deduction_cents;
+ if(tax!=null && uifKnown && !uifAvailable)answer.estimate_net_cents=amounts.gross_cents-tax-amounts.uif_employee_cents-amounts.meat_cents-amounts.other_deduction_cents;
+ if(tax!=null && uifAvailable)answer.net_cents=amounts.gross_cents-tax-answer.uif_employee_cents-amounts.meat_cents-amounts.other_deduction_cents;
  if(answer.net_cents<0)stop('Deductions exceed gross pay.');
  answer.ready=issues.length===0 && answer.net_cents!=null && run.pay_date<=today();
  return answer;
@@ -188,7 +191,7 @@ export function rebuildWages(clockRun,stored,staff,settings,runs,openings) {
   if(old && posted(old))return old;
   if(old){
    for(const key of ['paid_days','paid_days_note','included','sunday_seconds','holiday_seconds','special_cents','bonus_cents','commission_cents','meat_cents','other_deduction_cents','uif','uif_reason','cutover_uif','current_employee_cents','current_employer_cents','wage_facts','note'])
-    if(old[key]!=null)row[key]=key==='special_cents'?(old.entered_special_cents??old.special_cents):key==='uif'?(old.input_uif??old.uif):old[key];
+    if(old[key]!=null)row[key]=key==='special_cents'?(old.entered_special_cents??old.special_cents):key==='uif'?(old.input_uif??old.uif):key==='other_deduction_cents'?(old.entered_deduction_cents??old.other_deduction_cents):old[key];
    // A legacy explicitly reviewed exception is evidence, never a new blanket approval.
    if(old.reviewed && !old.wage_facts && !posted(old)){
     row.issues.push('Check the saved manual week against the current clock.');

@@ -205,9 +205,21 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
      for(const k of ['special_checked','short_day_checked','daily_resolved','legacy_checked','fixed_checked','weekly_bonus'])if(b[k]===true)f[k]=true;
      if(b.uif){check(['Liable','Exempt'].includes(b.uif),'Choose UIF treatment.');row.uif=b.uif;row.input_uif=b.uif;row.uif_reason=reason;}
      if(b.cutover_uif){check(['Full weekly share','Confirmed current amounts'].includes(b.cutover_uif),'Choose the current UIF treatment.');row.cutover_uif=b.cutover_uif;if(b.cutover_uif==='Confirmed current amounts'){row.current_employee_cents=b.employee_uif;row.current_employer_cents=b.employer_uif;}}
-     for(const k of ['bonus_cents','commission_cents','meat_cents','other_deduction_cents'])if(b[k]!=null){check(Number.isSafeInteger(b[k])&&b[k]>=0,'Enter a valid amount.');row[k]=b[k];}
+     for(const k of ['bonus_cents','commission_cents','meat_cents','other_deduction_cents'])if(b[k]!=null){check(Number.isSafeInteger(b[k])&&b[k]>=0,'Enter a valid amount.');row[k]=b[k];if(k==='other_deduction_cents')row.entered_deduction_cents=b[k];}
      if(b.paid_days){check(row.profile?.fen_hourly_only,'Check the paid day arrangement.');paidDaySeconds(b.paid_days,row.source.days);row.paid_days=b.paid_days;row.paid_days_note=reason;}
      row.wage_facts=f;
+    }else if(b.action==='wages_amend'){
+     const origin=friday(b.original_friday),prior=state.runs.find(r=>r.pay_date===origin);
+     const original=prior?.rows.find(r=>r.employee_id===row.employee_id&&r.included);
+     check(origin<date && origin>=fresh.first_pay_date && original && (original.wage_state==='Paid'||(!prior.individual_wages&&prior.status==='Paid')),'Select an earlier paid payslip for this employee.');
+     check(['Earnings','Authorised repayment'].includes(b.kind),'Select the type of correction.');
+     check(Number.isSafeInteger(b.cents)&&b.cents>0,'Enter a positive correction amount.');
+     if(b.kind==='Authorised repayment')check(b.authorised===true,'Confirm the legal authority for this wage deduction.');
+     const reference=text(b.reference,'correction reference',120);
+     const duplicate=state.runs.some(r=>r.rows.some(x=>x.employee_id===row.employee_id&&x.wage_facts?.amendments?.some(a=>a.reference===reference)));
+     check(!duplicate,'This correction reference is already on a payslip.');
+     const amendment={original_friday:origin,kind:b.kind,cents:b.cents,reference,reason,actor:user.username,at:stamp};
+     row.wage_facts={...row.wage_facts,amendments:[...(row.wage_facts?.amendments??[]),amendment]};
     }else if(b.action==='wages_tax'){
      check(row.gross_cents!=null && Number.isSafeInteger(b.paye_cents)&&b.paye_cents>=0&&b.paye_cents<=row.gross_cents,'Check gross and PAYE first.');
      row.wage_facts={...row.wage_facts,paye_cents:b.paye_cents,taxable_snapshot:row.gross_cents,tax_source:reason};
