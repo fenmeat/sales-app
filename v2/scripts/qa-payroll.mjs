@@ -51,7 +51,7 @@ try{
  const inactiveFacts=await page.request.post(origin+'/api/staff',{headers:{Origin:origin},data:{action:'person',revision:current.revision,request_id:crypto.randomUUID(),person:{id:incompleteId,name:'Synthetic second worker',code:'QA-PAY-02',team:'Factory',start_date:'2026-11-16',birth_date:'1990-04-03',active:true}}});
  assert.equal(inactiveFacts.status(),200);
  await page.reload();await page.getByRole('button',{name:'Payroll',exact:true}).click();
- const open=async()=>{if(!await page.locator('[data-facts="'+id+'"]').count() && !await page.locator('[data-slip="'+id+'"]').count())await page.locator('[data-toggle="'+id+'"]').first().click();};
+ const open=async()=>{await page.locator('[data-wage="'+id+'"]').waitFor({state:'visible'});if(!await page.locator('[data-facts="'+id+'"]').count() && !await page.locator('[data-slip="'+id+'"]').count())await page.locator('[data-toggle="'+id+'"]').first().click();};
  await open();
  if(fenHourly){
   await page.getByRole('button',{name:'Paid days off',exact:true}).click();await page.getByLabel('2026-11-16').check();await page.getByLabel('Source or reason').fill('Verified paid Monday');await save();
@@ -65,7 +65,7 @@ try{
  assert.equal(paidRow.gross_cents,fenHourly?172260:204000);
  assert.equal(paidRow.net_cents,expectedNet,JSON.stringify(paidRow.issues));assert.equal(paidRow.ready,true);
  assert.equal(result.run.rows.find(r=>r.employee_id===incompleteId).net_cents,null);
- assert.equal(await page.locator('[data-wage="'+incompleteId+'"]').getByText('Needs Attention').count(),1);
+ await page.locator('[data-wage="'+incompleteId+'"]').getByText('Needs Attention',{exact:true}).waitFor({state:'visible'});
  await page.getByRole('button',{name:'Approve Ready Employees',exact:true}).click();await save();
  result=await get();assert.equal(result.run.rows.find(r=>r.employee_id===id).wage_state,'Approved');assert.equal(result.run.status,'Draft');
  await page.evaluate(()=>{window.__prints=0;window.print=()=>{window.__prints++;window.dispatchEvent(new Event('beforeprint'));window.dispatchEvent(new Event('afterprint'));};});
