@@ -47,3 +47,10 @@ test('confirmed attendance or illness without exact hours or entitlement stays v
  const s=week([8,null,8,8,8],{edits:{'2026-11-17':{pending_kind:'sick_pending',reason:'Illness reported'}}});
  assert.equal(s.net_cents,null);assert.equal(s.estimate_net_cents,129888);assert.match(s.issues.join(' '),/Reported sick/);
 });
+
+test('Friday public holiday removes its own ordinary and overtime hours from ordinary earnings',t=>{
+ t.mock.timers.enable({apis:['Date'],now:new Date('2026-12-25T17:00:00Z')});
+ const r=week([10,10,10,10,8],{from:'2026-12-21'});
+ assert.equal(r.ordinary_seconds,40*3600);assert.equal(r.overtime_seconds,0);
+ assert.equal(r.holiday_seconds,8*3600);assert.equal(r.gross_cents,185600);
+});

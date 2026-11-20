@@ -1,5 +1,6 @@
 import {addDays,check,UserError,today} from './domain.js';
 import {calculateRow,paidDaySeconds,payrollBirthCheck,priorFor} from './payroll-domain.js';
+import {scheduledMinutes} from './staff-domain.js';
 import {ageIndependentEstimate,weeklyPaye} from './weekly-paye.js';
 
 
@@ -24,7 +25,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  let hoursKnown=true;
  const missing=(date,msg)=>{hoursKnown=false;stop(date+' · '+msg);};
  const ordinaryDays=(person.schedules??[]).filter(s=>s.from<=run.from).at(-1)?.minutes??[];
- let longDay=false,dailyExcess=0,shortDayGuarantee=0;
+ let longDay=false,dailyExcess=0,shortDayGuarantee=0,weeklyWorked=0,holidayWeeklyOt=0,holidayDailyOt=0;
  for(const day of days){
   const edit=row.day_edits?.[day.date],payable=day.payable_seconds??day.completed_seconds;
   const resolved=edit?.reason && !day.needs_adjustment_review && (edit.absent===true||Number.isFinite(edit.minutes)&&edit.minutes!==0);
@@ -45,9 +46,11 @@ export function wagePreview(row,person,run,settings,runs,openings) {
   const statutoryLimit=(ordinaryDays.filter(n=>n>0).length>5?8:9)*3600;
   const ordinaryLimit=day.scheduled_minutes>0?Math.min(statutoryLimit,day.scheduled_minutes*60):statutoryLimit;
   if(payable>ordinaryLimit){longDay=true;dailyExcess+=payable-ordinaryLimit;}
-  if(payable>=60 && payable<4*3600)shortDayGuarantee+=4*3600-payable;
-
-
+  if(holidays.has(day.date)){
+   holidayWeeklyOt+=Math.max(0,payable-Math.max(0,45*3600-weeklyWorked));
+   holidayDailyOt+=Math.max(0,payable-ordinaryLimit);
+  }else if(payable>=60 && payable<4*3600)shortDayGuarantee+=4*3600-payable;
+  weeklyWorked+=payable;
  }
  if(!days.some(d=>d.payable_seconds>0||d.leave_days||row.day_edits?.[d.date]?.absent||row.paid_days?.includes(d.date)||holidays.has(d.date)))hoursKnown=false;
  for(const issue of row.source_flags??row.issues){
@@ -71,10 +74,13 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  const previous=runs.filter(r=>r.pay_date<run.pay_date&&r.pay_date.slice(0,7)===month).map(postedRun);
  if(previous.some(r=>r.pay_date>=person.start_date && !r.rows.some(x=>x.employee_id===person.id&&(posted(x)||(['Approved','Paid'].includes(r.status)&&x.included)))))stop('Confirm the earlier unpaid week for this employee before finalising monthly UIF.');
 
+ const priorWeekend=row.source.weekend_days??[];
+ const monthlyWorked=row.ordinary_seconds+row.overtime_seconds+sum(priorWeekend,d=>d.payable_seconds??0)
+  +prior.ordinary_seconds+prior.overtime_seconds+prior.holiday_seconds+prior.sunday_seconds;
  let uif=row.uif;
- if(uif==='Review' && (row.ordinary_seconds+row.overtime_seconds+prior.ordinary_seconds>=86400))uif='Liable';
+ if(uif==='Review' && monthlyWorked>=86400)uif='Liable';
  const uifKnown=['Liable','Exempt'].includes(uif);
- if(row.uif==='Exempt' && (row.ordinary_seconds+row.overtime_seconds+prior.ordinary_seconds)>=86400 && /24 hour|24 uur/i.test(row.uif_reason??''))stop('The monthly hours now reach 24. Correct the UIF treatment.');
+ if(row.uif==='Exempt' && monthlyWorked>=86400 && /24 hour|24 uur/i.test(row.uif_reason??''))stop('The monthly hours now reach 24. Correct the UIF treatment.');
  if(!uifKnown)stop('Confirm whether this employee works at least 24 hours this month for Fen Meat.');
  const priorBound=runs.filter(r=>r.pay_date<run.pay_date && r.pay_date.slice(0,7)===month).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)).flatMap(r=>r.rows.filter(x=>x.employee_id===person.id)).find(x=>x.wage_facts?.opening_bound!=null)?.wage_facts.opening_bound;
  const bound=facts.opening_bound??priorBound;
@@ -87,29 +93,36 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  let amounts;
  try {
   const raw={...row,uif:uifKnown?uif:'Liable',paye_cents:null};
-  let holidaySeconds=0,holidayPay=0,weekendOrdinary=0,weekendOvertime=0,sundaySeconds=0;
+  let holidaySeconds=0,weekendHolidaySeconds=0,holidayPay=0,weekendOrdinary=0,weekendOvertime=0,sundaySeconds=0;
   const dailyWageSeconds=ordinaryDays.filter(n=>n>0).length?sum(ordinaryDays,n=>n*60)/ordinaryDays.filter(n=>n>0).length:null;
-  for(const d of days.filter(d=>holidays.has(d.date))){
+  const weekend=[...priorWeekend];
+  for(const offset of [-2,-1]){
+   const date=addDays(run.from,offset);
+   if(!holidays.has(date) || date<(settings.fresh_start?.start_date??'') || date<(person.start_date??'') || weekend.some(d=>d.date===date))continue;
+   const scheduled=scheduledMinutes({...person,schedules:person.schedules??[]},date);
+   if(scheduled>0)weekend.push({date,scheduled_minutes:scheduled,payable_seconds:0,issues:[]});
+  }
+  for(const d of [...days,...weekend].filter(d=>holidays.has(d.date))){
+   const previousWeekend=d.date<run.from;
    const work=Math.round(d.payable_seconds??0),scheduled=(d.scheduled_minutes??0)*60;
    if(!scheduled&&!work)continue;
    if(d.scheduled_minutes==null||!profile.rate_cents||d.leave_days){stop(d.date+' · Confirm the holiday entitlement including any overlapping leave.');continue;}
    if(work&&!scheduled&&dailyWageSeconds==null){stop(d.date+' · Confirm the ordinary daily wage for public holiday work.');continue;}
-   holidaySeconds+=work;
+   if(previousWeekend)weekendHolidaySeconds+=work;else holidaySeconds+=work;
    const dayBase=scheduled||dailyWageSeconds;
    const entitlement=work?(scheduled?Math.max(2*scheduled,scheduled+work):dayBase+work):scheduled;
    holidayPay+=Math.round((entitlement-(profile.basis==='Fixed weekly'?scheduled:0))*profile.rate_cents/3600);
   }
-  const weekend=row.source.weekend_days??[];
   const prevDate=addDays(run.pay_date,-7);
   const earlier=runs.find(r=>r.pay_date===prevDate);
   const previousRow=earlier?.rows.find(x=>x.employee_id===person.id&&(posted(x)||(!earlier.individual_wages&&['Approved','Paid'].includes(earlier.status))));
   let priorOrdinary=previousRow?.ordinary_seconds;
   for(const d of weekend){
-   if(d.issues.length||d.overlap||d.review_seconds){missing(d.date,'Correct the weekend clock record.');continue;}
+   if(d.issues.some(i=>i!=='Missing attendance record')||d.overlap||d.review_seconds){missing(d.date,'Correct the weekend clock record.');continue;}
    const work=Math.round(d.payable_seconds);
    if(!work)continue;
    const sunday=new Date(d.date+'T12:00Z').getUTCDay()===0;
-   if(holidays.has(d.date)){stop(d.date+' · Reconcile the weekend public holiday separately.');continue;}
+   if(holidays.has(d.date))continue;
    if(sunday){
     if(d.scheduled_minutes==null||dailyWageSeconds==null||!profile.rate_cents){stop(d.date+' · Confirm the Sunday roster and daily wage.');continue;}
     sundaySeconds+=work;
@@ -135,11 +148,11 @@ export function wagePreview(row,person,run,settings,runs,openings) {
    if(d.first_in || (d.leave_days && d.paid_leave_minutes!==(edit.sick_minutes??0)))missing(d.date,'Reconcile the sick day with the new attendance or leave entry.');
    if(!d.leave_days && edit.sick_type==='sick_paid')raw.leave_seconds+=edit.sick_minutes*60;
   }
-  const holidayOrdinary=Math.min(raw.ordinary_seconds,holidaySeconds);
-  raw.ordinary_seconds+=weekendOrdinary-holidayOrdinary;
-  raw.overtime_seconds+=weekendOvertime-(holidaySeconds-holidayOrdinary);
-  raw.holiday_seconds=holidaySeconds;raw.sunday_seconds=sundaySeconds;
-  if(profile.basis==='Hourly' && shortDayGuarantee && !days.some(d=>holidays.has(d.date)))holidayPay+=Math.round(shortDayGuarantee*profile.rate_cents/3600);
+  const holidayOt=Math.min(holidaySeconds,Math.round(facts.daily_resolved && dailyExcess>row.overtime_seconds?holidayDailyOt:holidayWeeklyOt));
+  raw.ordinary_seconds+=weekendOrdinary-(holidaySeconds-holidayOt);
+  raw.overtime_seconds+=weekendOvertime-holidayOt;
+  raw.holiday_seconds=holidaySeconds+weekendHolidaySeconds;raw.sunday_seconds=sundaySeconds;
+  if(profile.basis==='Hourly' && shortDayGuarantee)holidayPay+=Math.round(shortDayGuarantee*profile.rate_cents/3600);
   const adjustments=facts.amendments??[];
   raw.special_cents+=holidayPay+sum(adjustments.filter(a=>a.kind==='Earnings'),a=>a.cents);
   answer.entered_deduction_cents=row.other_deduction_cents;
