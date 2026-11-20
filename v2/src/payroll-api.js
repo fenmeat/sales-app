@@ -201,6 +201,10 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
       check(Number.isInteger(b.extra_minutes)&&b.extra_minutes>=0&&b.extra_minutes<=45*60 && row.profile?.rate_cents>0,'Vul die ekstra betaalde tyd in en bevestig die uurtarief.');
       row.wage_facts={...row.wage_facts,extra_minutes:b.extra_minutes,extra_reason:reason};
      }
+    }else if(b.action==='wages_clear_week'){
+     check(row.wage_facts?.worked_week,'Die loon gebruik reeds die dagure.');
+     row.wage_facts={...row.wage_facts};
+     delete row.wage_facts.worked_week;
     }else if(b.action==='wages_worked_week'){
      check(Number.isInteger(b.minutes)&&b.minutes>=0&&b.minutes<=5*24*60,'Vul die gewerkte ure en minute vir die week in.');
      check(date<=today(),'Bevestig die weekure nadat die week klaar is.');

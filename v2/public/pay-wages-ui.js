@@ -26,7 +26,7 @@ function dayDetails(r,leave) {
  return r.source.days.map(d=>{
   const edit=r.day_edits?.[d.date];
   const records=entries(leave,r.employee_id,d.date);
-  const absence=records.map(x=>label(x.type)+' · '+label(x.status)).join(', ') || (edit?.sick_type==='sick_paid'?'Betaalde siekdag op vorige looninskrywing':edit?.sick_type==='sick_unpaid'?'Onbetaalde siekdag':'Geen');
+  const absence=records.map(x=>label(x.type)+(x.funding==='Employer'?' deur Fen Meat betaal':'')+' · '+label(x.status)).join(', ') || (edit?.sick_type==='sick_paid'?'Betaalde siekdag op vorige looninskrywing':edit?.sick_type==='sick_unpaid'?'Onbetaalde siekdag':'Geen');
   return `<section class="wage-day"><h4>${h(dayName(d.date))}</h4><dl class="wage-values">${item('Inklok',d.first_in?clockTime(d.first_in):'—')}${item('Uitklok',d.last_out?clockTime(d.last_out):'—')}${item('Pouse',hoursLabel((d.recorded_break_seconds??0)+(d.automatic_break_seconds??0)))}${item('Gewerk ná pouses',hoursLabel(d.payable_seconds??d.completed_seconds))}${item('Verlof',absence)}${item('Betaalde verlof',hoursLabel((d.paid_leave_minutes||edit?.sick_minutes||0)*60))}</dl>
   ${edit?.reason?`<p>${h(edit.reason)}</p>`:''}
   ${!r.wage_state&&d.date<=localDay(new Date())?`<div class="row-actions"><button data-correct="${d.date}" data-id="${r.employee_id}">Verander hierdie dag</button>${d.first_in?`<button data-clock-day="${d.date}" data-id="${r.employee_id}">Verander kloktye of pouse</button>`:''}</div>`:''}</section>`;
@@ -35,7 +35,7 @@ function dayDetails(r,leave) {
 function detail(r,leave) {
  const id=r.employee_id,issues=[...new Set((r.issues??[]).map(wageMessage))];
  const actions=r.wage_state?`<button data-slip="${id}">Druk loonstrokie</button> ${r.wage_state==='Approved'?`<button data-reopen="${id}">Heropen onbetaalde loon</button>`:''}`:
- `<button data-absence="${id}">Teken verlof aan of verander dit</button><button data-week="${id}">Bevestig gewerkte weekure</button><button data-pay-profile="${id}">Loonkoers</button><button data-facts="${id}">Aftrekkings en ekstra betaling</button>
+ `<button data-absence="${id}">Teken verlof aan of verander dit</button><button data-week="${id}">Bevestig gewerkte weekure</button>${r.wage_facts?.worked_week?`<button data-clear-week="${id}">Gebruik weer die dagure</button>`: ''}<button data-pay-profile="${id}">Loonkoers</button><button data-facts="${id}">Aftrekkings en ekstra betaling</button>
  ${r.paye_cents==null&&r.gross_cents!=null?`<button data-tax="${id}">Vul bevestigde belasting in</button>`:''}
  ${r.issues?.some(i=>/earlier November|Earlier November earnings/.test(i))?`<button data-prior-uif="${id}">Vul vorige UIF in</button>`:''}
  ${r.profile?.fen_hourly_only?`<button data-off="${id}">Ander goedgekeurde afdae</button>`:''}<button data-amend="${id}">Stel ’n vorige loonstrokie reg</button>`;
@@ -74,7 +74,7 @@ const headings=['Naam','Gewone ure','Oortyd','Verlof','Bruto','UIF','PAYE','Ande
 function sheetRow(r){
  return [r.name,hoursLabel(r.ordinary_seconds),hoursLabel(r.overtime_seconds),hoursLabel(r.leave_seconds),money(r.gross_cents),money(r.uif_employee_cents),money(r.paye_cents),money((r.meat_cents??0)+(r.other_deduction_cents??0)),displayNet(r)==null?'Onbekend':money(displayNet(r))+(confirmed(r)?'':' *'),status(r)];
 }
-export function bindWages({run,leave,render,editor,save,printSheet,payslip,clockDay,notice}){
+export function bindWages({run,leave,render,editor,save,printSheet,payslip,clockDay,notice,initialLeave}){
  const root=document.querySelector('#payroll-root'),rows=visible(run);
  const row=id=>run.rows.find(r=>r.employee_id===id);
  const actions=(attr,fn)=>root.querySelectorAll('['+attr+']').forEach(b=>b.onclick=()=>Promise.resolve().then(()=>fn(b.getAttribute(attr),b)).catch(e=>notice(wageMessage(e.message),true)));
@@ -86,7 +86,7 @@ export function bindWages({run,leave,render,editor,save,printSheet,payslip,clock
   try {await save({action:'wages_pay_now',employee_ids:[id],expected_cents:r.net_cents,method,paid_on:localDay(new Date())});}
   finally {if(b.isConnected)b.disabled=!!row(id).wage_state&&row(id).wage_state==='Paid';}
  });
- function report(){return {title:'Betaalstaat · '+run.pay_date,headers:headings,rows:rows.map(sheetRow),note:'* Voorlopig. Gebruik die finale bedrag wanneer die ontbrekende inligting ingevul is.',total:'Gereed en nog onbetaal · '+money(total(rows.filter(r=>confirmed(r)&&r.wage_state!=='Paid'),'net_cents'))};}
+ function report(){return {title:'Betaalstaat · '+run.pay_date,headers:headings,rows:rows.map(sheetRow),note:'* Voorlopig. As belasting of UIF ontbreek, kan hierdie bedrag verander. Gebruik die finale bedrag sodra die aftrekkings vasstaan.',total:'Gereed en nog onbetaal · '+money(total(rows.filter(r=>confirmed(r)&&r.wage_state!=='Paid'),'net_cents'))};}
  root.querySelector('#wage-list').onclick=()=>{const s=report();printSheet(`<section class="payroll-report"><h1>${h(s.title)}</h1><table><thead><tr>${s.headers.map(v=>'<th>'+h(v)+'</th>').join('')}</tr></thead><tbody>${s.rows.map(r=>'<tr>'+r.map(v=>'<td>'+h(v)+'</td>').join('')+'</tr>').join('')}</tbody></table><p>${h(s.note)}</p><strong>${h(s.total)}</strong></section>`,s.title);};
  root.querySelector('#wage-pdf').onclick=async e=>{const b=e.currentTarget;b.disabled=true;try{const {downloadWages}=await import('./wage-pdf-bundle.js');await downloadWages(report(),run.pay_date);}catch{notice('Die PDF kon nie afgelaai word nie. Probeer weer of kies Druk betaalstaat.',true);}finally{b.disabled=false;}};
  actions('data-slip',id=>{const r=row(id);printSheet(payslip({...run,status:r.wage_state,company:r.employer??run.company,paid_on:r.paid_on,approved_by:r.approved_by,approved_at:r.approved_at},{...r,profile:{...r.profile,payment_method:r.payment_method??r.profile.payment_method}}),'Loonstrokie');});
@@ -103,6 +103,12 @@ export function bindWages({run,leave,render,editor,save,printSheet,payslip,clock
   f=>{const extra=String(f.get('extra')??'').trim();const mins=extra?parseDecimal(extra)*60:undefined;if(extra&&(!Number.isInteger(mins)||mins<0))throw Error('Vul die ekstra ure in, byvoorbeeld 5.');return {action:'wages_absence',employee_id:id,dates:days.filter(d=>f.has(d.date)).map(d=>d.date),type:f.get('type'),replace:f.has('replace'),employer_cover:f.has('cover'),extra_minutes:mins,note:f.get('note')};});
  }
  actions('data-absence',id=>absence(row(id)));
+ if(initialLeave){
+  const entry=row(initialLeave.id);
+  if(entry&&!entry.wage_state)absence(entry,initialLeave.date);
+  else notice('Hierdie loon is reeds goedgekeur of lê buite die betaalweek. Kyk na die vorige betaalstaat voordat jy verlof verander.',true);
+ }
+ actions('data-clear-week',id=>editor(h(row(id).name)+' · Gebruik weer die dagure','<p>Die loon sal weer uit die afsonderlike dagure en verlof bereken word.</p>'+memo,f=>({action:'wages_clear_week',employee_id:id,note:f.get('note')})));
  actions('data-week',id=>{const r=row(id),mins=r.wage_facts?.worked_week?.minutes;
   editor(h(r.name)+' · Gewerkte weekure',`<p>Die vyf daginskrywings wys saam ${hoursLabel(r.source.days.reduce((n,d)=>n+d.payable_seconds,0))}. Vul die bevestigde totaal ná pouses in. Verlof en ekstra betaling tel afsonderlik.</p>${input('Ure','hours',mins!=null?Math.floor(mins/60):'',true)}${input('Minute','mins',mins!=null?mins%60:0,true)}${r.source.days.some(d=>d.payable_seconds)?box('Gebruik die bevestigde weekure indien dit van die dagure verskil.','replace'):''}${memo}`,f=>({action:'wages_worked_week',employee_id:id,minutes:whole(f,'hours',120)*60+whole(f,'mins',59),replace:f.has('replace'),note:f.get('note')}));});
  actions('data-clock-day',(day,b)=>clockDay(b.dataset.id,day));

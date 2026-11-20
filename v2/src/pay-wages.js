@@ -27,7 +27,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  if(posted(row))return row;
  let profile=row.profile;
  const issues=[],facts=row.wage_facts??{},days=row.source.days;
- const answer={...row,employment_type:person.employment_type,issues,ready:false,net_cents:null,gross_cents:null,paye_cents:null,uif_employee_cents:null,uif_employer_cents:null};
+ const answer={...row,employment_type:person.employment_type??person.source_profile?.kind,issues,ready:false,net_cents:null,gross_cents:null,paye_cents:null,uif_employee_cents:null,uif_employer_cents:null};
  const stop=msg=>issues.push(msg);
  let hoursKnown=true;
  const missing=(date,msg)=>{hoursKnown=false;stop(date+' · '+msg);};
@@ -86,7 +86,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  const monthlyWorked=row.ordinary_seconds+row.overtime_seconds+sum(priorWeekend,d=>d.payable_seconds??0)
   +prior.ordinary_seconds+prior.overtime_seconds+prior.holiday_seconds+prior.sunday_seconds;
  let uif=row.uif;
- const regularRoster=person.employment_verified!==false && person.employment_type!=='Casual' && (ordinaryDays.reduce((sum,n)=>sum+n,0)>=24*60) && person.active;
+ const regularRoster=person.employment_verified!==false && (person.employment_type??person.source_profile?.kind)!=='Casual' && (ordinaryDays.reduce((sum,n)=>sum+n,0)>=24*60) && person.active;
  if(uif==='Review' && (monthlyWorked>=86400 || regularRoster))uif='Liable';
  const uifKnown=['Liable','Exempt'].includes(uif);
  if(row.uif==='Exempt' && monthlyWorked>=86400 && /24 hour|24 uur/i.test(row.uif_reason??''))stop('The monthly hours now reach 24. Correct the UIF treatment.');

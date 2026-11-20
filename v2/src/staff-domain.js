@@ -200,15 +200,20 @@ export function appendPunch(shift,kind,at){const next={...shift,punches:[...shif
 export function periodHours(people,shifts,leave,from,to,now=Date.now()){
  const start=dayStart(from),end=dayStart(to)+86400000;check(from<=to&&end-start<=31*86400000,'Review up to 31 days at a time.');
  return people.map(p=>{
-  const own=shifts.filter(s=>s.employee_id===p.id&&!s.exclusion),days=[];
+  const own=shifts.filter(s=>s.employee_id===p.id&&!s.exclusion).map(shift=>{
+   const summary=shiftSummary(shift);
+   return {shift,summary,start:Date.parse(summary.start_at),last:Date.parse(shift.punches.at(-1).at),end:summary.end_at?Date.parse(summary.end_at):null};
+  }),days=[];
   for(let day=start;day<end;day+=86400000){const date=dayAt(day),issues=new Set();let seconds=0,breakSeconds=0,reviewSeconds=0;
-   for(const s of own){const z=shiftSummary(s,{from:day,to:day+86400000});if(Date.parse(z.start_at)>=day+86400000||(z.end_at?Date.parse(z.end_at)<=day:now<day))continue;
+   for(const {shift:s,summary,start:begin,end:finish,last} of own){
+    if(begin>=day+86400000 || (finish!==null?finish<=day:now<day))continue;
+    const z=begin>=day && last<=day+86400000?summary:shiftSummary(s,{from:day,to:day+86400000});
     const unresolved=z.issues.filter(x=>x==='Open shift'||!s.reviewed);unresolved.forEach(x=>issues.add(x));if(z.state==='out'&&!unresolved.length)seconds+=z.worked_seconds;else reviewSeconds+=z.worked_seconds;breakSeconds+=z.break_seconds;
    }
    const approved=leave.filter(r=>r.employee_id===p.id&&r.date===date&&r.status==='Approved');const paid=approved.reduce((n,r)=>n+r.paid_minutes,0);
    if(approved.length&&(seconds+reviewSeconds)>0)issues.add('Work and leave on the same day');
    const scheduled=scheduledMinutes(p,date);if(scheduled===null&&date>=p.start_date)issues.add('Schedule not verified');
-   if(scheduled>0&&date<dayAt(now)&&!own.some(s=>Date.parse(s.punches[0].at)<day+86400000&&Date.parse(s.punches.at(-1).at)>=day)&&approved.reduce((n,r)=>n+r.units,0)<1)issues.add('Missing attendance record');
+   if(scheduled>0&&date<dayAt(now)&&!own.some(s=>s.start<day+86400000&&s.last>=day)&&approved.reduce((n,r)=>n+r.units,0)<1)issues.add('Missing attendance record');
    days.push({date,completed_seconds:seconds,review_seconds:reviewSeconds,break_seconds:breakSeconds,paid_leave_minutes:paid,leave_days:approved.reduce((n,r)=>n+r.units,0),scheduled_minutes:scheduled,issues:[...issues]});
   }
   return {employee_id:p.id,days,completed_seconds:days.reduce((n,d)=>n+d.completed_seconds,0),review_seconds:days.reduce((n,d)=>n+d.review_seconds,0),paid_leave_minutes:days.reduce((n,d)=>n+d.paid_leave_minutes,0),issues:[...new Set(days.flatMap(d=>d.issues))],payroll_ready:false};
