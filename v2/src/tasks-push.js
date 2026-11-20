@@ -2,7 +2,7 @@ import {projectTask,localDate,stepReminder} from './task-workflow.js';
 import {buildPushPayload} from './webpush-bundle.js';
 import {check,UserError} from './domain.js';
 import {hash} from './auth.js';
-import {ensureTaskSchema,taskUsers,currentTaskNotification} from './tasks-api.js';
+import {ensureTaskSchema,taskHeadJoin,taskUsers,currentTaskNotification} from './tasks-api.js';
 import {ensurePaReportSchema,queuePaReportReminders,reportAlertVisible} from './pa-report-api.js';
 
 const b64=bytes=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
@@ -31,6 +31,7 @@ export async function flushTaskPush(env){
  await ensureTaskSchema(env.DB);
  await ensurePaReportSchema(env.DB);
  const now=new Date().toISOString();
+ if(!await env.DB.prepare('SELECT 1 FROM v2_task_push_subscriptions LIMIT 1').first())return {sent:0};
  const due=await env.DB.prepare('SELECT n.* FROM v2_task_notifications n WHERE n.push_sent_at IS NULL AND n.read_at IS NULL AND (n.next_attempt IS NULL OR n.next_attempt<=?) AND EXISTS(SELECT 1 FROM v2_task_push_subscriptions s WHERE s.username=n.username) ORDER BY n.created_at LIMIT 5').bind(now).all();
  const reportDue=await env.DB.prepare('SELECT n.* FROM v2_pa_report_alerts n WHERE n.push_sent_at IS NULL AND n.read_at IS NULL AND (n.next_attempt IS NULL OR n.next_attempt<=?) AND EXISTS(SELECT 1 FROM v2_task_push_subscriptions s WHERE s.username=n.username) ORDER BY n.created_at LIMIT 5').bind(now).all();
  due.results.push(...reportDue.results.map(n=>({...n,pa_report:true})));
@@ -59,26 +60,48 @@ export async function flushTaskPush(env){
  return {sent};
 }
 export async function queueTaskReminders(env,now=new Date()){
- await ensureTaskSchema(env.DB);const local=new Date(now.getTime()+7200000).toISOString(),date=local.slice(0,10),statements=[];
- if(local.slice(11,16)>='08:00')statements.push(env.DB.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
+ await ensureTaskSchema(env.DB);
+ await queueChangedTaskReminders(env.DB,now);
+ await queuePaReportReminders(env,now);
+}
+
+async function queueChangedTaskReminders(db,now){
+ const local=new Date(now.getTime()+7200000).toISOString(),date=local.slice(0,10);
+ const at=now.toISOString(),period=date+(local.slice(11,16)>='08:00'?'-day':'-early');
+ // Take the event watermark before reading tasks. An edit during this run
+ // changes the watermark and forces the next tick to check again.
+ const state=await db.prepare(`SELECT COALESCE((SELECT MAX(rowid) FROM v2_task_events),0) event_row,
+   c.event_row AS previous_row,c.period,c.checked_at,c.next_at FROM (SELECT 1) LEFT JOIN v2_task_reminder_checkpoint c ON c.id=1`).first();
+ if(state.event_row===state.previous_row&&period===state.period&&at>=state.checked_at&&(!state.next_at||at<state.next_at))return;
+ const statements=[];
+ if(local.slice(11,16)>='08:00')statements.push(db.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
  SELECT 'reminder-'||e.task_id||'-'||?,json_extract(e.payload,'$.assigned_to'),e.task_id,'due',?
- FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision
+ FROM ${taskHeadJoin}
  WHERE COALESCE(json_extract(e.payload,'$.task_type'),'')<>'workflow' AND json_extract(e.payload,'$.status') IN ('Pending','Scheduled','Waiting') AND COALESCE(json_extract(e.payload,'$.reminder_mode'),'daily')='daily' AND
  (CASE WHEN json_extract(e.payload,'$.status')='Waiting' THEN json_extract(e.payload,'$.review_date') ELSE COALESCE(NULLIF(json_extract(e.payload,'$.due_date'),''),json_extract(e.payload,'$.review_date')) END) BETWEEN '2000-01-01' AND ?`).bind(date,now.toISOString(),date));
- statements.push(env.DB.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
+ statements.push(db.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
  SELECT 'reminder-once-'||e.task_id||'-'||strftime('%s',json_extract(e.payload,'$.reminder_at')),json_extract(e.payload,'$.assigned_to'),e.task_id,'due',?
- FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision
+ FROM ${taskHeadJoin}
  WHERE COALESCE(json_extract(e.payload,'$.task_type'),'')<>'workflow' AND json_extract(e.payload,'$.status') IN ('Pending','Scheduled','Waiting') AND json_extract(e.payload,'$.reminder_mode')='once' AND json_extract(e.payload,'$.reminder_at')<=?`).bind(now.toISOString(),now.toISOString()));
- statements.push(env.DB.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
+ statements.push(db.prepare(`INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at)
  SELECT 'followup-'||e.task_id||'-'||f.key||'-'||strftime('%s',f.value),f.key,e.task_id,'follow_up',?
- FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision, json_each(e.payload,'$.followup_reminders') f
+ FROM ${taskHeadJoin}, json_each(e.payload,'$.followup_reminders') f
  WHERE json_extract(e.payload,'$.status') IN ('Pending','Scheduled','Waiting') AND f.key IN ('alex','alinda','xalinda','xavier') AND f.value<=?`).bind(now.toISOString(),now.toISOString()));
- const latest=(await env.DB.prepare(`SELECT e.task_id,e.payload FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON l.task_id=e.task_id AND l.revision=e.revision WHERE json_extract(e.payload,'$.status') NOT IN ('Complete','Cancelled')`).all()).results;
- if(local.slice(11,16)>='08:00')for(const row of latest){const task=projectTask(JSON.parse(row.payload),date);
+ const latest=(await db.prepare(`SELECT e.task_id,e.payload FROM ${taskHeadJoin} WHERE json_extract(e.payload,'$.status') NOT IN ('Complete','Cancelled')`).all()).results;
+ let nextAt=null;
+ for(const row of latest){
+  const raw=JSON.parse(row.payload);
+  const timers=Object.values(raw.followup_reminders||{});
+  if(raw.reminder_mode==='once')timers.push(raw.reminder_at);
+  for(const timer of timers)if(timer>at&&(!nextAt||timer<nextAt))nextAt=timer;
+  if(local.slice(11,16)<'08:00')continue;
+  const task=projectTask(raw,date);
   if(task.task_type==='workflow'){
-   for(const step of task.steps){const notice=stepReminder(task,step,now);if(notice)statements.push(env.DB.prepare('INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind(notice.id,step.assigned_to,task.id,notice.kind,now.toISOString()));}
-  }else if(task.task_type==='reminder'&&task.status==='Pending'&&!['off','once'].includes(task.reminder_mode))statements.push(env.DB.prepare('INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind('reminder-'+task.id+'-'+date,task.assigned_to,task.id,'due',now.toISOString()));
+   for(const step of task.steps){const notice=stepReminder(task,step,now);if(notice)statements.push(db.prepare('INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind(notice.id,step.assigned_to,task.id,notice.kind,now.toISOString()));}
+  }else if(task.task_type==='reminder'&&task.status==='Pending'&&!['off','once'].includes(task.reminder_mode))statements.push(db.prepare('INSERT OR IGNORE INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind('reminder-'+task.id+'-'+date,task.assigned_to,task.id,'due',now.toISOString()));
  }
- await env.DB.batch(statements);
- await queuePaReportReminders(env,now);
+ statements.push(db.prepare(`INSERT INTO v2_task_reminder_checkpoint VALUES(1,?,?,?,?)
+  ON CONFLICT(id) DO UPDATE SET event_row=excluded.event_row,period=excluded.period,
+  checked_at=excluded.checked_at,next_at=excluded.next_at`).bind(state.event_row,period,at,nextAt));
+ await db.batch(statements);
 }

@@ -9,13 +9,29 @@ import {registerTaskText,changePaWork,unfinishedWork} from './task-pa-work.js';
 import {workflowAction,validateSteps,completeReminder} from './task-workflow-actions.js';
 import {MAIL_SCHEMA,mailAction,readTaskMail} from './tasks-mail.js';
 
+const paEvent = "action NOT IN ('reminder','followup_reminder','set_visibility')";
+// Drive the lookup from one head per task, including before SQLite has statistics.
+export const taskHeadJoin = 'v2_task_heads h CROSS JOIN v2_task_events e ON e.task_id=h.task_id AND e.revision=h.revision';
+
 export const TASK_SCHEMA=[
  ...MAIL_SCHEMA,fileChunksSchema,
  `CREATE TABLE IF NOT EXISTS v2_task_events (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(task_id,revision))`,
  `CREATE INDEX IF NOT EXISTS v2_tasks_latest ON v2_task_events(task_id,revision DESC)`,
+ // D1 batches this bootstrap with trigger installation. LIMIT 0 skips the
+ // historical scan on following cold starts. The event log is append-only.
+ `CREATE TABLE IF NOT EXISTS v2_task_heads(task_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,pa_revision INTEGER)`,
+ `INSERT INTO v2_task_heads SELECT task_id,MAX(revision),MAX(CASE WHEN ${paEvent} THEN revision END)
+  FROM v2_task_events GROUP BY task_id LIMIT (CASE WHEN EXISTS(SELECT 1 FROM v2_task_heads) THEN 0 ELSE -1 END)`,
+ `CREATE TRIGGER IF NOT EXISTS v2_task_head_added AFTER INSERT ON v2_task_events BEGIN
+  INSERT INTO v2_task_heads VALUES(NEW.task_id,NEW.revision,CASE WHEN NEW.${paEvent} THEN NEW.revision END)
+  ON CONFLICT(task_id) DO UPDATE SET revision=MAX(revision,excluded.revision),
+  pa_revision=CASE WHEN pa_revision IS NULL OR excluded.pa_revision>pa_revision THEN excluded.pa_revision ELSE pa_revision END;
+ END`,
+ `CREATE TABLE IF NOT EXISTS v2_task_reminder_checkpoint(id INTEGER PRIMARY KEY CHECK(id=1), event_row INTEGER NOT NULL, period TEXT NOT NULL, checked_at TEXT NOT NULL, next_at TEXT)`,
  `CREATE TABLE IF NOT EXISTS v2_task_po_links (parent_cycle_id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE)`,
  `CREATE TABLE IF NOT EXISTS v2_task_sync (task_id TEXT PRIMARY KEY, acknowledged_revision INTEGER NOT NULL DEFAULT 0, pa_task_id TEXT, source_url TEXT, synced_at TEXT, last_error TEXT)`,
  `CREATE TABLE IF NOT EXISTS v2_task_notifications (id TEXT PRIMARY KEY, username TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL, read_at TEXT, push_sent_at TEXT, push_attempts INTEGER NOT NULL DEFAULT 0, next_attempt TEXT)`,
+ `CREATE INDEX IF NOT EXISTS v2_task_push_pending ON v2_task_notifications(created_at) WHERE push_sent_at IS NULL AND read_at IS NULL`,
  `CREATE INDEX IF NOT EXISTS v2_task_notifications_user ON v2_task_notifications(username,created_at)`,
  `CREATE TABLE IF NOT EXISTS v2_task_count_receipts (request_id TEXT PRIMARY KEY, supplier TEXT NOT NULL, count_date TEXT NOT NULL, material_ids TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_task_push_keys (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL)`,
@@ -33,7 +49,7 @@ const workflowFields=['task_type','repeat','pa_required'];
 const editable=['pa_does_work','visibility',...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','required_materials','po_number','po_revision','document_url','evidence_url','source_url','parent_cycle_id','pa_task_id','requires_evidence',...reminderFields];
 const selfEditable=['pa_does_work',...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','document_url','evidence_url','requires_evidence',...reminderFields];
 export const managesOwnTask=(user,task)=>!(task.steps||[]).some(s=>s.assigned_to!==user.username)&&task.created_by===user.username&&task.assigned_to===user.username&&task.kind!=='po_dispatch';
-export const latestSQL=`SELECT e.*,(SELECT MAX(c.revision) FROM v2_task_events c WHERE c.task_id=e.task_id AND c.action NOT IN ('reminder','followup_reminder','set_visibility')) AS pa_revision,s.acknowledged_revision,s.pa_task_id AS synced_pa_task_id,s.source_url AS synced_source_url,s.synced_at,s.last_error FROM v2_task_events e JOIN (SELECT task_id,MAX(revision) revision FROM v2_task_events GROUP BY task_id) l ON e.task_id=l.task_id AND e.revision=l.revision LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`;
+export const latestSQL=`SELECT e.*,h.pa_revision AS pa_revision,s.acknowledged_revision,s.pa_task_id AS synced_pa_task_id,s.source_url AS synced_source_url,s.synced_at,s.last_error FROM ${taskHeadJoin} LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`;
 const text=(value,max,required=false)=>{check(typeof value==='string'&&value.length<=max&&(!required||value.trim()),'Enter the required task details.');return value.trim();};
 const optionalText=(v,max)=>v===null||v===undefined?'':text(v,max);
 function safeURL(value){if(!value)return '';let u;try{u=new URL(value);}catch{throw new UserError('Enter a complete secure document link.');}check(u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<=2000,'Use a secure document link.');return u.href;}
@@ -50,7 +66,7 @@ export function taskChanges(before,after){
  return changes;
 }
 
-export async function getTask(db,id){check(ID.test(id),'Invalid task.');return decode(await db.prepare(latestSQL+' WHERE e.task_id=?').bind(id).first());}
+export async function getTask(db,id){check(ID.test(id),'Invalid task.');return decode(await db.prepare(latestSQL+' WHERE h.task_id=?').bind(id).first());}
 export {canSeeTask};
 export function currentTaskNotification(task,n,now=new Date()){
  if(task)task=projectTask(task,new Date(now.getTime()+7200000).toISOString().slice(0,10));
@@ -77,7 +93,7 @@ export async function listTasks(env,user,query={}){
  const offset=Number(query.offset??0);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  const access=taskReadScope(user,query.mine);
  const conditions=[access.sql],params=[...access.params];
- if(query.pending_sync){check(isAdmin(user.username),'Only admins can synchronise PA tasks.',403);conditions.push("COALESCE(s.acknowledged_revision,0)<(SELECT MAX(c.revision) FROM v2_task_events c WHERE c.task_id=e.task_id AND c.action NOT IN ('reminder','followup_reminder','set_visibility')) AND (COALESCE(NULLIF(json_extract(e.payload,'$.pa_task_id'),''),s.pa_task_id,NULLIF(json_extract(e.payload,'$.parent_cycle_id'),''),'')<>'' OR json_extract(e.payload,'$.pa_required')=1 OR (COALESCE(json_extract(e.payload,'$.task_type'),'') NOT IN ('workflow','reminder') AND json_extract(e.payload,'$.kind')<>'general'))");}
+ if(query.pending_sync){check(isAdmin(user.username),'Only admins can synchronise PA tasks.',403);conditions.push("COALESCE(s.acknowledged_revision,0)<h.pa_revision AND (COALESCE(NULLIF(json_extract(e.payload,'$.pa_task_id'),''),s.pa_task_id,NULLIF(json_extract(e.payload,'$.parent_cycle_id'),''),'')<>'' OR json_extract(e.payload,'$.pa_required')=1 OR (COALESCE(json_extract(e.payload,'$.task_type'),'') NOT IN ('workflow','reminder') AND json_extract(e.payload,'$.kind')<>'general'))");}
  const where=conditions.length?' WHERE '+conditions.join(' AND '):'';
  const result=await env.DB.prepare(latestSQL+where+' ORDER BY e.saved_at DESC,e.task_id LIMIT 101 OFFSET ?').bind(...params,offset).all();
  const notifications=await env.DB.prepare(`SELECT n.id,n.username,n.task_id,n.kind,n.created_at,n.read_at,e.payload FROM v2_task_notifications n JOIN v2_task_events e ON e.task_id=n.task_id AND e.revision=(SELECT MAX(revision) FROM v2_task_events WHERE task_id=n.task_id) WHERE n.username=? ORDER BY n.created_at DESC LIMIT 100`).bind(user.username).all();

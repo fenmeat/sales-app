@@ -1,7 +1,7 @@
 name: Payroll browser acceptance
 on:
   push:
-    branches: [payroll/fresh-start-20261116, fix/payroll-hourly-review, fix/staff-clock-history, fix/payroll-monday-breaks]
+    branches: [perf/d1-november-2026, payroll/fresh-start-20261116, fix/payroll-hourly-review, fix/staff-clock-history, fix/payroll-monday-breaks]
     paths:
       - 'v2/**'
       - '.github/workflows/payroll-acceptance.yml'
