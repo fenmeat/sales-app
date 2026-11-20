@@ -4,6 +4,12 @@ import {scheduledMinutes} from './staff-domain.js';
 import {ageIndependentEstimate,weeklyPaye} from './weekly-paye.js';
 
 
+// A confirmed weekly total never creates five guessed clock entries. A later change
+// to any contributing day invalidates it until the manager reconciles the two.
+export function weekEvidence(row) {
+ return JSON.stringify(row.source.days.map(d => [d.date,d.first_in,d.last_out,d.payable_seconds,d.review_seconds,d.leave_days,d.paid_leave_minutes,d.scheduled_minutes,d.issues,row.day_edits?.[d.date]??null]));
+}
+
 export const posted = row => ['Approved','Paid'].includes(row.wage_state);
 export function postedRun(run) {
  if (!run.individual_wages || !run.rows) return run;
@@ -14,6 +20,7 @@ export function postedRun(run) {
 // Public Holidays Act calendar for the supported SARS year, including proclamations.
 const holidays=new Set(['2026-03-21','2026-04-03','2026-04-06','2026-04-27','2026-05-01','2026-06-16',
  '2026-08-09','2026-08-10','2026-09-24','2026-11-04','2026-12-16','2026-12-25','2026-12-26','2027-01-01']);
+export const isPayHoliday=date=>holidays.has(date);
 const sum=(items,f)=>items.reduce((a,i)=>a+f(i),0);
 const minimumRate=3023;
 export function wagePreview(row,person,run,settings,runs,openings) {
@@ -25,7 +32,15 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  let hoursKnown=true;
  const missing=(date,msg)=>{hoursKnown=false;stop(date+' · '+msg);};
  const ordinaryDays=(person.schedules??[]).filter(s=>s.from<=run.from).at(-1)?.minutes??[];
- let longDay=false,dailyExcess=0,shortDayGuarantee=0,weeklyWorked=0,holidayWeeklyOt=0,holidayDailyOt=0;
+ const confirmedWeek=facts.worked_week;
+ const useWeek=confirmedWeek && confirmedWeek.evidence===weekEvidence(row);
+ if(confirmedWeek && !useWeek)stop('Die dagure het sedert die weekbevestiging verander. Vergelyk die nuwe ure en bevestig die week weer.');
+ if(useWeek){
+  const worked=confirmedWeek.minutes*60;
+  row={...row,ordinary_seconds:Math.min(worked,45*3600),overtime_seconds:Math.max(0,worked-45*3600)};
+  answer.ordinary_seconds=row.ordinary_seconds;answer.overtime_seconds=row.overtime_seconds;
+ }
+ let shortDayGuarantee=0,weeklyWorked=0,holidayWeeklyOt=0;
  for(const day of days){
   const edit=row.day_edits?.[day.date],payable=day.payable_seconds??day.completed_seconds;
   const resolved=edit?.reason && !day.needs_adjustment_review && (edit.absent===true||Number.isFinite(edit.minutes)&&edit.minutes!==0);
@@ -36,29 +51,22 @@ export function wagePreview(row,person,run,settings,runs,openings) {
    if(issue==='Missing attendance record'||issue==='Schedule not verified')continue;
    missing(day.date,issue);
   }
-  if(day.scheduled_minutes>0 && day.date<=today() && !day.first_in && !day.leave_days &&
+  if(!useWeek && day.scheduled_minutes>0 && day.date<=today() && !day.first_in && !day.leave_days &&
     !resolved && !edit?.pending_kind && !row.paid_days?.includes(day.date) && !holidays.has(day.date))missing(day.date,'Correct hours or mark absent.');
-  if(!day.first_in&&!resolved&&!day.leave_days&&!day.scheduled_minutes&&day.scheduled_minutes==null&&!payable&&!row.paid_days?.includes(day.date))missing(day.date,'Confirm attendance or mark absent.');
+  if(!useWeek&&!day.first_in&&!resolved&&!day.leave_days&&!day.scheduled_minutes&&day.scheduled_minutes==null&&!payable&&!row.paid_days?.includes(day.date))missing(day.date,'Confirm attendance or mark absent.');
   if(day.first_in && payable<60 && !resolved && !edit?.pending_kind)missing(day.date,'The clock entry is under one minute. Correct the hours.');
   if(day.overlap)missing(day.date,'Clock sessions overlap. Correct the attendance record.');
   if(day.date>today())hoursKnown=false;
   if(day.review_seconds)hoursKnown=false;
-  const statutoryLimit=(ordinaryDays.filter(n=>n>0).length>5?8:9)*3600;
-  const ordinaryLimit=day.scheduled_minutes>0?Math.min(statutoryLimit,day.scheduled_minutes*60):statutoryLimit;
-  if(payable>ordinaryLimit){longDay=true;dailyExcess+=payable-ordinaryLimit;}
   if(holidays.has(day.date)){
    holidayWeeklyOt+=Math.max(0,payable-Math.max(0,45*3600-weeklyWorked));
-   holidayDailyOt+=Math.max(0,payable-ordinaryLimit);
   }else if(payable>=60 && payable<4*3600)shortDayGuarantee+=4*3600-payable;
   weeklyWorked+=payable;
  }
- if(!days.some(d=>d.payable_seconds>0||d.leave_days||row.day_edits?.[d.date]?.absent||row.paid_days?.includes(d.date)||holidays.has(d.date)))hoursKnown=false;
+ if(!useWeek&&!days.some(d=>d.payable_seconds>0||d.leave_days||row.day_edits?.[d.date]?.absent||row.paid_days?.includes(d.date)||holidays.has(d.date)))hoursKnown=false;
  for(const issue of row.source_flags??row.issues){
   if(/Rate changes inside|handmatige weekure/.test(issue))stop(issue);
  }
- if(longDay && !profile?.hours_agreement && !facts.daily_resolved)stop('Confirm the applicable hours agreement or apply statutory daily overtime.');
- if(profile?.hours_agreement && (days.filter(d=>d.payable_seconds>0).length>5 || days.some(d=>d.first_in&&d.last_out&&(Date.parse(d.last_out)-Date.parse(d.first_in))>12*3600000) || row.overtime_seconds>36000) && !facts.daily_resolved)
-  stop('Hours exceed the compressed-week limits. Check and record any extra pay due.');
  if(row.included===false){stop('Excluded from this week.');return answer;}
  if(!profile){stop('Enter the agreed pay rate.');return answer;}
  if(profile.basis==='Hourly'){
@@ -71,23 +79,25 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  if(profile.basis==='Fixed weekly' && !facts.fixed_checked && (!ordinaryDays.length || row.ordinary_seconds>0 && profile.fixed_cents<row.ordinary_seconds/3600*minimumRate))stop('Check the fixed wage against agreed hours and the minimum wage.');
  const month=run.pay_date.slice(0,7);
  const prior=priorFor(person.id,run.pay_date,runs.map(postedRun),settings.fresh_start?[]:openings);
- const previous=runs.filter(r=>r.pay_date<run.pay_date&&r.pay_date.slice(0,7)===month).map(postedRun);
- if(previous.some(r=>r.pay_date>=person.start_date && !r.rows.some(x=>x.employee_id===person.id&&(posted(x)||(['Approved','Paid'].includes(r.status)&&x.included)))))stop('Confirm the earlier unpaid week for this employee before finalising monthly UIF.');
+ const previous=runs.filter(r=>r.pay_date<run.pay_date&&r.pay_date.slice(0,7)===month);
+ if(previous.some(r=>r.rows.some(x=>x.employee_id===person.id && x.included) && r.pay_date>=person.start_date && !r.rows.some(x=>x.employee_id===person.id&&(posted(x)||(['Approved','Paid'].includes(r.status)&&x.included)))))stop('Confirm the earlier unpaid week for this employee before finalising monthly UIF.');
 
  const priorWeekend=row.source.weekend_days??[];
  const monthlyWorked=row.ordinary_seconds+row.overtime_seconds+sum(priorWeekend,d=>d.payable_seconds??0)
   +prior.ordinary_seconds+prior.overtime_seconds+prior.holiday_seconds+prior.sunday_seconds;
  let uif=row.uif;
- if(uif==='Review' && monthlyWorked>=86400)uif='Liable';
+ const regularRoster=person.employment_verified!==false && person.employment_type!=='Casual' && (ordinaryDays.reduce((sum,n)=>sum+n,0)>=24*60) && person.active;
+ if(uif==='Review' && (monthlyWorked>=86400 || regularRoster))uif='Liable';
  const uifKnown=['Liable','Exempt'].includes(uif);
  if(row.uif==='Exempt' && monthlyWorked>=86400 && /24 hour|24 uur/i.test(row.uif_reason??''))stop('The monthly hours now reach 24. Correct the UIF treatment.');
  if(!uifKnown)stop('Confirm whether this employee works at least 24 hours this month for Fen Meat.');
  const priorBound=runs.filter(r=>r.pay_date<run.pay_date && r.pay_date.slice(0,7)===month).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)).flatMap(r=>r.rows.filter(x=>x.employee_id===person.id)).find(x=>x.wage_facts?.opening_bound!=null)?.wage_facts.opening_bound;
  const bound=facts.opening_bound??priorBound;
+ const earlierUif=facts.earlier_uif??previous.filter(r=>r.pay_date>=settings.fresh_start?.first_pay_date).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)).flatMap(r=>r.rows.filter(x=>x.employee_id===person.id)).find(x=>x.wage_facts?.earlier_uif)?.wage_facts.earlier_uif;
  const cutover=settings.fresh_start && month===settings.fresh_start.start_date.slice(0,7) && (!person.start_date||person.start_date<settings.fresh_start.start_date);
  let uifAvailable=uifKnown;
  const hasCutoverChoice=['Full weekly share','Confirmed current amounts'].includes(row.cutover_uif);
- if(cutover && uif==='Liable' && !hasCutoverChoice && bound==null){
+ if(cutover && uif==='Liable' && !hasCutoverChoice && bound==null && !earlierUif){
   uifAvailable=false;stop('Confirm whether earlier November pay leaves room for both UIF shares this week.');
  }
  let amounts;
@@ -138,31 +148,35 @@ export function wagePreview(row,person,run,settings,runs,openings) {
    }
   }
   // Remove holiday work from the ordinary/OT earnings buckets once. Apply the separate statutory payment.
-  if(facts.daily_resolved && profile.basis==='Hourly'){
-   const extra=Math.max(0,Math.round(dailyExcess)-raw.overtime_seconds);
-   raw.overtime_seconds+=extra;raw.ordinary_seconds-=extra;
-  }
   for(const d of days){
    const edit=row.day_edits?.[d.date];
    if(!edit?.sick_type)continue;
    if(d.first_in || (d.leave_days && d.paid_leave_minutes!==(edit.sick_minutes??0)))missing(d.date,'Reconcile the sick day with the new attendance or leave entry.');
    if(!d.leave_days && edit.sick_type==='sick_paid')raw.leave_seconds+=edit.sick_minutes*60;
   }
-  const holidayOt=Math.min(holidaySeconds,Math.round(facts.daily_resolved && dailyExcess>row.overtime_seconds?holidayDailyOt:holidayWeeklyOt));
+  const holidayOt=Math.min(holidaySeconds,Math.round(holidayWeeklyOt));
   raw.ordinary_seconds+=weekendOrdinary-(holidaySeconds-holidayOt);
   raw.overtime_seconds+=weekendOvertime-holidayOt;
   raw.holiday_seconds=holidaySeconds+weekendHolidaySeconds;raw.sunday_seconds=sundaySeconds;
   if(profile.basis==='Hourly' && shortDayGuarantee)holidayPay+=Math.round(shortDayGuarantee*profile.rate_cents/3600);
   const adjustments=facts.amendments??[];
-  raw.special_cents+=holidayPay+sum(adjustments.filter(a=>a.kind==='Earnings'),a=>a.cents);
+  answer.extra_hours_minutes=facts.extra_minutes??0;
+  answer.extra_hours_cents=Math.round(answer.extra_hours_minutes*profile.rate_cents/60);
+  raw.special_cents+=answer.extra_hours_cents+holidayPay+sum(adjustments.filter(a=>a.kind==='Earnings'),a=>a.cents);
   answer.entered_deduction_cents=row.other_deduction_cents;
   raw.other_deduction_cents+=sum(adjustments.filter(a=>a.kind==='Authorised repayment'),a=>a.cents);
   answer.entered_special_cents=row.special_cents;
   answer.statutory_special_cents=holidayPay;
   amounts=calculateRow(raw,profile,prior,{paidOffSeconds:paidDaySeconds(row.paid_days??[],days),
-   externalHistory:cutover && uifAvailable && hasCutoverChoice && uif==='Liable'});
+   externalHistory:cutover && !earlierUif && uifAvailable && hasCutoverChoice && uif==='Liable'});
+  if(cutover && earlierUif && uif==='Liable'){
+   for(const side of ['employee','employer']){
+    const key='uif_'+side+'_cents';
+    amounts[key]=Math.min(amounts[key],Math.max(0,17712-earlierUif[side]-prior[key]));
+   }
+  }
  }catch(e){if(!(e instanceof UserError))throw e;stop(e.message);return answer;}
- if(cutover && uif==='Liable' && !hasCutoverChoice && bound!=null && bound+prior.uif_base_cents+amounts.uif_base_cents>1771200){
+ if(cutover && uif==='Liable' && !hasCutoverChoice && !earlierUif && bound!=null && bound+prior.uif_base_cents+amounts.uif_base_cents>1771200){
   uifAvailable=false;stop('Earlier November earnings may reach the ceiling. Enter the current UIF shares.');
  }
  answer.recorded_gross_cents=amounts.gross_cents;
@@ -186,9 +200,13 @@ export function wagePreview(row,person,run,settings,runs,openings) {
   }
  }catch(e){if(!(e instanceof UserError))throw e;stop(e.message);}
  answer.paye_cents=tax;
- if(tax!=null && uifKnown && !uifAvailable)answer.estimate_net_cents=amounts.gross_cents-tax-amounts.uif_employee_cents-amounts.meat_cents-amounts.other_deduction_cents;
+ if(tax===null){
+  answer.before_tax_cents=amounts.gross_cents-amounts.meat_cents-amounts.other_deduction_cents-(uifAvailable?answer.uif_employee_cents:0);
+ }
+ if(tax!=null && !uifAvailable)answer.estimate_net_cents=amounts.gross_cents-tax-amounts.uif_employee_cents-amounts.meat_cents-amounts.other_deduction_cents;
  if(tax!=null && uifAvailable)answer.net_cents=amounts.gross_cents-tax-answer.uif_employee_cents-amounts.meat_cents-amounts.other_deduction_cents;
  if(answer.net_cents<0)stop('Deductions exceed gross pay.');
+ if(issues.length && answer.net_cents!=null){answer.estimate_net_cents=answer.net_cents;answer.net_cents=null;}
  answer.ready=issues.length===0 && answer.net_cents!=null && run.pay_date<=today();
  return answer;
 }

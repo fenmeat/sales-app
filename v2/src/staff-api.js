@@ -1,6 +1,7 @@
 import {check,UserError,dateKey,today,addDays} from './domain.js';
 import {hash,randomToken,isAdmin,canManageStaff,sameOrigin} from './auth.js';
 import {blankStaff,applyStaffAction,staffPerson,uuid,text,shiftSummary,appendPunch,periodHours,dayStart,dayAt,LEAVE_TYPES,balance,clockPin,casualPin,isCasual} from './staff-domain.js';
+import {nextFriday} from './payroll-domain.js';
 import {PAYROLL_SCHEMA,payrollApi} from './payroll-api.js';
 import {IMPORT_SCHEMA,staffImportApi} from './staff-import.js';
 
@@ -56,6 +57,17 @@ async function operation(db,actor,path,b,env){
 const registerInsert=(db,current,state,action,actor,detail,stamp)=>db.prepare('INSERT INTO v2_staff_register VALUES(?,?,?,?,?,?)').bind(current.revision+1,JSON.stringify(state),action,actor,stamp,JSON.stringify(detail));
 export const latestCondition='NOT EXISTS (SELECT 1 FROM v2_staff_time newer WHERE newer.shift_id=t.shift_id AND newer.revision>t.revision)';
 export async function shiftsBetween(db,from,to,employeeId=null){const rows=await db.prepare(`SELECT t.* FROM v2_staff_time t WHERE ${latestCondition} ${employeeId?'AND employee_id=?':''} AND start_at<? AND (end_at IS NULL OR end_at>?) ORDER BY start_at LIMIT 7001`).bind(...(employeeId?[employeeId]:[]),new Date(dayStart(to)+86400000).toISOString(),new Date(dayStart(from)).toISOString()).all();check(rows.results.length<=7000,'Too many shifts. Review a shorter period.',409);return rows.results.map(r=>({...JSON.parse(r.payload),revision:r.revision}));}
+async function protectPayWeek(db,op,employeeId,dates) {
+ const version=(await db.prepare('SELECT COALESCE(MAX(revision),0) AS revision FROM v2_staff_payroll').first()).revision;
+ for(const friday of new Set(dates.map(nextFriday))){
+  const latest=await db.prepare('SELECT payload FROM v2_staff_payroll WHERE entity_key=? ORDER BY revision DESC LIMIT 1').bind('run:'+friday).first();
+  if(!latest)continue;
+  const run=JSON.parse(latest.payload),row=run.rows?.find(r=>r.employee_id===employeeId);
+  const closed=row && (['Approved','Paid'].includes(row.wage_state)||(!run.individual_wages && row.included && ['Approved','Paid'].includes(run.status)));
+  check(!closed,'Hierdie werknemer se loon is reeds goedgekeur of betaal. Heropen ’n onbetaalde loon of teken die regstelling op ’n volgende betaalstaat aan.',409);
+ }
+ return db.prepare("INSERT INTO v2_staff_requests(id,request_hash,result) SELECT ?, '', '' WHERE (SELECT COALESCE(MAX(revision),0) FROM v2_staff_payroll)!=?").bind(op.id,version);
+}
 async function latestShift(db,id){return db.prepare(`SELECT t.* FROM v2_staff_time t WHERE employee_id=? AND ${latestCondition} ORDER BY start_at DESC LIMIT 1`).bind(id).first();}
 async function timeRevision(db,id){return (await db.prepare('SELECT MAX(revision) revision FROM v2_staff_time WHERE employee_id=?').bind(id).first())?.revision??0;}
 export function timeInsert(db,op,shift,rev,action,actor,stamp){const s=shiftSummary(shift);return db.prepare('INSERT INTO v2_staff_time VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(op.id,shift.employee_id,shift.id,rev,s.start_at,s.end_at,s.state,JSON.stringify(shift),action,actor,stamp);}
@@ -107,7 +119,7 @@ export async function staffClockApi({request,url,env,bodyOf}){
 export async function staffApi({request,url,env,user,bodyOf}){
  check(canManageStaff(user.username),'Your account does not have Staff administration access.',403);
  const db=env.DB,path=url.pathname,current=await staffState(db),stamp=new Date().toISOString();
- if(path==='/api/staff/payroll'||path==='/api/staff/payroll/history')return payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,env});
+ if(path==='/api/staff/payroll'||path==='/api/staff/payroll/history')return payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,registerInsert,env});
  if(path==='/api/staff/imports'||path.startsWith('/api/staff/imports/'))return staffImportApi({request,url,db,user,bodyOf,current});
  if(path==='/api/staff'&&request.method==='GET'){
   const devices=(await db.prepare('SELECT id,name,code_expires,expires,revoked,created_by,created_at,token_hash IS NOT NULL AS enrolled FROM v2_staff_devices ORDER BY created_at DESC').all()).results;
@@ -141,6 +153,10 @@ export async function staffApi({request,url,env,user,bodyOf}){
  if(path==='/api/staff'){
   const result=applyStaffAction(current.state,b,user.username,stamp);
   const before=current.state.people.find(p=>p.id===result.detail.employee_id),after=result.state.people.find(p=>p.id===result.detail.employee_id),statements=[];
+  if(b.action==='leave_request'||b.action==='leave_decision'){
+   const leave=result.state.leave.find(r=>r.id===b.record_id);
+   statements.push(await protectPayWeek(db,op,b.employee_id,[leave.date]));
+  }
   if(before&&((before.active&&!after.active)||isCasual(before)!==isCasual(after))){
    const openSql=`SELECT 1 FROM v2_staff_time t WHERE employee_id=? AND t.state!='out' AND ${latestCondition}`;
    check(!await db.prepare(openSql).bind(before.id).first(),'Clock out or correct the open shift before making this person inactive or changing their PIN type.');
@@ -177,7 +193,7 @@ export async function staffApi({request,url,env,user,bodyOf}){
   check(!shift.exclusion,'Hierdie skof is reeds uitgesluit.',409);
   shift.exclusion={reason,actor:user.username,at:stamp,replaces_revision:old.revision};
   const detail={employee_id:employee.id,shift_id:shift.id,reason};
-  return op.commit([registerInsert(db,current,current.state,'clock_exclusion',user.username,detail,stamp),
+  return op.commit([await protectPayWeek(db,op,employee.id,[dayAt(old.start_at),dayAt(old.end_at)]),registerInsert(db,current,current.state,'clock_exclusion',user.username,detail,stamp),
    timeInsert(db,op,shift,rev+1,'exclude_from_payroll',user.username,stamp)],{ok:true,revision:current.revision+1,clock_revision:rev+1});
  }
  if(path==='/api/staff/correction'){
@@ -187,7 +203,7 @@ export async function staffApi({request,url,env,user,bodyOf}){
   const shift={id:old.shift_id,employee_id:p.id,punches:b.punches.map(e=>({kind:e.kind,at:e.at})),correction:{reason,actor:user.username,at:stamp,replaces_revision:old.revision},...(b.confirm_review===true?{reviewed:{actor:user.username,at:stamp,reason}}:{})};
   const s=shiftSummary(shift);check(s.state==='out','A correction must include a complete clock-in and clock-out.');check(Date.parse(s.end_at)<=Date.now(),'A correction cannot use a future clock time.');check(dayAt(s.start_at)>=p.start_date,'A correction cannot precede employment.');
   const overlaps=await db.prepare(`SELECT t.shift_id FROM v2_staff_time t WHERE employee_id=? AND shift_id!=? AND ${latestCondition} AND start_at<? AND (end_at IS NULL OR end_at>?) LIMIT 1`).bind(p.id,shift.id,s.end_at,s.start_at).first();check(!overlaps,'The corrected shift overlaps another shift.');
-  return op.commit([registerInsert(db,current,current.state,'clock_correction',user.username,{employee_id:p.id,shift_id:shift.id,reason},stamp),timeInsert(db,op,shift,rev+1,'correction',user.username,stamp)],{ok:true,revision:current.revision+1,clock_revision:rev+1});
+  return op.commit([await protectPayWeek(db,op,p.id,[dayAt(old.start_at),dayAt(old.end_at??old.start_at),dayAt(s.start_at),dayAt(s.end_at)]),registerInsert(db,current,current.state,'clock_correction',user.username,{employee_id:p.id,shift_id:shift.id,reason},stamp),timeInsert(db,op,shift,rev+1,'correction',user.username,stamp)],{ok:true,revision:current.revision+1,clock_revision:rev+1});
  }
  throw new UserError('Not found.',404);
 }

@@ -101,7 +101,7 @@ export function applyStaffAction(state,b,actor,stamp){
     r.scheduled_minutes=mins;r.paid_minutes=r.type==='Unpaid'?0:mins*r.units;
     if(r.type!=='Unpaid')next.ledger.push({id:crypto.randomUUID(),employee_id:p.id,type:r.type,date:r.date,units:-r.units,kind:'usage',leave_id:r.id,actor,at:stamp,reason});
    }
-   if(b.decision==='Cancelled'&&r.status==='Approved'&&r.type!=='Unpaid')next.ledger.push({id:crypto.randomUUID(),employee_id:p.id,type:r.type,date:r.date,units:r.units,kind:'reversal',leave_id:r.id,actor,at:stamp,reason});
+   if(b.decision==='Cancelled'&&r.status==='Approved'&&r.type!=='Unpaid'&&r.type!=='Other paid'&&r.funding!=='Employer')next.ledger.push({id:crypto.randomUUID(),employee_id:p.id,type:r.type,date:r.date,units:r.units,kind:'reversal',leave_id:r.id,actor,at:stamp,reason});
    r.status=b.decision;r.reviewed_by=actor;r.reviewed_at=stamp;r.review_reason=reason;
   }else check(false,'Unsupported Staff action.');
  }
@@ -113,6 +113,71 @@ export function applyStaffAction(state,b,actor,stamp){
  check(JSON.stringify(next).length<600000,'Staff history needs archiving before further changes.',409);
  return {state:next,detail};
 }
+
+export const absenceTypes = ['Sick', 'Annual', 'Unpaid', 'Other paid'];
+const usesBalance = entry => ['Sick','Annual','Family responsibility'].includes(entry.type) && entry.funding !== 'Employer';
+
+function availableDays(state, id, type, day) {
+ let remaining = balance(state, id, type, day);
+ if (remaining === null) return null;
+ let minimum = remaining;
+ const future = new Map();
+ for (const entry of state.ledger) {
+  if (entry.employee_id === id && entry.type === type && entry.date > day)
+   future.set(entry.date, (future.get(entry.date) ?? 0) + entry.units);
+ }
+ for (const [, units] of [...future].sort(([left],[right]) => left.localeCompare(right))) {
+  remaining += units;
+  minimum = Math.min(minimum, remaining);
+ }
+ return minimum;
+}
+
+export function savePayrollAbsence(state, row, input, actor, stamp) {
+ const {dates, type, reason} = input;
+ check(absenceTypes.includes(type), 'Kies die soort verlof.');
+ check(Array.isArray(dates) && dates.length && dates.length <= 5 && new Set(dates).size === dates.length, 'Kies elke verlofdag een keer.');
+ const person = staffPerson(state, row.employee_id);
+ const next = structuredClone(state);
+ const changes = [];
+ for (const date of [...dates].sort()) {
+  const day = row.source.days.find(d => d.date === date);
+  const roster = scheduledMinutes(person,date);
+  check(day && date <= dayAt(stamp) && roster > 0, 'Kies ’n voltooide werkdag met ’n bevestigde rooster.');
+  check(!day.first_in && !day.review_seconds && !day.completed_seconds, date+' het klokure. Maak eers die klokinskrywing reg sodat die dag net een keer betaal word.');
+  const entries = next.leave.filter(r => r.employee_id === person.id && r.date === date && ['Pending','Approved'].includes(r.status));
+  check(entries.length <= 1 && (!entries[0] || entries[0].units === 1), date+' het meer as een verlofinskrywing of ’n halwe dag. Gaan die afsonderlike inskrywings onder Verlof na.');
+  let entry = entries[0];
+  const edit = row.day_edits?.[date];
+  const same = entry?.status === 'Approved' && entry.type === type && entry.paid_minutes === (type === 'Unpaid' ? 0 : roster);
+  if ((entry && !same || edit || row.paid_days?.includes(date)) && !input.replace)
+   check(false,date+' het reeds ure of verlof. Kyk na die bestaande inskrywing en merk dat jy dit wil vervang.',409);
+  if (same) continue;
+  const before = entry ? {...entry} : null;
+  function movement(kind, units, category) {
+   next.ledger.push({id:crypto.randomUUID(),employee_id:person.id,type:category,date,units,kind,leave_id:entry.id,actor,at:stamp,reason});
+  }
+  if (entry?.status === 'Approved' && usesBalance(entry)) movement('reversal', entry.units, entry.type);
+  let funding = 'None';
+  if (type === 'Annual' || type === 'Sick') {
+   const remaining = availableDays(next,person.id,type,date);
+   if (remaining !== null && remaining >= 1) funding = 'Balance';
+   else if (type === 'Sick' && input.employer_cover === true) funding = 'Employer';
+   else check(false,date+(remaining === null?' se verlofsaldo is onbekend.':' se beskikbare verlof is te min.')+
+    (type === 'Sick'?' Vul die regte saldo onder Verlof in, of kies dat Fen Meat dié siekdag betaal. Onbetaalde verlof is net vir ’n bevestigde onbetaalde dag.':' Vul die bevestigde jaarverlofsaldo in, of gebruik ander betaalde afwesigheid indien Fen Meat dit goedkeur.'));
+  } else if (type === 'Other paid') funding = 'Employer';
+  if (!entry) {
+   entry = {id:crypto.randomUUID(),employee_id:person.id,date,units:1,requested_by:actor,requested_at:stamp,reason};
+   next.leave.push(entry);
+  }
+  Object.assign(entry,{type,status:'Approved',funding,scheduled_minutes:roster,paid_minutes:type === 'Unpaid'?0:roster,reviewed_by:actor,reviewed_at:stamp,review_reason:reason});
+  if (funding === 'Balance') movement('usage',-1,type);
+  changes.push({date,id:entry.id,before,after:{...entry}});
+ }
+ check(JSON.stringify(next).length < 600000,'Die verlofgeskiedenis is vol. Laat die ou rekords argiveer voordat jy weer stoor.');
+ return {state:next,detail:{employee_id:person.id,reason,changes}};
+}
+
 
 const transitions={out:{in:'in'},in:{break_start:'break',out:'out'},break:{break_end:'in',out:'out'}};
 export function shiftSummary(shift,{from=-Infinity,to=Infinity}={}){

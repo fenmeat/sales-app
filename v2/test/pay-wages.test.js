@@ -19,10 +19,10 @@ test('weekly allocation, known zero PAYE, both UIF shares, statutory floor and h
  const taxable=week([9,9,9,9,9],{profile:{rate_cents:4400}});assert.equal(taxable.paye_cents,1300);assert.equal(taxable.ready,true);
  const floor=week([8,8,8,8,8],{profile:{rate_cents:3000}});assert.equal(floor.profile.rate_cents,3023);assert.equal(floor.gross_cents,120920);
 });
-test('unknown clock and unconfirmed long day remain local to the person',()=>{
+test('missing clock affects one worker while a long day still follows weekly overtime',()=>{
  assert.equal(week([8,8,null,8,8]).net_cents,null);
  assert.equal(week([8,8,8,8,9/3600]).net_cents,null);
- const unresolved=week([10,8,7,7,7],{profile:{hours_agreement:null}});assert.equal(unresolved.ready,false);assert.match(unresolved.issues.join(' '),/agreement/);
+ const unresolved=week([10,8,7,7,7],{profile:{hours_agreement:null}});assert.equal(unresolved.ready,true);assert.equal(unresolved.overtime_seconds,0);
  const directed=week([8,8,8,8,8],{profile:{tax_treatment:'Directive',directive_from:'2026-11-16',directive_to:'2027-01-01',directive_bps:1200}});assert.equal(directed.paye_cents,15360);
 });
 test('approved and paid people enter the monthly report independently of other unapproved wages',()=>{
@@ -38,7 +38,7 @@ test('paid sick leave stays out of worked overtime and a recorded repayment is d
  const adjusted=week([8,8,8,8,8],{fields:{wage_facts:{amendments:[{kind:'Authorised repayment',cents:1200,reference:'TEST'}]}}});
  assert.equal(adjusted.net_cents,125520);assert.equal(adjusted.other_deduction_cents,1200);
  const legal=week([10,8,7,7,7],{profile:{hours_agreement:null},fields:{wage_facts:{daily_resolved:true}}});
- assert.equal(legal.ready,true);assert.equal(legal.ordinary_seconds,38*3600);assert.equal(legal.overtime_seconds,3600);
+ assert.equal(legal.ready,true);assert.equal(legal.ordinary_seconds,39*3600);assert.equal(legal.overtime_seconds,0);
 });
 
 test('confirmed attendance or illness without exact hours or entitlement stays visible and unpaid',()=>{

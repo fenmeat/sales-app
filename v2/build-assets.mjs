@@ -20,3 +20,5 @@ await writeFile(new URL('./src/recipe-fonts.js',import.meta.url),'// Generated b
 
 // One module request for the Tasks entry instead of a serial import waterfall.
 await build({entryPoints:['public/tasks-app.js'],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:'public/tasks-bundle.js',minify:true,legalComments:'inline'});
+
+await build({entryPoints:['src/wage-pdf-client.js'],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:'public/wage-pdf-bundle.js',minify:true,legalComments:'inline'});

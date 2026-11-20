@@ -1,6 +1,6 @@
 import {check,dateKey,addDays,today,UserError} from './domain.js';
-import {text,uuid} from './staff-domain.js';
-import {posted,postedRun,rebuildWages,selectWageRows,wageTotals} from './pay-wages.js';
+import {text,uuid,savePayrollAbsence} from './staff-domain.js';
+import {posted,postedRun,rebuildWages,selectWageRows,wageTotals,isPayHoliday,weekEvidence} from './pay-wages.js';
 import {isAdmin} from "./auth.js";
 import {BREAK_RULE_VERSION,FRESH_START,PAYROLL_RULES,friday,nextFriday,validateCompany,validateProfile,validateOpening,profileAt,calculateRow,priorFor,paidDaySeconds,payrollBirthCheck,suggestRows,totalRows,monthlyReport} from './payroll-domain.js';
 
@@ -38,7 +38,7 @@ function carryDraftInputs(row,old){
  }
  return row;
 }
-export async function payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,env}){
+export async function payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,registerInsert,env}){
  if(request.method==='GET' && url.pathname.endsWith('/history'))return {events:(await db.prepare("SELECT revision,entity_key,action,actor,saved_at,json_extract(payload, '$.change_note') AS reason FROM v2_staff_payroll ORDER BY revision DESC LIMIT 100").all()).results};
  const targetDate=friday(url.searchParams.get('pay_date')??nextFriday()),view=request.method==='GET'&&url.searchParams.get('view')==='wages'?{date:targetDate,month:url.searchParams.get('month')??targetDate.slice(0,7)}:null;
  const state=await savedState(db,view),timeVersion=(await db.prepare('SELECT COALESCE(MAX(rowid),0) revision FROM v2_staff_time').first()).revision;
@@ -46,11 +46,15 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
  const source={staff_revision:current.revision,time_version:timeVersion,payroll_revision:state.revision};
  const stale=run=>run?.status==='Draft'&&(JSON.stringify(run.source)!==JSON.stringify(source) ||
   (run.pay_date>=FRESH_START.first_pay_date && run.rules?.version!==BREAK_RULE_VERSION));
+ let staffSnapshot=current;
+ const shiftCache=new Map();
  const preview=async (date,edits)=>{
   const saved=state.runs.find(r=>r.pay_date===date);
   edits??=Object.fromEntries((saved?.rows??[]).map(r=>[r.employee_id,r.day_edits??{}]));
   const from=fresh && date===fresh.first_pay_date?fresh.start_date:addDays(date,-6);
-  const shifts=await shiftsBetween(db,from,date),rows=suggestRows(current.state,shifts,state.settings,date,edits);
+  const key=from+date;
+  if(!shiftCache.has(key))shiftCache.set(key,await shiftsBetween(db,from,date));
+  const shifts=shiftCache.get(key),rows=suggestRows(staffSnapshot.state,shifts,state.settings,date,edits);
   for(const row of rows)row.suggested_hours={ordinary_seconds:row.ordinary_seconds,overtime_seconds:row.overtime_seconds,leave_seconds:row.leave_seconds};
   return {key:'run:'+date,pay_date:date,from:addDays(date,-4),to:date,status:'Draft',source,rules:date>=FRESH_START.first_pay_date?{...PAYROLL_RULES,version:BREAK_RULE_VERSION}:PAYROLL_RULES,company:state.settings.company,rows,totals:totalRows([])};
  };
@@ -70,7 +74,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
   }
   return calculateRow(raw,profile,prior,options);
  };
- const wages=async(date,stored,edits)=>rebuildWages(await preview(date,edits),stored,current.state,state.settings,state.runs,state.openings);
+ const wages=async(date,stored,edits)=>rebuildWages(await preview(date,edits),stored,staffSnapshot.state,state.settings,state.runs,state.openings);
  const payDate=friday(url.searchParams.get('pay_date')??nextFriday());
  if(request.method==='GET'){
   const historical=fresh && payDate<fresh.first_pay_date;
@@ -120,6 +124,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
  check(b.payroll_revision===state.revision&&b.revision===current.revision,'Payroll or Staff records changed. Reload Payroll before saving.',409);
  check(b.time_version===timeVersion,'Clock records changed. Reload and refresh the draft before saving.',409);
  const stamp=new Date().toISOString(),next=state.revision+1;let record;
+ const staffWrites=[];
  const date=b.pay_date?friday(b.pay_date):null,existing=date?state.runs.find(r=>r.pay_date===date):null;
  const locked=()=>state.runs.some(r=>['Approved','Paid'].includes(r.status));
  if(b.action==='fresh_start'){
@@ -157,21 +162,23 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
     const reason=text(b.note,'source of the earlier remuneration limit',400);
     for(const r of rows){check(!posted(r),'This employee already has an approved wage.');r.wage_facts={...r.wage_facts,opening_bound:b.upper_cents,opening_source:reason};}
     record=await wages(date,record,allEdits);record.change_note=reason;
-   }else if(b.action==='wages_approve'||b.action==='wages_paid'||b.action==='wages_reopen'){
+   }else if(['wages_approve','wages_pay_now','wages_paid','wages_reopen'].includes(b.action)){
     const rows=selectWageRows(record,b.employee_ids);
     check(date<=today() && state.settings.company,'Check the pay date and employer details.');
     for(const r of rows){
-     if(b.action==='wages_approve'){
+     if(b.action==='wages_approve'||(b.action==='wages_pay_now' && !posted(r))){
       check(r.ready && !posted(r),r.name+' is not ready. Reload this week.',409);
       check(!state.runs.some(other=>other.pay_date>date && postedRun(other).rows.some(x=>x.employee_id===r.employee_id && (posted(x)||(!other.individual_wages&&['Approved','Paid'].includes(other.status))))),'A later pay week for '+r.name+' has already been approved.');
       r.wage_state='Approved';r.approved_by=user.username;r.approved_at=stamp;r.reviewed=true;
       r.employer=state.settings.company;
-     }else if(b.action==='wages_paid'){
+     }
+     if(b.action==='wages_paid'||b.action==='wages_pay_now'){
       check(r.wage_state==='Approved','Record only approved, unpaid wages.',409);
+      if(b.action==='wages_pay_now')check(r.net_cents===b.expected_cents,'Die bedrag het verander. Kyk na die nuwe bedrag voordat jy die betaling aanteken.',409);
       const paid=dateKey(b.paid_on);check(paid>=date&&paid<=today(),'Enter the actual payment date.');
       check(['Bank','Cash'].includes(b.method),'Choose the actual payment method.');
       Object.assign(r,{wage_state:'Paid',paid_on:paid,paid_by:user.username,paid_at:stamp,payment_method:b.method,payment_reference:String(b.note??'').trim().slice(0,300)});
-     }else{
+     }else if(b.action==='wages_reopen'){
       check(r.wage_state==='Approved','Only an unpaid approval can be reopened.');
       check(!state.runs.some(other=>other.pay_date>date && postedRun(other).rows.some(x=>x.employee_id===r.employee_id&&(posted(x)||(!other.individual_wages&&['Approved','Paid'].includes(other.status))))),'A later approval already uses these amounts.');
       record.change_note=r.name+' · '+text(b.note,'correction reason',300);
@@ -182,7 +189,30 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
     const [row]=selectWageRows(record,[uuid(b.employee_id)]);
     check(!posted(row),'Reopen the unpaid approval first. Paid payslips are frozen.');
     const reason=text(b.note,'source or reason',400);
-    if(b.action==='wages_day'){
+    if(b.action==='wages_absence'){
+     const result=savePayrollAbsence(current.state,row,{...b,reason},user.username,stamp);
+     if(result.detail.changes.length){
+      staffWrites.push(registerInsert(db,current,result.state,'payroll_leave',user.username,result.detail,stamp));
+      staffSnapshot={state:result.state,revision:current.revision+1};
+     }
+     for(const day of b.dates)delete allEdits[row.employee_id][day];
+     row.paid_days=(row.paid_days??[]).filter(d=>!b.dates.includes(d));
+     if(b.extra_minutes!=null){
+      check(Number.isInteger(b.extra_minutes)&&b.extra_minutes>=0&&b.extra_minutes<=45*60 && row.profile?.rate_cents>0,'Vul die ekstra betaalde tyd in en bevestig die uurtarief.');
+      row.wage_facts={...row.wage_facts,extra_minutes:b.extra_minutes,extra_reason:reason};
+     }
+    }else if(b.action==='wages_worked_week'){
+     check(Number.isInteger(b.minutes)&&b.minutes>=0&&b.minutes<=5*24*60,'Vul die gewerkte ure en minute vir die week in.');
+     check(date<=today(),'Bevestig die weekure nadat die week klaar is.');
+     check(!row.source.days.some(d=>d.leave_days||d.review_seconds||isPayHoliday(d.date)||d.needs_workplace||d.overlap||d.needs_adjustment_review||row.day_edits?.[d.date]?.sick_type||row.day_edits?.[d.date]?.pending_kind) && !row.paid_days?.length,'Daar is verlof, ’n vakansiedag of ’n skof wat nagegaan moet word. Maak die betrokke dag reg voordat jy weekure bevestig.');
+     const present=row.source.days.reduce((sum,d)=>sum+d.payable_seconds,0);
+     check(!present || Math.abs(present-b.minutes*60)<1 || b.replace===true,'Die klok wys ’n ander totaal. Vergelyk die twee bedrae en merk dat jy die bevestigde ure wil gebruik.',409);
+     row.wage_facts={...row.wage_facts,worked_week:{minutes:b.minutes,evidence:weekEvidence(row),actor:user.username,at:stamp,reason}};
+    }else if(b.action==='wages_prior_uif'){
+     check(date.slice(0,7)===fresh.start_date.slice(0,7),'Kies ’n week in die eerste betaalmaand.');
+     for(const n of [b.employee_cents,b.employer_cents])check(Number.isInteger(n)&&n>=0&&n<=17712,'Vul elke bedrag van die vorige loonstaat in, tussen R0 en R177,12.');
+     row.wage_facts={...row.wage_facts,earlier_uif:{employee:b.employee_cents,employer:b.employer_cents,reason,actor:user.username,at:stamp}};
+    }else if(b.action==='wages_day'){
      const day=row.source.days.find(d=>d.date===b.day);
      check(day && day.date<=today(),'Choose a completed day in this week.');
      check(['hours','absent','workplace','sick_paid','sick_unpaid','sick_pending','worked_pending'].includes(b.kind),'Choose a correction.');
@@ -203,6 +233,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
       edit.absent=b.kind==='absent';edit.minutes=(b.minutes*60-day.clock_payable_seconds)/60;
       edit.baseline_seconds=day.clock_payable_seconds;
      }
+     if(b.kind==='hours')check(!day.leave_days && !row.paid_days?.includes(b.day),'Daar is reeds verlof vir dié dag. Maak die verlof reg voordat jy gewerkte ure aanteken.');
      allEdits[row.employee_id][b.day]=edit;
     }else if(b.action==='wages_facts'){
      const f={...row.wage_facts};
@@ -323,7 +354,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
    check(!state.runs.some(r=>['Approved','Paid'].includes(r.status)&&r.pay_date>date),'Void later unpaid runs first; subsequent UIF calculations depend on this run.');
    record={...existing,status:'Voided',void_reason:text(b.note,'void reason',500),void_by:user.username,void_at:stamp};
   }else throw new UserError('Unknown payroll action.');
-  if(!record.individual_wages)record.totals=totalRows(record.status==='Draft'?record.rows.filter(r=>r.reviewed):record.rows);if(record.status==='Draft' && !(b.action==='paid_days' && stale(record)))record.source={...source,payroll_revision:next};
+  if(!record.individual_wages)record.totals=totalRows(record.status==='Draft'?record.rows.filter(r=>r.reviewed):record.rows);if(record.status==='Draft' && !(b.action==='paid_days' && stale(record)))record.source={...source,staff_revision:staffSnapshot.revision,payroll_revision:next};
  }
  if(!b.action.startsWith('wages_') && b.action!=='row' && b.action!=='day_edit')delete record.change_note;
  delete record.saved_revision;delete record.saved_at;delete record.saved_by;
@@ -332,5 +363,5 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
  // approving concurrently. Clock and Staff guards are checked inside D1 batch.
  const guard=db.prepare(`INSERT INTO v2_staff_requests(id,request_hash,result) SELECT ?, '', '' WHERE (SELECT COALESCE(MAX(revision),0) FROM v2_staff_register)!=? OR (SELECT COALESCE(MAX(rowid),0) FROM v2_staff_time)!=?`).bind(op.id,current.revision,timeVersion);
  const insert=db.prepare('INSERT INTO v2_staff_payroll VALUES(?,?,?,?,?,?)').bind(next,record.key,JSON.stringify(record),b.action,user.username,stamp);
- return op.commit([guard,insert],{ok:true,revision:current.revision,payroll_revision:next,status:record.status??'Saved'});
+ return op.commit([guard,...staffWrites,insert],{ok:true,revision:staffSnapshot.revision,payroll_revision:next,status:record.status??'Saved'});
 }

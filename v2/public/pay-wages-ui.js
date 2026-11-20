@@ -1,63 +1,126 @@
-import {hoursLabel,localDay} from './staff-model.js';
+import {hoursLabel,localDay,clockTime,employeeSearchField} from './staff-model.js';
 import {parseDecimal} from './decimal-input.js';
+import {wageMessage,label} from './wage-messages.js';
 
-const h=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const currency=v=>Number.isSafeInteger(v)?'R '+(v/100).toLocaleString('en-ZA',{minimumFractionDigits:2,maximumFractionDigits:2}):'Pending';
-const amount=(f,k)=>{const t=f.get(k);if(t==null||!String(t).trim())return undefined;const n=parseDecimal(t);if(!Number.isFinite(n)||n<0)throw Error('Enter a valid amount.');return Math.round(n*100);};
-const box=(label,k,checked=false)=>`<label class="check"><input type="checkbox" name="${k}" ${checked?'checked':''}>${h(label)}</label>`;
-const input=(label,k,v='')=>`<label>${h(label)}<input name="${k}" inputmode="decimal" value="${h(v)}"></label>`;
-const memo='<label>Source or reason<textarea name="note" maxlength="400" required></textarea></label>';
-let group='All Staff',expanded=new Set();
-const status=r=>r.wage_state==='Paid'?'Paid':r.ready||r.wage_state==='Approved'?'Ready to Pay':'Needs Attention';
-const visible=run=>run.rows.filter(r=>group==='All Staff'||r.employment_type==='Casual');
-const total=(rows,k)=>{const valid=rows.filter(r=>r.included && Number.isSafeInteger(r[k]));return valid.length?valid.reduce((v,r)=>v+r[k],0):null;};
-const detail=(r,days)=>`<div class="wage-detail"><h3>${h(r.name)}</h3><p>${r.profile?h(r.profile.basis)+' · '+currency(r.profile.basis==='Hourly'?r.profile.rate_cents:r.profile.fixed_cents):'Agreed rate needed'}</p>
- ${r.profile?.rate_basis?'<p>Saved hourly rate '+currency(r.profile.agreed_rate_cents)+'. Pay uses the statutory minimum '+currency(r.profile.rate_cents)+'.</p>':''}
- ${r.estimate_net_cents!=null?'<p>Estimated net '+currency(r.estimate_net_cents)+' · '+h(r.estimate_note??'assumes full UIF')+'</p>':''}
- <p>Ordinary ${hoursLabel(r.ordinary_seconds)} · Overtime ${hoursLabel(r.overtime_seconds)} at 1.5× · Paid leave ${hoursLabel(r.leave_seconds)}</p>
- <p>PAYE ${currency(r.paye_cents)} · Employee UIF ${currency(r.uif_employee_cents)} · Employer UIF ${currency(r.uif_employer_cents)}</p>
- <p>Bonus ${currency(r.bonus_cents)} · Commission ${currency(r.commission_cents)} · Extra pay ${currency(r.special_cents)} · Meat ${currency(r.meat_cents)} · Other deductions ${currency(r.other_deduction_cents)}</p>
- ${r.gross_cents==null&&r.recorded_gross_cents!=null?'<p>Gross for recorded hours only: '+currency(r.recorded_gross_cents)+'</p>':''}
- ${(r.issues??[]).map(i=>'<p class="warning-text">'+h(i)+'</p>').join('')}
- ${days(r,true)}
- ${r.wage_state?`<p>Approved by ${h(r.approved_by)}${r.paid_on?' · Paid '+h(r.paid_on)+' · '+h(r.payment_method):''}</p><button data-slip="${r.employee_id}">Print payslip</button> ${r.wage_state==='Approved'?`<button data-one-paid="${r.employee_id}">Record payment</button> <button data-reopen="${r.employee_id}">Correct unpaid wages</button>`:''}`:`
- <div class="row-actions">${r.source.days.filter(d=>d.date<=localDay(new Date())).map(d=>`<button data-correct="${d.date}" data-id="${r.employee_id}">${d.date.slice(8)} · Correct hours</button>`).join('')}</div>
- <div class="row-actions"><button data-pay-profile="${r.employee_id}">${r.profile?'Pay agreement and rate':'Enter pay rate'}</button>${r.paye_cents==null&&r.gross_cents!=null?`<button data-tax="${r.employee_id}">Enter confirmed PAYE</button>`:''}<button data-facts="${r.employee_id}">Deductions and special pay</button><button data-amend="${r.employee_id}">Correct an earlier paid slip</button>${r.profile?.fen_hourly_only?`<button data-off="${r.employee_id}">Paid days off</button>`:''}</div>`}</div>`;
-export function wagesPanel(run,days){
- const rows=visible(run),payable=rows.filter(r=>r.ready&&!r.wage_state),approved=rows.filter(r=>r.wage_state==='Approved');
- const attention=rows.filter(r=>status(r)==='Needs Attention').length,known=rows.filter(r=>Number.isSafeInteger(r.net_cents)).length;
- return `<section class="panel"><h2>Pay Wages</h2><form id="pay-period" class="toolbar"><label>Friday pay date<input name="pay_date" type="date" value="${run.pay_date}" required></label><button>Load week</button><label>Employees<select id="wage-group">${['All Staff','Casuals'].map(s=>`<option ${s===group?'selected':''}>${s}</option>`).join('')}</select></label></form>
- <div class="stats payroll-stats">${[['Calculated gross',currency(total(rows,'gross_cents'))],['Calculated net',currency(total(rows,'net_cents'))],['Ready to Pay',payable.length+approved.length],['Needs Attention',attention]].map(([k,v])=>`<div class="stat"><strong>${v}</strong><span>${k}</span></div>`).join('')}</div>
- <p>Net calculated for ${known} of ${rows.length} employees.${rows.some(r=>r.net_cents==null && r.estimate_net_cents!=null)?' Including estimates, '+currency(total(rows.map(r=>({...r,display:r.net_cents??r.estimate_net_cents})),'display'))+' across '+rows.filter(r=>r.net_cents!=null||r.estimate_net_cents!=null).length+' employees.':''} ${approved.length} approved and awaiting payment.</p>
- <div class="row-actions"><button id="wage-approve" class="primary" ${payable.length?'':'disabled'}>Approve Ready Employees</button><button id="wage-list" ${approved.length?'':'disabled'}>Print payment list</button></div>
- ${rows.some(r=>!r.wage_state&&r.issues.some(i=>i.includes('earlier November')))?'<button id="wage-bound">Confirm earlier November earnings</button>':''}
- <div class="sheet-wrap"><table class="wage-table"><thead><tr>${['Name','Hours','Overtime','Gross','Deductions','Net Pay','Status'].map(s=>'<th>'+s+'</th>').join('')}</tr></thead><tbody>${rows.map(r=>`<tr data-wage="${r.employee_id}"><td><button class="wage-link" data-toggle="${r.employee_id}" aria-expanded="${expanded.has(r.employee_id)}">${h(r.name)}</button></td><td>${hoursLabel(r.ordinary_seconds+r.overtime_seconds+r.sunday_seconds+r.holiday_seconds)}</td><td>${hoursLabel(r.overtime_seconds)}</td>${[r.gross_cents,r.net_cents==null?null:r.gross_cents-r.net_cents,r.net_cents].map((v,i)=>`<td><button class="wage-link" data-toggle="${r.employee_id}">${i===2 && v==null && r.estimate_net_cents!=null?'Est. '+currency(r.estimate_net_cents):currency(v)}</button></td>`).join('')}<td>${status(r)}${r.wage_state==='Approved'?'<br>Approved':''}</td></tr>${expanded.has(r.employee_id)?`<tr><td colspan="7">${detail(r,days)}</td></tr>`:''}`).join('')}</tbody></table></div></section>`;
+const h=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const money=n=>Number.isSafeInteger(n)?'R '+(n/100).toLocaleString('af-ZA',{minimumFractionDigits:2,maximumFractionDigits:2}):'Nog onbekend';
+const memo='<label>Hoekom verander jy dit?<textarea name="note" maxlength="300" required></textarea></label>';
+const box=(title,name,checked=false)=>`<label class="check"><input type="checkbox" name="${h(name)}" ${checked?'checked':''}>${h(title)}</label>`;
+const input=(title,name,value='',required=false)=>`<label>${h(title)}<input name="${name}" inputmode="decimal" value="${h(value)}" ${required?'required':''}></label>`;
+const whole=(f,k,max)=>{const raw=String(f.get(k)??'').trim(),n=Number(raw);if(!/^\d+$/.test(raw)||!Number.isSafeInteger(n)||n>max)throw Error('Vul ’n geldige aantal ure of minute in.');return n;};
+const cents=(f,k)=>{const raw=String(f.get(k)??'').trim();if(!raw)return undefined;const value=parseDecimal(raw);if(!Number.isFinite(value)||value<0||Math.abs(value*100-Math.round(value*100))>0.000001)throw Error('Vul ’n positiewe randbedrag of nul in, met hoogstens twee desimale.');return Math.round(value*100);};
+const total=(rows,key)=>rows.reduce((sum,r)=>sum+(r[key]??0),0);
+const expanded=new Set();
+let group='all';
+const visible=run=>group==='casual'?run.rows.filter(r=>r.employment_type==='Casual'):run.rows;
+const status=r=>r.wage_state==='Paid'?'Betaal':r.ready||r.wage_state==='Approved'?'Gereed':'Kort inligting';
+const confirmed=r=>status(r)!=='Kort inligting' && Number.isSafeInteger(r.net_cents);
+const provisional=r=>r.estimate_net_cents??r.net_cents;
+const netLabel=r=>confirmed(r)?'Bedrag om te betaal':provisional(r)!=null?'Voorlopige bedrag':r.before_tax_cents!=null?'Voorlopig vóór ontbrekende aftrekkings':'Bedrag om te betaal';
+const displayNet=r=>confirmed(r)?r.net_cents:provisional(r)??r.before_tax_cents;
+const item=(title,value)=>`<div><dt>${h(title)}</dt><dd>${h(value)}</dd></div>`;
+const when=at=>new Date(at).toLocaleString('af-ZA',{timeZone:'Africa/Johannesburg'});
+const entries=(leave,id,date)=>leave.filter(x=>x.employee_id===id&&x.date===date&&['Approved','Pending'].includes(x.status));
+const dayName=date=>new Intl.DateTimeFormat('af-ZA',{timeZone:'Africa/Johannesburg',weekday:'long',day:'numeric',month:'short'}).format(new Date(date+'T12:00Z'));
+function dayDetails(r,leave) {
+ return r.source.days.map(d=>{
+  const edit=r.day_edits?.[d.date];
+  const records=entries(leave,r.employee_id,d.date);
+  const absence=records.map(x=>label(x.type)+' · '+label(x.status)).join(', ') || (edit?.sick_type==='sick_paid'?'Betaalde siekdag op vorige looninskrywing':edit?.sick_type==='sick_unpaid'?'Onbetaalde siekdag':'Geen');
+  return `<section class="wage-day"><h4>${h(dayName(d.date))}</h4><dl class="wage-values">${item('Inklok',d.first_in?clockTime(d.first_in):'—')}${item('Uitklok',d.last_out?clockTime(d.last_out):'—')}${item('Pouse',hoursLabel((d.recorded_break_seconds??0)+(d.automatic_break_seconds??0)))}${item('Gewerk ná pouses',hoursLabel(d.payable_seconds??d.completed_seconds))}${item('Verlof',absence)}${item('Betaalde verlof',hoursLabel((d.paid_leave_minutes||edit?.sick_minutes||0)*60))}</dl>
+  ${edit?.reason?`<p>${h(edit.reason)}</p>`:''}
+  ${!r.wage_state&&d.date<=localDay(new Date())?`<div class="row-actions"><button data-correct="${d.date}" data-id="${r.employee_id}">Verander hierdie dag</button>${d.first_in?`<button data-clock-day="${d.date}" data-id="${r.employee_id}">Verander kloktye of pouse</button>`:''}</div>`:''}</section>`;
+ }).join('');
 }
-export function bindWages({run,render,editor,printSheet,payslip,profileForm}){
+function detail(r,leave) {
+ const id=r.employee_id,issues=[...new Set((r.issues??[]).map(wageMessage))];
+ const actions=r.wage_state?`<button data-slip="${id}">Druk loonstrokie</button> ${r.wage_state==='Approved'?`<button data-reopen="${id}">Heropen onbetaalde loon</button>`:''}`:
+ `<button data-absence="${id}">Teken verlof aan of verander dit</button><button data-week="${id}">Bevestig gewerkte weekure</button><button data-pay-profile="${id}">Loonkoers</button><button data-facts="${id}">Aftrekkings en ekstra betaling</button>
+ ${r.paye_cents==null&&r.gross_cents!=null?`<button data-tax="${id}">Vul bevestigde belasting in</button>`:''}
+ ${r.issues?.some(i=>/earlier November|Earlier November earnings/.test(i))?`<button data-prior-uif="${id}">Vul vorige UIF in</button>`:''}
+ ${r.profile?.fen_hourly_only?`<button data-off="${id}">Ander goedgekeurde afdae</button>`:''}<button data-amend="${id}">Stel ’n vorige loonstrokie reg</button>`;
+ return `<div class="wage-detail">
+ ${r.profile?`<p>${h(label(r.profile.basis))} · ${money(r.profile.basis==='Hourly'?r.profile.rate_cents:r.profile.fixed_cents)}${r.profile.rate_basis?' · minimumloon vir dié week':''}</p>`:''}
+ <dl class="wage-values">${item('Fen Meat se eie UIF',money(r.uif_employer_cents))}${item('Ekstra betaling',money(r.special_cents))}${r.extra_hours_minutes?item('Waarvan ekstra goedgekeurde ure',hoursLabel(r.extra_hours_minutes*60)+' · '+money(r.extra_hours_cents)):''}${item('Bonus',money(r.bonus_cents))}${item('Kommissie',money(r.commission_cents))}</dl>
+ ${issues.length?`<section class="wage-warning"><strong>Kyk asseblief hierna</strong><ul>${issues.map(i=>'<li>'+h(i)+'</li>').join('')}</ul></section>`:''}
+ ${r.estimate_net_cents!=null&&!confirmed(r)?`<p>${r.estimate_note?h(wageMessage(r.estimate_note)):'Die voorlopige bedrag gebruik die beskikbare ure en aftrekkings. Die finale bedrag kan verander.'}</p>`:''}
+ ${r.gross_cents==null&&r.recorded_gross_cents!=null?`<p>Bruto vir die ure wat reeds aangeteken is · ${money(r.recorded_gross_cents)}</p>`:''}
+ ${r.wage_facts?.worked_week?`<p>Bevestigde weekure · ${hoursLabel(r.wage_facts.worked_week.minutes*60)} · ${h(r.wage_facts.worked_week.reason)}</p>`:''}
+ <div class="row-actions">${actions}</div><details class="daily-breaks"><summary>Dagure, pouses en verlof</summary>${dayDetails(r,leave)}</details></div>`;
+}
+function employeeCard(r,leave) {
+ const id=h(r.employee_id),paid=r.wage_state==='Paid',ready=confirmed(r);
+ const other=(r.other_deduction_cents??0)+(r.meat_cents??0);
+ return `<article class="wage-card" data-wage="${id}" data-search-person="${id}">
+ <div class="wage-head"><div><button class="wage-name" data-toggle="${id}" aria-expanded="${expanded.has(r.employee_id)}">${h(r.name)}</button> <span class="wage-status" data-state="${paid?'paid':ready?'ready':'open'}">${status(r)}</span></div>
+ <div class="wage-net"><small>${netLabel(r)}</small><strong>${money(displayNet(r))}</strong></div></div>
+ <dl class="wage-values">${item('Gewone ure',hoursLabel(r.ordinary_seconds))}${item('Oortydure',hoursLabel(r.overtime_seconds))}${item('Betaalde verlof',hoursLabel(r.leave_seconds))}${item('Bruto loon',money(r.gross_cents))}${item('UIF-aftrekking',money(r.uif_employee_cents))}${item('Belasting (PAYE)',money(r.paye_cents))}${item('Ander aftrekkings',money(other))}</dl>
+ ${!ready&&r.issues?.length?`<p class="wage-next">${h(wageMessage(r.issues[0]))}</p>`:''}
+ <div class="wage-foot"><button data-toggle="${id}" aria-expanded="${expanded.has(r.employee_id)}">${expanded.has(r.employee_id)?'Vou toe':'Maak oop'}</button>
+ ${ready&&!paid?`<label>Betaalmetode <select aria-label="Betaalmetode vir ${h(r.name)}" data-method="${id}">${['Bank','Cash'].map(m=>`<option value="${m}" ${m===r.profile?.payment_method?'selected':''}>${label(m)}</option>`).join('')}</select></label>`:''}
+ <label class="check wage-check"><input type="checkbox" data-paid="${id}" aria-label="Betaal ${h(r.name)}" ${paid?'checked disabled':ready?'':'disabled'}> Betaal</label>
+ ${paid?`<small>${h(r.paid_by??r.approved_by)} · ${h(r.paid_at?when(r.paid_at):r.paid_on)} · ${h(label(r.payment_method??r.profile.payment_method))}</small>`:''}</div>
+ ${expanded.has(r.employee_id)?detail(r,leave):''}</article>`;
+}
+export function wagesPanel(run,leave) {
+ const rows=visible(run),due=rows.filter(r=>confirmed(r)&&r.wage_state!=='Paid');
+ return `<section class="panel"><h2>Betaal werknemers</h2><form id="pay-period" class="toolbar"><label>Betaaldatum<input name="pay_date" type="date" value="${run.pay_date}" required></label><button>Wys week</button></form>
+ <div class="stats payroll-stats">${[['Gereed om te betaal',money(total(due,'net_cents'))],['Gereed',due.length],['Kort inligting',rows.filter(r=>!confirmed(r)).length],['Betaal',rows.filter(r=>r.wage_state==='Paid').length]].map(([k,v])=>`<div class="stat"><strong>${v}</strong><span>${k}</span></div>`).join('')}</div>
+ <div class="toolbar"><label>Wys werknemers<select id="wage-group"><option value="all">Alle werknemers</option><option value="casual" ${group==='casual'?'selected':''}>Los werkers</option></select></label>${employeeSearchField}</div>
+ <div class="row-actions"><button id="wage-list">Druk betaalstaat</button><button id="wage-pdf">Laai PDF af</button></div>
+ <p>Merk Betaal sodra jy die werknemer betaal het.</p><div class="wage-list">${rows.map(r=>employeeCard(r,leave)).join('')}</div></section>`;
+}
+const headings=['Naam','Gewone ure','Oortyd','Verlof','Bruto','UIF','PAYE','Ander','Bedrag','Status'];
+function sheetRow(r){
+ return [r.name,hoursLabel(r.ordinary_seconds),hoursLabel(r.overtime_seconds),hoursLabel(r.leave_seconds),money(r.gross_cents),money(r.uif_employee_cents),money(r.paye_cents),money((r.meat_cents??0)+(r.other_deduction_cents??0)),displayNet(r)==null?'Onbekend':money(displayNet(r))+(confirmed(r)?'':' *'),status(r)];
+}
+export function bindWages({run,leave,render,editor,save,printSheet,payslip,clockDay,notice}){
  const root=document.querySelector('#payroll-root'),rows=visible(run);
  const row=id=>run.rows.find(r=>r.employee_id===id);
- const actions=(key,fn)=>root.querySelectorAll('['+key+']').forEach(b=>b.onclick=()=>fn(b.getAttribute(key),b));
- const payment=ids=>editor('Record completed payment',`<p>Record only money already paid. ${ids.map(id=>h(row(id).name)).join(', ')} · ${currency(total(ids.map(row),'net_cents'))}</p><label>Actual payment date<input name="paid_on" type="date" value="${localDay(new Date())}" required></label><label>Actual method<select name="method"><option>Bank</option><option>Cash</option></select></label><label>Reference (optional)<input name="reference"></label>`,f=>({action:'wages_paid',employee_ids:ids,paid_on:f.get('paid_on'),method:f.get('method'),note:f.get('reference')}));
+ const actions=(attr,fn)=>root.querySelectorAll('['+attr+']').forEach(b=>b.onclick=()=>Promise.resolve().then(()=>fn(b.getAttribute(attr),b)).catch(e=>notice(wageMessage(e.message),true)));
  root.querySelector('#wage-group').onchange=e=>{group=e.target.value;render();};
- const bound=root.querySelector('#wage-bound');
- if(bound)bound.onclick=()=>{const pending=rows.filter(r=>!r.wage_state&&r.issues.some(i=>i.includes('earlier November')));
-  editor('Earlier November earnings',`<p>Select only employees whose earlier November UIF remuneration you checked. Enter an upper limit that covers each selected person individually. This does not add historical payments.</p>${pending.map(r=>box(r.name,r.employee_id)).join('')}${input('Maximum per employee before 16 November (R)','upper')}${memo}`,f=>({action:'wages_uif_bound',employee_ids:pending.filter(r=>f.has(r.employee_id)).map(r=>r.employee_id),upper_cents:amount(f,'upper'),note:f.get('note')}));};
  actions('data-toggle',id=>{if(expanded.has(id))expanded.delete(id);else expanded.add(id);render();});
- root.querySelector('#wage-approve').onclick=()=>{const ready=rows.filter(r=>r.ready&&!r.wage_state);editor('Approve Ready Employees',`<p>${ready.map(r=>h(r.name)).join(', ')}</p><p>Net pay ${currency(total(ready,'net_cents'))}</p><p>Confirm the displayed earnings and deductions. Any applicable tax directive, benefit, credit or other PAYE adjustment must be recorded before approval.</p>`,()=>({action:'wages_approve',employee_ids:ready.map(r=>r.employee_id)}));};
- root.querySelector('#wage-list').onclick=()=>{const list=rows.filter(r=>r.wage_state==='Approved');printSheet(`<h1>Payment list · ${run.pay_date}</h1><table><tr><th>Employee</th><th>Method</th><th>Net</th></tr>${list.map(r=>`<tr><td>${h(r.name)}</td><td>${h(r.profile.payment_method)}</td><td>${currency(r.net_cents)}</td></tr>`).join('')}</table><p>Total ${currency(total(list,'net_cents'))}</p>`,'Payment list');};
- actions('data-one-paid',id=>payment([id]));
- actions('data-slip',id=>{const r=row(id);printSheet(payslip({...run,status:r.wage_state,company:r.employer,approved_by:r.approved_by,approved_at:r.approved_at,paid_on:r.paid_on},{...r,profile:{...r.profile,payment_method:r.payment_method??r.profile.payment_method}}),'Payslip');});
- actions('data-reopen',id=>editor('Correct unpaid wages',memo,f=>({action:'wages_reopen',employee_ids:[id],note:f.get('note')})));
- actions('data-correct',(day,b)=>{const id=b.dataset.id,r=row(id),d=r.source.days.find(x=>x.date===day);
- editor(h(r.name)+' · '+day,`<p>Clocked after breaks: ${hoursLabel(d.clock_payable_seconds)}. Enter the full payable time for this day.</p><label>Action<select name="kind"><option value="hours">Correct hours</option><option value="worked_pending">Worked · actual hours still to confirm</option>${!d.first_in?'<option value="absent">Mark absent</option><option value="sick_pending">Reported sick · payment still to confirm</option><option value="sick_paid">Paid sick day (verified entitlement or employer approval)</option><option value="sick_unpaid">Unpaid sick day (verified)</option>':''}${d.monday_rotation?'<option value="workplace">Confirm workplace</option>':''}</select></label><label>Hours<input name="hours" type="number" min="0" max="24" value="${Math.floor(d.payable_seconds/3600)}"></label><label>Minutes<input name="mins" type="number" min="0" max="59" value="${Math.floor(d.payable_seconds/60)%60}"></label><label>Estimated payable minutes if hours are pending (optional)<input type="number" name="estimate" min="1" max="1440"></label>${d.monday_rotation?'<label>Workplace<select name="workplace"><option>Factory</option><option>Route</option></select></label>':''}${memo}`,f=>({action:'wages_day',employee_id:id,day,kind:f.get('kind'),estimate_minutes:f.get('kind')==='worked_pending'&&f.get('estimate')?Number(f.get('estimate')):undefined,minutes:f.get('kind')==='absent'?0:Number(f.get('hours'))*60+Number(f.get('mins')),workplace:f.get('workplace'),note:f.get('note')}));});
- actions('data-off',id=>{const r=row(id);editor(h(r.name)+' · Paid days off',r.source.days.filter(d=>d.scheduled_minutes>0&&!d.first_in&&!d.leave_days).map(d=>box(d.date,d.date,r.paid_days?.includes(d.date))).join('')+memo,f=>({action:'wages_facts',employee_id:id,paid_days:r.source.days.filter(d=>f.has(d.date)).map(d=>d.date),note:f.get('note')}));});
- actions('data-facts',id=>{const r=row(id),keys=['bonus_cents','commission_cents','meat_cents','other_deduction_cents','extra_cents'];
- editor(h(r.name)+' · Deductions and special pay',`<p>${r.issues.map(h).join('<br>')}</p>
- ${keys.map((k,i)=>input(['Weekly bonus (R)','Commission (R)','Meat deduction (R)','Other authorised deduction (R)','Sunday, holiday or additional pay (R)'][i],k,((k==='extra_cents'?(r.entered_special_cents??r.special_cents):k==='other_deduction_cents'?(r.entered_deduction_cents??r[k]):r[k])??0)/100)).join('')}
- <label>UIF treatment<select name="uif"><option value="">Keep current</option><option>Liable</option><option>Exempt</option></select></label>
- ${r.issues.some(i=>/earlier November|Earlier November earnings/.test(i))?`<label>November UIF<select name="cutover"><option value="">Choose if known</option><option>Full weekly share</option><option>Confirmed current amounts</option></select></label>${input('Current employee UIF if capped (R)','emp')}${input('Current employer UIF if capped (R)','org')}`:''}
- ${[['daily_resolved','Apply statutory daily overtime for this week (pay overlapping weekly overtime only once)'],['special_checked','I checked this holiday or weekend payment'],['short_day_checked','I included any minimum four-hour payment'],['fixed_checked','I checked the fixed weekly wage'],['weekly_bonus','The bonus was earned in this pay period'],['legacy_checked','I reconciled the previous manual week with the current earnings and deductions']].filter(([k])=>({daily_resolved:r.issues.some(x=>/agreement|compressed/.test(x)),special_checked:r.issues.some(x=>/holiday|weekend/i.test(x)),short_day_checked:r.issues.some(x=>x.includes('four-hour')),fixed_checked:r.profile?.basis==='Fixed weekly',weekly_bonus:true,legacy_checked:!!r.legacy_review})[k]).map(([k,label])=>box(label,k,r.wage_facts?.[k])).join('')}${memo}`,
- f=>({action:'wages_facts',employee_id:id,...Object.fromEntries(keys.map(k=>[k,amount(f,k)])),...Object.fromEntries(['daily_resolved','special_checked','short_day_checked','fixed_checked','weekly_bonus','legacy_checked'].map(k=>[k,f.has(k)])),uif:f.get('uif'),cutover_uif:f.get('cutover'),employee_uif:amount(f,'emp'),employer_uif:amount(f,'org'),note:f.get('note')}));});
- actions('data-amend',id=>editor(h(row(id).name)+' · Correct an earlier payslip','<label>Earlier Friday<input type="date" name="original" required></label><label>Type<select name="kind"><option>Earnings</option><option>Authorised repayment</option></select></label>'+input('Amount (R)','amount')+'<label>Correction reference<input name="reference" required></label>'+box('I have written consent or another lawful basis for a repayment deduction','authorised')+memo,f=>({action:'wages_amend',employee_id:id,original_friday:f.get('original'),kind:f.get('kind'),cents:amount(f,'amount'),reference:f.get('reference'),authorised:f.has('authorised'),note:f.get('note')})));
- actions('data-tax',id=>editor(h(row(id).name)+' · Confirm this week’s PAYE',input('PAYE for this pay period (R)','paye')+memo,f=>({action:'wages_tax',employee_id:id,paye_cents:amount(f,'paye'),note:f.get('note')})));
+ actions('data-paid',async(id,b)=>{
+  const r=row(id),method=root.querySelector('[data-method="'+id+'"]').value;
+  b.disabled=true;b.checked=false;
+  try {await save({action:'wages_pay_now',employee_ids:[id],expected_cents:r.net_cents,method,paid_on:localDay(new Date())});}
+  finally {if(b.isConnected)b.disabled=!!row(id).wage_state&&row(id).wage_state==='Paid';}
+ });
+ function report(){return {title:'Betaalstaat · '+run.pay_date,headers:headings,rows:rows.map(sheetRow),note:'* Voorlopig. Gebruik die finale bedrag wanneer die ontbrekende inligting ingevul is.',total:'Gereed en nog onbetaal · '+money(total(rows.filter(r=>confirmed(r)&&r.wage_state!=='Paid'),'net_cents'))};}
+ root.querySelector('#wage-list').onclick=()=>{const s=report();printSheet(`<section class="payroll-report"><h1>${h(s.title)}</h1><table><thead><tr>${s.headers.map(v=>'<th>'+h(v)+'</th>').join('')}</tr></thead><tbody>${s.rows.map(r=>'<tr>'+r.map(v=>'<td>'+h(v)+'</td>').join('')+'</tr>').join('')}</tbody></table><p>${h(s.note)}</p><strong>${h(s.total)}</strong></section>`,s.title);};
+ root.querySelector('#wage-pdf').onclick=async e=>{const b=e.currentTarget;b.disabled=true;try{const {downloadWages}=await import('./wage-pdf-bundle.js');await downloadWages(report(),run.pay_date);}catch{notice('Die PDF kon nie afgelaai word nie. Probeer weer of kies Druk betaalstaat.',true);}finally{b.disabled=false;}};
+ actions('data-slip',id=>{const r=row(id);printSheet(payslip({...run,status:r.wage_state,company:r.employer??run.company,paid_on:r.paid_on,approved_by:r.approved_by,approved_at:r.approved_at},{...r,profile:{...r.profile,payment_method:r.payment_method??r.profile.payment_method}}),'Loonstrokie');});
+ actions('data-reopen',id=>editor('Heropen onbetaalde loon',memo,f=>({action:'wages_reopen',employee_ids:[id],note:f.get('note')})));
+ function absence(r,selected){
+  const id=r.employee_id,days=r.source.days.filter(d=>d.scheduled_minutes>0&&d.date<=localDay(new Date()));
+  const prior=days.filter(d=>entries(leave,id,d.date).length||r.day_edits?.[d.date]||r.paid_days?.includes(d.date));
+  const conflicts=prior.map(d=>{const saved=entries(leave,id,d.date).map(e=>label(e.type)+' · '+label(e.status));const edit=r.day_edits?.[d.date];if(edit)saved.push(edit.sick_type==='sick_paid'?'Betaalde siekdag':edit.reason);if(r.paid_days?.includes(d.date))saved.push('Goedgekeurde afdag');return dayName(d.date)+' · '+saved.join(', ');});
+  editor(h(r.name)+' · Verlof',`<label>Soort afwesigheid<select name="type"><option value="Sick">Siekverlof — betaal</option><option value="Annual">Jaarlikse verlof — betaal</option><option value="Unpaid">Onbetaalde verlof</option><option value="Other paid">Ander betaalde afwesigheid</option></select></label>
+  <fieldset><legend>Watter dae?</legend>${days.map(d=>box(dayName(d.date)+' · '+hoursLabel(d.scheduled_minutes*60),d.date,d.date===selected||!selected)).join('')}</fieldset>
+  ${conflicts.length?`<p>Reeds aangeteken</p><ul>${conflicts.map(c=>'<li>'+h(c)+'</li>').join('')}</ul>${box('Vervang die vorige inskrywing op die dae wat ek gekies het.','replace')}`:''}
+  ${box('As die siekverlof op of onbekend is, keur ek betaling deur Fen Meat vir die oorblywende siekdae goed.','cover')}
+  ${input('Ekstra goedgekeurde ure bo die rooster vir hierdie hele week (opsioneel)','extra',r.wage_facts?.extra_minutes!=null?r.wage_facts.extra_minutes/60:'')}${memo}`,
+  f=>{const extra=String(f.get('extra')??'').trim();const mins=extra?parseDecimal(extra)*60:undefined;if(extra&&(!Number.isInteger(mins)||mins<0))throw Error('Vul die ekstra ure in, byvoorbeeld 5.');return {action:'wages_absence',employee_id:id,dates:days.filter(d=>f.has(d.date)).map(d=>d.date),type:f.get('type'),replace:f.has('replace'),employer_cover:f.has('cover'),extra_minutes:mins,note:f.get('note')};});
+ }
+ actions('data-absence',id=>absence(row(id)));
+ actions('data-week',id=>{const r=row(id),mins=r.wage_facts?.worked_week?.minutes;
+  editor(h(r.name)+' · Gewerkte weekure',`<p>Die vyf daginskrywings wys saam ${hoursLabel(r.source.days.reduce((n,d)=>n+d.payable_seconds,0))}. Vul die bevestigde totaal ná pouses in. Verlof en ekstra betaling tel afsonderlik.</p>${input('Ure','hours',mins!=null?Math.floor(mins/60):'',true)}${input('Minute','mins',mins!=null?mins%60:0,true)}${r.source.days.some(d=>d.payable_seconds)?box('Gebruik die bevestigde weekure indien dit van die dagure verskil.','replace'):''}${memo}`,f=>({action:'wages_worked_week',employee_id:id,minutes:whole(f,'hours',120)*60+whole(f,'mins',59),replace:f.has('replace'),note:f.get('note')}));});
+ actions('data-clock-day',(day,b)=>clockDay(b.dataset.id,day));
+ actions('data-correct',(day,b)=>{const r=row(b.dataset.id),d=r.source.days.find(x=>x.date===day);
+  editor(h(r.name)+' · '+dayName(day),`<p>Gewerk ná pouses · ${hoursLabel(d.payable_seconds)}. Rooster · ${d.scheduled_minutes==null?'onbekend':hoursLabel(d.scheduled_minutes*60)}.</p>
+  <label>Wat wil jy verander?<select name="kind"><option value="hours">Gewerkte ure ná pouses</option><option value="leave">Teken verlof aan of verander dit</option>${!d.first_in?'<option value="absent">Afwesig sonder betaling</option>':''}${d.monday_rotation?'<option value="workplace">Werkplek op Maandag</option>':''}</select></label>
+  ${input('Betaalbare ure','hours',Math.floor(d.payable_seconds/3600))}${input('Bykomende minute','mins',Math.floor(d.payable_seconds/60)%60)}${d.monday_rotation?'<label>Werkplek<select name="workplace"><option value="Factory">Fabriek</option><option value="Route">Roete</option></select></label>':''}${memo}`,
+  f=>({action:'wages_day',employee_id:r.employee_id,day,kind:f.get('kind'),minutes:f.get('kind')==='absent'?0:whole(f,'hours',24)*60+whole(f,'mins',59),workplace:f.get('workplace'),note:f.get('note')}));
+  document.querySelector('#editor [name=kind]').onchange=e=>{if(e.target.value==='leave')absence(r,day);};
+ });
+ actions('data-prior-uif',id=>editor(h(row(id).name)+' · UIF vir November',`<p>Hoeveel UIF is vir hierdie werknemer van 1 tot 15 November aangeteken? Die app gebruik dit om hierdie maand se maksimum toe te pas. Gebruik nul net as die vorige loonstaat dit bevestig.</p>${input('Werknemer se UIF reeds afgetrek (R)','emp','',true)}${input('Fen Meat se eie UIF reeds aangeteken (R)','org','',true)}${memo}`,f=>({action:'wages_prior_uif',employee_id:id,employee_cents:cents(f,'emp'),employer_cents:cents(f,'org'),note:f.get('note')})));
+ actions('data-off',id=>{const r=row(id);editor(h(r.name)+' · Goedgekeurde afdae',r.source.days.filter(d=>d.scheduled_minutes>0&&!d.first_in&&!d.leave_days).map(d=>box(d.date,d.date,r.paid_days?.includes(d.date))).join('')+memo,f=>({action:'wages_facts',employee_id:id,paid_days:r.source.days.filter(d=>f.has(d.date)).map(d=>d.date),note:f.get('note')}));});
+ actions('data-facts',id=>{const r=row(id),fields=[['bonus_cents','Weekbonus'],['commission_cents','Kommissie'],['meat_cents','Vleis op rekening'],['other_deduction_cents','Ander goedgekeurde aftrekking'],['extra_cents','Ander ekstra betaling']];
+  editor(h(r.name)+' · Aftrekkings en ekstra betaling',fields.map(([k,title])=>input(title+' (R)',k,((k==='extra_cents'?(r.entered_special_cents??r.special_cents):k==='other_deduction_cents'?(r.entered_deduction_cents??r[k]):r[k])??0)/100)).join('')+
+   '<label>UIF vir die maand<select name="uif"><option value="">Gebruik die bestaande inligting</option><option value="Liable">UIF is betaalbaar</option><option value="Exempt">Werknemer is vrygestel</option></select></label>'+
+   (r.issues?.some(i=>/earlier November|Earlier November/.test(i))?box('Die vorige loonstaat bevestig dat die volle 1% vir albei betaalbaar is.','full'):'')+
+   box('Hierdie bonus is vir werk in dieselfde week.','bonus',r.wage_facts?.weekly_bonus)+(r.profile?.basis==='Fixed weekly'?box('Die vaste weekloon en gewone ure is nagegaan.','fixed',r.wage_facts?.fixed_checked):'')+(r.legacy_review?box('Ek het die ou weekure en aftrekkings met die dagure vergelyk.','legacy'):'')+memo,
+   f=>({action:'wages_facts',employee_id:id,...Object.fromEntries(fields.map(([k])=>[k,cents(f,k)])),uif:f.get('uif'),cutover_uif:f.has('full')?'Full weekly share':undefined,weekly_bonus:f.has('bonus'),fixed_checked:f.has('fixed'),legacy_checked:f.has('legacy'),note:f.get('note')}));});
+ actions('data-tax',id=>editor(h(row(id).name)+' · Belasting vir hierdie week',input('Bevestigde belastingbedrag (R)','paye','',true)+memo,f=>({action:'wages_tax',employee_id:id,paye_cents:cents(f,'paye'),note:f.get('note')})));
+ actions('data-amend',id=>editor(h(row(id).name)+' · Vorige loonstrokie','<label>Vorige betaaldatum<input type="date" name="original" required></label><label>Regstelling<select name="kind"><option value="Earnings">Bykomende loon</option><option value="Authorised repayment">Goedgekeurde terugbetaling</option></select></label>'+input('Bedrag (R)','amount','',true)+'<label>Verwysing<input name="reference" required></label>'+box('Ek het skriftelike toestemming of ’n ander geldige rede vir hierdie aftrekking.','authorised')+memo,f=>({action:'wages_amend',employee_id:id,original_friday:f.get('original'),kind:f.get('kind'),cents:cents(f,'amount'),reference:f.get('reference'),authorised:f.has('authorised'),note:f.get('note')})));
 }
