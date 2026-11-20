@@ -14,6 +14,7 @@ const expanded=new Set();
 let group='all';
 const visible=run=>group==='casual'?run.rows.filter(r=>r.employment_type==='Casual'):run.rows;
 const status=r=>r.wage_state==='Paid'?'Betaal':r.ready||r.wage_state==='Approved'?'Gereed':'Kort inligting';
+const needsPrior=r=>!r.wage_state && (r.issues??[]).some(i=>/earlier November|Earlier November/.test(i));
 const confirmed=r=>status(r)!=='Kort inligting' && Number.isSafeInteger(r.net_cents);
 const provisional=r=>r.estimate_net_cents??r.net_cents;
 const netLabel=r=>confirmed(r)?'Bedrag om te betaal':provisional(r)!=null?'Voorlopige bedrag':r.before_tax_cents!=null?'Voorlopig vóór ontbrekende aftrekkings':'Bedrag om te betaal';
@@ -68,6 +69,7 @@ export function wagesPanel(run,leave) {
  <div class="stats payroll-stats">${[['Gereed om te betaal',money(total(due,'net_cents'))],['Gereed',due.length],['Kort inligting',rows.filter(r=>!confirmed(r)).length],['Betaal',rows.filter(r=>r.wage_state==='Paid').length]].map(([k,v])=>`<div class="stat"><strong>${v}</strong><span>${k}</span></div>`).join('')}</div>
  <div class="toolbar"><label>Wys werknemers<select id="wage-group"><option value="all">Alle werknemers</option><option value="casual" ${group==='casual'?'selected':''}>Los werkers</option></select></label>${employeeSearchField}</div>
  <div class="row-actions"><button id="wage-list">Druk betaalstaat</button><button id="wage-pdf">Laai PDF af</button></div>
+ ${run.pay_date.startsWith('2026-11')&&run.rows.some(needsPrior)?'<details><summary>Vorige UIF vir November</summary><p>As die ou loonstate wys wat elke werknemer hoogstens van 1 tot 15 November verdien het, kan jy die werknemers saam kies. Die app kyk self of hierdie week se volle UIF binne die maand se maksimum val.</p><button id="wage-earlier">Gebruik die ou loonstate</button></details>':''}
  <p>Merk Betaal sodra jy die werknemer betaal het.</p><div class="wage-list">${rows.map(r=>employeeCard(r,leave)).join('')}</div></section>`;
 }
 const headings=['Naam','Gewone ure','Oortyd','Verlof','Bruto','UIF','PAYE','Ander','Bedrag','Status'];
@@ -80,6 +82,12 @@ export function bindWages({run,leave,render,editor,save,printSheet,payslip,clock
  const actions=(attr,fn)=>root.querySelectorAll('['+attr+']').forEach(b=>b.onclick=()=>Promise.resolve().then(()=>fn(b.getAttribute(attr),b)).catch(e=>notice(wageMessage(e.message),true)));
  root.querySelector('#wage-group').onchange=e=>{group=e.target.value;render();};
  actions('data-toggle',id=>{if(expanded.has(id))expanded.delete(id);else expanded.add(id);render();});
+ const earlier=root.querySelector('#wage-earlier');
+ if(earlier)earlier.onclick=()=>{
+  const candidates=run.rows.filter(needsPrior);
+  editor('Lone van 1 tot 15 November','<p>Kies die werknemers wie se ou loonstate jy nagegaan het. Vul die hoogste totale bruto loon vir een van hulle oor die hele tydperk in. Die app gebruik dit om die maand se UIF te toets.</p>'+candidates.map(r=>box(r.name,r.employee_id)).join('')+input('Hoogste bevestigde bruto loon oor die hele tydperk (R)','upper','',true)+memo,
+   f=>({action:'wages_uif_bound',employee_ids:candidates.filter(r=>f.has(r.employee_id)).map(r=>r.employee_id),upper_cents:cents(f,'upper'),note:f.get('note')}));
+ };
  actions('data-paid',async(id,b)=>{
   const r=row(id),method=root.querySelector('[data-method="'+id+'"]').value;
   b.disabled=true;b.checked=false;

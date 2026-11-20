@@ -13,7 +13,7 @@ function exampleCases(){
   const person={id,name:'Worker '+role,code:'TEST-'+role,active:true,start_date:'2026-11-02',employment_type:i===3?'Casual':'Regular',employment_verified:true,schedules:[{from:days[0],minutes:[480,480,480,480,480,0,0]}]};
   const leave=i===0?days.map((date,n)=>({id:crypto.randomUUID(),employee_id:id,type:'Annual',date,units:1,status:n===4?'Pending':'Approved',paid_minutes:n===4?0:480,scheduled_minutes:480})):[];
   const ledger=i===0?[{id:crypto.randomUUID(),employee_id:id,type:'Annual',date:days[0],kind:'opening',units:4},...leave.slice(0,4).map(r=>({id:crypto.randomUUID(),employee_id:id,type:'Annual',date:r.date,kind:'usage',units:-1,leave_id:r.id}))]:[];
-  const shifts=i===3?days.filter(d=>d!==days[1]).map(date=>({id:crypto.randomUUID(),employee_id:id,punches:[{kind:'in',at:date+'T06:00:00Z'},{kind:'out',at:date+'T14:00:00Z'}]})):[];
+  const shifts=i===3?days.filter(d=>d!==days[1]).map((date,day)=>({id:crypto.randomUUID(),employee_id:id,revision:day+1,punches:[{kind:'in',at:date+'T06:00:00Z'},{kind:'out',at:date+'T14:00:00Z'}]})):[];
   return {role,rate,person,leave,ledger,shifts};
  });
 }
@@ -74,9 +74,9 @@ test('wage corrections keep records, contracted leave, extra hours, prior UIF, a
  await save('wages_clear_week',{employee_id:c,note:'Use original daily evidence'});assert.equal((await read(c)).gross_cents,null);
  await save('wages_worked_week',work);
  await save('wages_day',{employee_id:d,day:days[1],kind:'sick_paid',minutes:480,note:'Existing paid sick day for Tuesday'});
- const dhali=await read(d);
- assert.equal(dhali.profile.rate_cents,3023);assert.equal(dhali.leave_seconds,28800);assert.equal(dhali.overtime_seconds,0);
- if(process.env.FEN_PAYROLL_CASES)assert.deepEqual([dhali.gross_cents,dhali.estimate_net_cents],[111965,110845]);
+ const casual=await read(d);
+ assert.equal(casual.profile.rate_cents,3023);assert.equal(casual.leave_seconds,28800);assert.equal(casual.overtime_seconds,0);
+ if(process.env.FEN_PAYROLL_CASES)assert.deepEqual([casual.gross_cents,casual.estimate_net_cents],[111965,110845]);
  // Independent employee/employer November balances, with different remaining room.
  await save('wages_prior_uif',{employee_id:c,employee_cents:17650,employer_cents:17300,note:'Amounts from fixture previous pay slips'});
  const prior=await read(c);

@@ -62,10 +62,10 @@ try{
    const archive=employeeHistory(sourceFixture(),{...employees[0],source_profile:{source_name:'Synthetic worker'}},'fixture');
    await page.route('**/api/staff/imports/history?*',route=>route.fulfill({json:archive}));
    await button('Ou geskiedenis').click();
-   await button('Clock history').click();
+   await button('Klokgeskiedenis').click();
    await page.locator('#archive-day').fill('2026-11-16');
    await page.getByText(/Geen klokdae vir dié datums/).waitFor();
-   assert.equal(await button('Next days').isDisabled(),true);
+   assert.equal(await button('Volgende dae').isDisabled(),true);
    await button('Klokure').click();
    await search.pressSequentially('QA-0');
    assert.equal(await page.getByLabel('Kies werknemer').inputValue(),employees[0].id);
@@ -85,7 +85,7 @@ try{
    await page.getByLabel(/Uurregstelling in minute/).fill('12');
    await page.getByLabel('Rede vir die regstelling').fill('Synthetic adjustment '+device);
    await button('Stoor').click();await page.locator('#action-dialog').waitFor({state:'hidden'});
-   await button('Refresh draft from clock').click();await button('Stoor').click();
+   await button('Herlees klokure').click();await button('Stoor').click();
    await page.locator('#action-dialog').waitFor({state:'hidden'});
    await details.locator('summary').click();
    await monday.getByText('8h 13m',{exact:true}).waitFor();

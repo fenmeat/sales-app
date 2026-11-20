@@ -23,6 +23,21 @@ const holidays=new Set(['2026-03-21','2026-04-03','2026-04-06','2026-04-27','202
 export const isPayHoliday=date=>holidays.has(date);
 const sum=(items,f)=>items.reduce((a,i)=>a+f(i),0);
 const minimumRate=3023;
+// Frozen payslips may already cover every Friday before the new payroll began.
+function verifiedPreStartUIF(person,month,firstPayDate,runs) {
+ if(!firstPayDate?.startsWith(month)||!person.start_date)return null;
+ let date=addDays(firstPayDate,-7);
+ const total={employee:0,employer:0};
+ let counted=false;
+ while(date.startsWith(month)&&date>=person.start_date){
+  const run=runs.find(r=>r.pay_date===date&&r.status!=='Voided');
+  const row=run?.rows?.find(r=>r.employee_id===person.id&&r.included&&(posted(r)||['Approved','Paid'].includes(run.status)));
+  if(!row||!Number.isInteger(row.uif_employee_cents)||!Number.isInteger(row.uif_employer_cents))return null;
+  total.employee+=row.uif_employee_cents;total.employer+=row.uif_employer_cents;
+  counted=true;date=addDays(date,-7);
+ }
+ return counted?total:null;
+}
 export function wagePreview(row,person,run,settings,runs,openings) {
  if(posted(row))return row;
  let profile=row.profile;
@@ -78,8 +93,10 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  }
  if(profile.basis==='Fixed weekly' && !facts.fixed_checked && (!ordinaryDays.length || row.ordinary_seconds>0 && profile.fixed_cents<row.ordinary_seconds/3600*minimumRate))stop('Check the fixed wage against agreed hours and the minimum wage.');
  const month=run.pay_date.slice(0,7);
- const prior=priorFor(person.id,run.pay_date,runs.map(postedRun),settings.fresh_start?[]:openings);
- const previous=runs.filter(r=>r.pay_date<run.pay_date&&r.pay_date.slice(0,7)===month);
+ const payrollStart=settings.fresh_start?.first_pay_date;
+ const operational=payrollStart?runs.filter(r=>r.pay_date>=payrollStart):runs;
+ const prior=priorFor(person.id,run.pay_date,operational.map(postedRun),settings.fresh_start?[]:openings);
+ const previous=operational.filter(r=>r.pay_date<run.pay_date&&r.pay_date.slice(0,7)===month);
  if(previous.some(r=>r.rows.some(x=>x.employee_id===person.id && x.included) && r.pay_date>=person.start_date && !r.rows.some(x=>x.employee_id===person.id&&(posted(x)||(['Approved','Paid'].includes(r.status)&&x.included)))))stop('Confirm the earlier unpaid week for this employee before finalising monthly UIF.');
 
  const priorWeekend=row.source.weekend_days??[];
@@ -93,7 +110,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  if(!uifKnown)stop('Confirm whether this employee works at least 24 hours this month for Fen Meat.');
  const priorBound=runs.filter(r=>r.pay_date<run.pay_date && r.pay_date.slice(0,7)===month).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)).flatMap(r=>r.rows.filter(x=>x.employee_id===person.id)).find(x=>x.wage_facts?.opening_bound!=null)?.wage_facts.opening_bound;
  const bound=facts.opening_bound??priorBound;
- const earlierUif=facts.earlier_uif??previous.filter(r=>r.pay_date>=settings.fresh_start?.first_pay_date).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)).flatMap(r=>r.rows.filter(x=>x.employee_id===person.id)).find(x=>x.wage_facts?.earlier_uif)?.wage_facts.earlier_uif;
+ const earlierUif=facts.earlier_uif??previous.filter(r=>r.pay_date>=settings.fresh_start?.first_pay_date).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)).flatMap(r=>r.rows.filter(x=>x.employee_id===person.id)).find(x=>x.wage_facts?.earlier_uif)?.wage_facts.earlier_uif??verifiedPreStartUIF(person,month,payrollStart,runs);
  const cutover=settings.fresh_start && month===settings.fresh_start.start_date.slice(0,7) && (!person.start_date||person.start_date<settings.fresh_start.start_date);
  let uifAvailable=uifKnown;
  const hasCutoverChoice=['Full weekly share','Confirmed current amounts'].includes(row.cutover_uif);

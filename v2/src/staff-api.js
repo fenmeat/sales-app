@@ -155,7 +155,7 @@ export async function staffApi({request,url,env,user,bodyOf}){
   const before=current.state.people.find(p=>p.id===result.detail.employee_id),after=result.state.people.find(p=>p.id===result.detail.employee_id),statements=[];
   if(b.action==='leave_request'||b.action==='leave_decision'){
    const leave=result.state.leave.find(r=>r.id===b.record_id);
-   statements.push(await protectPayWeek(db,op,b.employee_id,[leave.date]));
+   statements.push(await protectPayWeek(db,op,leave.employee_id,[leave.date]));
   }
   if(before&&((before.active&&!after.active)||isCasual(before)!==isCasual(after))){
    const openSql=`SELECT 1 FROM v2_staff_time t WHERE employee_id=? AND t.state!='out' AND ${latestCondition}`;

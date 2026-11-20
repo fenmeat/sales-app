@@ -34,14 +34,14 @@ try{
    await db.prepare('INSERT INTO v2_staff_time VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),id,shiftId,Number(day),start,end,'out',JSON.stringify(shift),'synthetic','tester',end).run();
   }
  }
- await page.goto(origin+'/staff');await page.getByRole('button',{name:'Lone',exact:true}).click();await page.getByRole('button',{name:'Looninstellings',exact:true}).click();
+ await page.goto(origin+'/staff');await page.getByRole('button',{name:'Lone',exact:true}).click();await page.locator('[data-pay-tab=setup]').click();
  const save=async()=>{await page.getByRole('button',{name:'Stoor',exact:true}).click();await page.locator('#action-dialog').waitFor({state:'hidden'});await page.locator('#payroll-root h2').waitFor();};
  await page.getByRole('button',{name:'Voeg werkgewerbesonderhede by',exact:true}).click();assert.equal(await page.getByLabel('Geregistreerde werkgewernaam').getAttribute('inputmode'),'text');await page.getByLabel('Geregistreerde werkgewernaam').fill('Synthetic Fen Payroll QA');await page.getByLabel('Werkgeweradres').fill('1 Synthetic Street, Test Town');await page.getByLabel('Eerste betaaldatum op ’n Vrydag').fill('2026-11-20');await save();
  await page.locator('[data-pay-profile]').click();await page.getByLabel('Geldig vanaf',{exact:true}).fill('2026-01-01');await page.getByLabel('Uurtarief (R)',{exact:true}).fill('40,00');await page.getByLabel('Vaste weekloon in rand (0 vir uurloon)').fill('0');await page.getByLabel('Werk wat die persoon doen',{exact:true}).fill('Synthetic packer');await page.getByLabel(/Verwysing na ’n getekende ooreenkoms/).fill('Synthetic signed agreement');await page.getByLabel('Gewone UIF-reëling').selectOption('Liable');await page.getByLabel('Waar kom die tarief vandaan?').fill('Synthetic verified hourly rate');await save();
  await page.getByRole('button',{name:'Begin vars',exact:true}).click();await save();
  await page.getByRole('heading',{name:'Betaal werknemers',exact:true}).waitFor();
  if(fenHourly){
-  await page.getByRole('button',{name:'Looninstellings',exact:true}).click();await page.locator('[data-pay-profile]').click();
+  await page.locator('[data-pay-tab=setup]').click();await page.locator('[data-pay-profile]').click();
   await page.getByLabel('Geldig vanaf',{exact:true}).fill('2026-11-16');await page.getByLabel('Uurtarief (R)',{exact:true}).fill('38,28');
   await page.getByLabel(/Fen Meat betaal die volle uurloon/).check();await save();
  }
@@ -50,8 +50,43 @@ try{
  let current=await (await page.request.get(origin+'/api/staff')).json();
  const inactiveFacts=await page.request.post(origin+'/api/staff',{headers:{Origin:origin},data:{action:'person',revision:current.revision,request_id:crypto.randomUUID(),person:{id:incompleteId,name:'Synthetic second worker',code:'QA-PAY-02',team:'Factory',start_date:'2026-11-16',birth_date:'1990-04-03',active:true}}});
  assert.equal(inactiveFacts.status(),200);
+ current=await (await page.request.get(origin+'/api/staff')).json();
+ const schedule=await page.request.post(origin+'/api/staff',{headers:{Origin:origin},data:{action:'schedule',request_id:crypto.randomUUID(),revision:current.revision,employee_id:incompleteId,from:'2026-11-16',minutes:[480,480,480,480,480,0,0],reason:'Contracted hours in the test fixture'}});
+ assert.equal(schedule.status(),200);
  await page.reload();await page.getByRole('button',{name:'Lone',exact:true}).click();
  const open=async()=>{await page.locator('[data-wage="'+id+'"]').waitFor({state:'visible'});if(!await page.locator('[data-facts="'+id+'"]').count() && !await page.locator('[data-slip="'+id+'"]').count())await page.locator('[data-toggle="'+id+'"]').first().click();};
+ await page.locator('[data-toggle="'+incompleteId+'"]').first().click();
+ await page.locator('[data-absence="'+incompleteId+'"]').click();
+ await page.getByRole('button',{name:'Stoor',exact:true}).click();
+ await page.getByRole('alert').filter({hasText:/Kontroleer die veld/}).waitFor();
+ await page.locator('#editor [name=cover]').check();
+ await page.locator('#editor [name=extra]').fill('5');
+ await page.getByLabel('Hoekom verander jy dit?').fill('Synthetic employer paid illness and five extra hours');
+ // The second employee deliberately has no pay profile. The failed save must
+ // preserve the form and explain the rate needed for the extra hours.
+ await page.getByRole('button',{name:'Stoor',exact:true}).click();
+ await page.getByRole('alert').filter({hasText:/uurtarief/}).waitFor();
+ await page.locator('#editor [name=extra]').fill('');
+ await save();
+ const checkedStaff=await (await page.request.get(origin+'/api/staff')).json();
+ assert.equal(checkedStaff.state.leave.filter(l=>l.employee_id===incompleteId&&l.paid_minutes===480).length,5);
+ await open();
+ const wageCard=page.locator('[data-wage="'+id+'"]');
+ await wageCard.locator('.daily-breaks summary').click();
+ const clockDay=fenHourly?'2026-11-17':'2026-11-16';
+ const changeClock=async delta=>{
+  await wageCard.locator('[data-clock-day="'+clockDay+'"]').click();
+  const time=page.getByLabel('Plaaslike kloktyd').last();
+  const at=await time.inputValue(),hour=at.slice(0,14);
+  await time.fill(hour+(delta?'01':'00')+':00');
+  await page.locator('#editor [name=reason]').fill('Verified synthetic clock correction');
+  await save();
+ };
+ await changeClock(true);
+ let evidence=await (await page.request.get(origin+'/api/staff/hours?employee_id='+id+'&from='+clockDay+'&to='+clockDay)).json();
+ assert.equal(new Date(evidence.shifts[0].punches.at(-1).at).getUTCMinutes(),1);
+ await wageCard.locator('.daily-breaks summary').click();
+ await changeClock(false);
  await open();
  if(fenHourly){
   await page.getByRole('button',{name:'Ander goedgekeurde afdae',exact:true}).click();await page.getByLabel('2026-11-16').check();await page.getByLabel('Hoekom verander jy dit?').fill('Verified paid Monday');await save();

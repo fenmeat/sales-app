@@ -49,6 +49,17 @@ const messages = new Map([
  ['Partial month. Only approved app payroll is included.','Die maand is onvolledig. Slegs goedgekeurde lone is ingesluit.'],
  ['All scheduled Fridays are included. Approved app payroll by Friday pay date.','Al die geskeduleerde Vrydae se goedgekeurde lone is ingesluit.'],
  ['Production','Produksie'],['Mon','Maandag'],['Tue','Dinsdag'],['Wed','Woensdag'],['Thu','Donderdag'],['Fri','Vrydag'],['Sat','Saterdag'],['Sun','Sondag'],
+ ['Select employees once.','Merk minstens een werknemer wie se vorige loon jy nagegaan het.'],
+ ['opening','Beginsaldo'],['adjustment','Regstelling'],['usage','Verlof geneem'],['reversal','Verlof teruggeboek'],
+ ['Auto','Gebruik die klokure'],['Review','Moet nagegaan word'],['Include','Sluit in'],['Exclude','Laat uit'],['Choose','Kies een'],
+ ['Full weekly share','Volle UIF vir hierdie week'],['Confirmed current amounts','Bevestigde bedrae vir hierdie week'],
+ ['Auditor confirmed','Deur die ouditeure bevestig'],['SARS weekly table','SARS se weeklikse tabel'],
+ ['Complete','Voltooi'],['Conflict','Bedrae verskil'],['Incomplete','Onvolledig'],['Recorded','Aangeteken'],
+ ['payroll_leave','Verlof in die betaalweek reggestel'],['clock_correction','Kloktye reggestel'],['clock_exclusion','Foutiewe skof uitgesluit'],
+ ['wages_absence','Verlof reggestel'],['wages_day','Dagure reggestel'],['wages_worked_week','Weekure bevestig'],['wages_clear_week','Dagure weer gebruik'],['wages_prior_uif','Vorige UIF ingevul'],['wages_pay_now','Betaling aangeteken'],['wages_facts','Bedrae op die betaalstaat verander'],['wages_tax','Bevestigde belasting ingevul'],['wages_uif_bound','Vorige November-lone nagegaan'],['wages_approve','Loon goedgekeur'],['wages_paid','Betaling aangeteken'],['wages_reopen','Onbetaalde loon heropen'],['wages_amend','Vroeëre loonstrokie reggestel'],
+ ['Staff records changed. Reload before saving.','Die personeelrekord het intussen verander. Herlaai die blad en vergelyk die nuwe inskrywing.'],
+ ['Enter a verified upper limit for earlier UIF remuneration.','Vul die hoogste totale bruto loon volgens die ou loonstate in.'],
+ ['Choose a pay date.','Kies die Vrydag waarop hierdie week se lone betaal word.'],['Choose a Friday pay date.','Kies ’n Vrydag as betaaldatum.'],
  ['Too little information','Kort inligting'],
  ['Annual','Jaarverlof'],['Sick','Siekverlof'],['Unpaid','Onbetaalde verlof'],['Other paid','Ander betaalde afwesigheid'],['Family responsibility','Gesinsverantwoordelikheidsverlof'],
  ['Approved','Goedgekeur'],['Paid','Betaal'],['Pending','Wag vir goedkeuring'],['Cancelled','Gekanselleer'],['Declined','Afgekeur'],['Draft','Konsep'],['Voided','Teruggetrek'],['Reference','Geskiedenis'],
@@ -62,6 +73,7 @@ export function wageMessage(value) {
  const match=raw.match(/^(\d{4}-\d\d-\d\d) · (.*)$/);
  if(match)return match[1]+' · '+wageMessage(match[2]);
  if(messages.has(raw))return messages.get(raw);
+ if(/estimated at|paid as.*sick leave/.test(raw))return raw.split(' · ')[0].split(', ').map(x=>{const m=x.match(/(\d{4}-\d\d-\d\d).*?(\d+) (?:payable )?minutes/);return m?m[1]+' · voorlopig '+Math.floor(+m[2]/60)+' uur '+(+m[2]%60)+' min '+(x.includes('sick leave')?'betaalde siekverlof':'werk'):x;}).join(', ')+(raw.includes('assumes full UIF')?' · met volle UIF geraam':'');
  if(raw.startsWith('Worked with the team'))return 'Die werknemer het saam met die span gewerk. Die presiese betaalbare ure ontbreek. Vul dit by Verander hierdie dag in.';
  if(raw.includes('weekly table')||raw.includes('SARS table'))return 'Die SARS-tabel dek nie hierdie loon of tydperk nie. Vul die bevestigde belastingbedrag vir hierdie week in.';
  if(/holiday|Sunday|weekend|Saturday/.test(raw))return 'Dié dag se naweek- of vakansiedagloon kort ’n werkrooster of vorige weekure. Gaan die betrokke dag en sy tarief na.';
