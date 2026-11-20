@@ -15,10 +15,10 @@ const key='synthetic-browser-payroll-key-'.repeat(3),origin='https://localhost:8
 const bundle=await build({entryPoints:[new URL('../src/worker.js',import.meta.url).pathname],bundle:true,write:false,format:'esm',
  platform:'browser',define:{'Date.now':'qaNow'},banner:{js:`const qaNow=()=>${Date.parse('2026-11-20T15:00:00Z')};`}});
 const mf=new Miniflare(convertV4MiniflareOptions({name:'payroll-browser-test',host:'127.0.0.1',port:8798,https:true,modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-09-30',assets:{directory:fileURLToPath(new URL('../public/',import.meta.url)),binding:'ASSETS',run_worker_first:true,routerConfig:{has_user_worker:true}},d1Databases:{DB:'payroll-browser-test'},resourcePersistencePath:directory,bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alinda:key,alex:'separate-synthetic-owner-key-'+key})},outboundService:()=>{throw Error('No external traffic in payroll QA');}}));
-let browser;const errors=[];
+let browser,page;const errors=[];
 try{
  await mf.ready;const ipadSafari=process.env.STAFF_QA_WEBKIT==='1';const device=process.env.STAFF_QA_DEVICE??(ipadSafari?'iPad (gen 7)':'Desktop Chrome');browser=await (ipadSafari?webkit:chromium).launch({executablePath:process.env.STAFF_BROWSER_EXECUTABLE,headless:true,args:ipadSafari?[]:['--no-sandbox','--disable-dev-shm-usage']});
- const context=await browser.newContext({...devices[device],ignoreHTTPSErrors:true,timezoneId:'Africa/Johannesburg'}),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+ const context=await browser.newContext({...devices[device],ignoreHTTPSErrors:true,timezoneId:'Africa/Johannesburg'});page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
  page.on('response',response=>{if(response.status()>=400)console.error('QA request:',response.status(),new URL(response.url()).pathname);});
  await page.goto(origin+'/api/health');
  assert.equal((await page.request.post(origin+'/api/login',{headers:{Origin:origin},data:fenHourly?{username:'alinda',key}:{username:'alex',key:'separate-synthetic-owner-key-'+key}})).status(),200);
@@ -37,12 +37,12 @@ try{
  await page.goto(origin+'/staff');await page.getByRole('button',{name:'Lone',exact:true}).click();await page.locator('[data-pay-tab=setup]').click();
  const save=async()=>{await page.getByRole('button',{name:'Stoor',exact:true}).click();await page.locator('#action-dialog').waitFor({state:'hidden'});await page.locator('#payroll-root h2').waitFor();};
  await page.getByRole('button',{name:'Voeg werkgewerbesonderhede by',exact:true}).click();assert.equal(await page.getByLabel('Geregistreerde werkgewernaam').getAttribute('inputmode'),'text');await page.getByLabel('Geregistreerde werkgewernaam').fill('Synthetic Fen Payroll QA');await page.getByLabel('Werkgeweradres').fill('1 Synthetic Street, Test Town');await page.getByLabel('Eerste betaaldatum op ’n Vrydag').fill('2026-11-20');await save();
- await page.locator('[data-pay-profile]').click();await page.getByLabel('Geldig vanaf',{exact:true}).fill('2026-01-01');await page.getByLabel('Uurtarief (R)',{exact:true}).fill('40,00');await page.getByLabel('Vaste weekloon in rand (0 vir uurloon)').fill('0');await page.getByLabel('Werk wat die persoon doen',{exact:true}).fill('Synthetic packer');await page.getByLabel(/Verwysing na ’n getekende ooreenkoms/).fill('Synthetic signed agreement');await page.getByLabel('Gewone UIF-reëling').selectOption('Liable');await page.getByLabel('Waar kom die tarief vandaan?').fill('Synthetic verified hourly rate');await save();
+ await page.locator('[data-pay-profile]').click();await page.getByLabel('Loonkoers geldig vanaf',{exact:true}).fill('2026-01-01');await page.getByLabel('Uurtarief (R)',{exact:true}).fill('40,00');await page.getByLabel('Vaste weekloon in rand (0 vir uurloon)').fill('0');await page.getByLabel('Werk wat die persoon doen',{exact:true}).fill('Synthetic packer');await page.getByLabel(/Verwysing na ’n getekende ooreenkoms/).fill('Synthetic signed agreement');await page.getByLabel('Gewone UIF-reëling').selectOption('Liable');await page.getByLabel('Waar kom die tarief vandaan?').fill('Synthetic verified hourly rate');await save();
  await page.getByRole('button',{name:'Begin vars',exact:true}).click();await save();
  await page.getByRole('heading',{name:'Betaal werknemers',exact:true}).waitFor();
  if(fenHourly){
   await page.locator('[data-pay-tab=setup]').click();await page.locator('[data-pay-profile]').click();
-  await page.getByLabel('Geldig vanaf',{exact:true}).fill('2026-11-16');await page.getByLabel('Uurtarief (R)',{exact:true}).fill('38,28');
+  await page.getByLabel('Loonkoers geldig vanaf',{exact:true}).fill('2026-11-16');await page.getByLabel('Uurtarief (R)',{exact:true}).fill('38,28');
   await page.getByLabel(/Fen Meat betaal die volle uurloon/).check();await save();
  }
  await page.getByRole('button',{name:'Betaal werknemers',exact:true}).click();
@@ -122,4 +122,6 @@ try{
  await page.getByRole('button',{name:'Druk verslag',exact:true}).click();await page.waitForFunction(()=>window.__prints===3);assert.equal(await page.locator('#payroll-print .payslip').count(),0,'monthly print replaces selected payslip');await page.emulateMedia({media:'print'});assert.match(await page.locator('#payroll-print').innerText(),/November is onvolledig/);if(!ipadSafari)await page.pdf({path:join(out,'synthetic-month.pdf'),preferCSSPageSize:true});await page.emulateMedia({media:'screen'});
  await page.reload();await page.getByRole('button',{name:'Lone',exact:true}).click();await page.getByRole('button',{name:'Vorige weke',exact:true}).last().click();await page.getByRole('button',{name:'Maak week oop',exact:true}).click();await page.locator('[data-wage="'+id+'"] [data-state=paid]').waitFor();result=await (await page.request.get(origin+'/api/staff/payroll?pay_date=2026-11-20')).json();assert.equal(result.run.rows.find(r=>r.employee_id===id).wage_state,'Paid');assert.equal(result.run.status,'Draft');assert.equal(result.month.rows[0].uif_total_cents,2*expectedUif);assert.deepEqual(errors,[]);
  console.log('PASS: Alinda session, fresh start, existing profiles, weekly SARS PAYE, November UIF, weekly approval/payment, desktop/390px layout, persistent payslip/month print, CSV and reload. Synthetic data only.');
-}catch(error){console.error('Browser errors:',errors);throw error;}finally{await browser?.close();await mf.dispose();await rm(directory,{recursive:true,force:true});}
+}catch(error){console.error('Browser errors:',errors);
+ if(page)console.error('Synthetic screen at failure:',await page.locator('#action-dialog[open], #notice, #payroll-root h2').allTextContents().catch(()=>[]));
+ throw error;}finally{await browser?.close();await mf.dispose();await rm(directory,{recursive:true,force:true});}

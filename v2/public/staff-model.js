@@ -2,7 +2,7 @@
 export const ZONE='Africa/Johannesburg';
 export function localDay(at){return new Intl.DateTimeFormat('en-CA',{timeZone:ZONE,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(at));}
 export function clockTime(at){return new Intl.DateTimeFormat('en-GB',{timeZone:ZONE,hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(at));}
-export function hoursLabel(seconds){const mins=Math.floor(seconds/60);return `${Math.floor(mins/60)}h ${String(mins%60).padStart(2,'0')}m`;}
+export function hoursLabel(seconds){if(!Number.isFinite(seconds))return 'Onbekend';const mins=Math.floor(seconds/60);return `${Math.floor(mins/60)}h ${String(mins%60).padStart(2,'0')}m`;}
 
 export const employeeSearchField='<label>Soek werknemer<input type="search" data-employee-search autocomplete="off" placeholder="Naam, van of werknemerkode"></label><p data-no-employees hidden>Geen werknemer pas by jou soektog nie.</p>';
 const normalize=value=>String(value??'').normalize('NFD').replace(/\p{M}/gu,'').toLowerCase();

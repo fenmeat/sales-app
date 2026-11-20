@@ -48,7 +48,15 @@ function form(title,html,path,build,after,verify){
    dirty=true;busy=true;for(const x of el.elements)x.disabled=true;dialog.querySelector('[data-close]').disabled=true;button.textContent='Stoor tans…';error.textContent='';
    receipt??=await api(path,pending);
    if(verify)await verify(receipt,pending);
-   else {await readStaff(receipt.revision);if(view==='payroll')await refreshPayroll(receipt);else render();}
+   else {
+    await readStaff(receipt.revision);
+    if(path==='/api/staff/correction'){
+     const day=localDay(pending.punches[0].at);
+     const result=await api('/api/staff/hours?employee_id='+encodeURIComponent(pending.employee_id)+'&from='+day+'&to='+day);
+     const actual=result.shifts.find(s=>s.id===pending.shift_id)?.punches;
+     if(actual?.length!==pending.punches.length||!actual.every((p,i)=>p.kind===pending.punches[i].kind&&Date.parse(p.at)===Date.parse(pending.punches[i].at)))throw Error('Die kloktye kon nog nie bevestig word nie. Kies Bevestig weer om hulle terug te lees.');
+    }
+    if(view==='payroll')await refreshPayroll(receipt);else render();}
    busy=false;dirty=false;dialog.close();dialog.replaceChildren();notice('Gestoor');if(after)try{await after(receipt);}catch(e){notice('Gestoor. '+wageMessage(e.message),true);}
   }catch(err){
    busy=false;if(err.status&&!receipt)pending=null;
