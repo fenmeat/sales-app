@@ -8,6 +8,11 @@ export async function initPaStorage(db) {
     db.prepare('CREATE TABLE IF NOT EXISTS v2_pa_limits (bucket TEXT PRIMARY KEY, attempts INTEGER NOT NULL, expires INTEGER NOT NULL)'),
     db.prepare('CREATE TABLE IF NOT EXISTS v2_pa_changes (request_id TEXT PRIMARY KEY NOT NULL, request_hash TEXT NOT NULL, target TEXT NOT NULL, resource_key TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, reason TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, before_payload TEXT, after_payload TEXT NOT NULL, write_guard INTEGER NOT NULL CHECK(write_guard=1))'),
     db.prepare('CREATE INDEX IF NOT EXISTS v2_pa_changes_resource ON v2_pa_changes(target,resource_key,revision)'),
+    db.prepare(`CREATE TABLE IF NOT EXISTS v2_pa_clock_commands (
+      id TEXT PRIMARY KEY, actor TEXT NOT NULL, grant_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+      command TEXT NOT NULL, effective_at TEXT NOT NULL, requested_at TEXT NOT NULL,
+      status TEXT NOT NULL, result TEXT, finished_at TEXT, write_guard INTEGER NOT NULL DEFAULT 1 CHECK(write_guard=1))`),
+    db.prepare('CREATE INDEX IF NOT EXISTS v2_pa_clock_due ON v2_pa_clock_commands(status,effective_at)'),
     db.prepare('CREATE TABLE IF NOT EXISTS v2_pa_write_probes (id TEXT PRIMARY KEY, payload TEXT NOT NULL)'),
   ]).catch(error => { ready.delete(db); throw error; }));
   await ready.get(db);

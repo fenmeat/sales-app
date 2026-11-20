@@ -1,3 +1,4 @@
+import {openAttendance,clockReceipt} from './pa-attendance.js';
 import {check,dateKey,addDays,today} from './domain.js';
 import {isAdmin,keys} from './auth.js';
 import {readOnlyDatabase} from './pa-reads.js';
@@ -26,6 +27,8 @@ export async function readStaffData(args,env,username,scopes){
  const current=await staffState(db),state=current.state;
  const result=data=>({...data,revision:current.revision,saved_at:current.saved_at,payroll_ready:false,payroll_feature_enabled:true,warnings,connection});
  const bodyOf=()=>{throw Error('Staff connector is read-only');};
+ if(resource==='open')return {...await openAttendance(db,current),connection};
+ if(resource==='clock_receipt')return {...await clockReceipt(db,args.request_id,username),connection};
  if(resource==='summary'){
   const hasImports=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='v2_staff_imports'").first();
   const imports=hasImports?(await db.prepare('SELECT id,status,result,actor,created_at,completed_at FROM v2_staff_imports ORDER BY created_at DESC LIMIT 20').all()).results.map(r=>({...r,result:r.result?JSON.parse(r.result):null})):[];
@@ -73,7 +76,7 @@ export async function readStaffData(args,env,username,scopes){
   const q=(args.q??'').trim().toLowerCase(),offset=args.offset??0;
   const selected=state.people.filter(p=>(!args.employee_id||p.id===args.employee_id)&&(!q||(p.name+' '+p.code).toLowerCase().includes(q)));
   if(args.employee_id)check(selected.length,'Employee not found.',404);
-  return result({total:selected.length,offset,people:selected.slice(offset,offset+50).map(p=>({id:p.id,code:p.code,name:p.name,team:p.team,active:p.active,start_date:p.start_date,employment_verified:p.employment_verified!==false,schedules:p.schedules,
+  return result({total:selected.length,offset,people:selected.slice(offset,offset+50).map(p=>({id:p.id,code:p.code,name:p.name,team:p.team,employment_type:p.employment_type,active:p.active,start_date:p.start_date,employment_verified:p.employment_verified!==false,schedules:p.schedules,
    balances_as_of:today(),balances:Object.fromEntries(LEAVE_TYPES.filter(t=>t!=='Unpaid').map(t=>[t,balance(state,p.id,t,today())])),
    source_import:p.source_profile?.import_id??null,source_issues:p.source_profile?.issues??[],...(args.employee_id?{source_profile:p.source_profile??null}:{})})),
    private_profile_included:!!args.employee_id});
@@ -99,7 +102,7 @@ export async function readStaffData(args,env,username,scopes){
     .map(r=>({employee_id:r.employee_id,rotating:r.profile?.monday_rotation??(r.profile?.break_rule==='60 minutes if no break recorded'),
      days:r.source.days.filter(d=>d.date>=from&&d.date<=to).map(d=>({date:d.date,workplace:d.workplace,
       basis:d.workplace_basis,confirm:d.needs_workplace,first_in:d.first_in,last_out:d.last_out,
-      recorded_break_seconds:d.recorded_break_seconds,automatic_break_seconds:d.automatic_break_seconds,
+      recorded_break_seconds:d.recorded_break_seconds,clock_gap_seconds:d.clock_gap_seconds,automatic_break_seconds:d.automatic_break_seconds,
       adjustment_minutes:d.adjustment_minutes,payable_seconds:d.payable_seconds,paid_day_off:r.paid_days?.includes(d.date)??false}))}))};
   }
   return result({...hours,source_kind:'native_clock_and_approved_leave'});

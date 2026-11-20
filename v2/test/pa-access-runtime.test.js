@@ -32,9 +32,9 @@ async function fixture(t) {
     const r=await req('/oauth/authorize?'+query);const html=await r.text();
     return {response:r,html,verifier,handle:html.match(/name="handle" value="([^"]+)"/)?.[1],cookie:cookies(r.headers).join('; '),query};
   }
-  async function approve(start,session,write=false,staffRead=false) {return req('/oauth/authorize',{form:{handle:start.handle,decision:'approve',...(write?{write_access:'yes'}:{}),...(staffRead?{staff_read_access:'yes'}:{})},headers:{Cookie:[start.cookie,session].filter(Boolean).join('; ')}});}
+  async function approve(start,session,write=false,staffRead=false,staffWrite=false) {return req('/oauth/authorize',{form:{handle:start.handle,decision:'approve',...(write?{write_access:'yes'}:{}),...(staffRead?{staff_read_access:'yes'}:{}),...(staffWrite?{staff_write_access:'yes'}:{})},headers:{Cookie:[start.cookie,session].filter(Boolean).join('; ')}});}
   async function exchange(client,code,verifier='p'.repeat(64),extra={}) {return req('/oauth/token',{form:{grant_type:'authorization_code',client_id:client.client_id,code,code_verifier:verifier,redirect_uri:callback,resource:origin+'/mcp',...extra}});}
-  async function connect(write=false,username='alex',staffRead=false) {const session=await login(username),c=await client(),start=await begin(c);assert.equal(start.response.status,200,start.html);assert.equal(start.response.headers.get('referrer-policy'),'same-origin');const response=await approve(start,session,write,staffRead);assert.equal(response.status,302,await response.clone().text());const location=new URL(response.headers.get('location'));assert.equal(location.origin,'https://chatgpt.com');assert.equal(location.searchParams.get('iss'),origin);assert.equal(location.searchParams.get('state'),'synthetic-state');const code=location.searchParams.get('code'),r=await exchange(c,code);assert.equal(r.status,200,await r.clone().text());const tokens=await r.json();assert.ok(tokens.refresh_token);return {session,client:c,tokens,code,start};}
+  async function connect(write=false,username='alex',staffRead=false,staffWrite=false) {const session=await login(username),c=await client(),start=await begin(c);assert.equal(start.response.status,200,start.html);assert.equal(start.response.headers.get('referrer-policy'),'same-origin');const response=await approve(start,session,write,staffRead,staffWrite);assert.equal(response.status,302,await response.clone().text());const location=new URL(response.headers.get('location'));assert.equal(location.origin,'https://chatgpt.com');assert.equal(location.searchParams.get('iss'),origin);assert.equal(location.searchParams.get('state'),'synthetic-state');const code=location.searchParams.get('code'),r=await exchange(c,code);assert.equal(r.status,200,await r.clone().text());const tokens=await r.json();assert.ok(tokens.refresh_token);return {session,client:c,tokens,code,start};}
   async function rpc(tokens,method,params={}) {const r=await req('/mcp',{body:{jsonrpc:'2.0',id:1,method,params},headers:{Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-06-18',...(tokens?{Authorization:'Bearer '+tokens.access_token}:{})}});const text=await r.text();if(r.ok)assert.ok(text,'Empty RPC response: '+method+' '+(params.name??''));return {response:r,data:text?JSON.parse(text):{}};}
   return {mf,db,req,login,client,begin,approve,exchange,connect,rpc};
 }
@@ -187,7 +187,7 @@ test('OAuth discovery, owner consent, SDK handshake, all seven read tools and da
   const unauth=await f.rpc(null,'tools/list');assert.equal(unauth.response.status,401);assert.match(unauth.response.headers.get('www-authenticate'),/oauth-protected-resource/);
   const {tokens,session}=await f.connect();
   const init=await f.rpc(tokens,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'synthetic',version:'1'}});assert.equal(init.response.status,200);assert.equal(init.data.result.serverInfo.name,'fenmeat-read-access');
-  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,18);for(const tool of list.data.result.tools){const write=['save_app_data','restore_app_change','test_app_write_access','save_task','acknowledge_task_sync'].includes(tool.name);assert.equal(tool.annotations.readOnlyHint,!write);assert.deepEqual(tool._meta.securitySchemes[0].scopes,write?['fenmeat:read','fenmeat:write']:tool.name==='get_staff_data'?['fenmeat:read',STAFF_READ_SCOPE]:['fenmeat:read']);}
+  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,19);for(const tool of list.data.result.tools){const write=['save_app_data','restore_app_change','test_app_write_access','save_task','acknowledge_task_sync','save_staff_attendance'].includes(tool.name);assert.equal(tool.annotations.readOnlyHint,!write);assert.deepEqual(tool._meta.securitySchemes[0].scopes,tool.name==='save_staff_attendance'?['fenmeat:read',STAFF_READ_SCOPE,'fenmeat:staff:write']:write?['fenmeat:read','fenmeat:write']:tool.name==='get_staff_data'?['fenmeat:read',STAFF_READ_SCOPE]:['fenmeat:read']);}
   for(const [name,args] of [['get_catalog',{}],['get_sales',{from:'2026-10-12',to:'2026-10-12'}],['get_forecast',{date:'2026-10-13',route:'MB'}],['get_production',{date:'2026-10-12'}],['get_recipes',{}],['get_material_stock',{}],['get_order_requirements',{from:'2026-10-12',to:'2026-10-12'}]]) {
     const r=await f.rpc(tokens,'tools/call',{name,arguments:args});assert.equal(r.response.status,200);assert.equal(r.data.result?.isError,undefined,JSON.stringify(r.data));assert.equal(r.data.result.structuredContent.connection.access,'read_only');
     if(name==='get_production')assert.equal(r.data.result.structuredContent.source_kind,'unsaved_suggestion');
@@ -393,4 +393,113 @@ test('authorised MCP creates and edits one five-step task, reads progress, and r
  const ready=await read();assert.equal(ready.status,'Pending');assert.equal(ready.ready_for_approval,true);assert.equal(ready.progress.percent,100);
  assert.equal((await edit('approve_workflow',{note:'All checks passed'})).status,'Complete');
  assert.equal((await f.db.prepare('SELECT COUNT(DISTINCT task_id) n FROM v2_task_events').first()).n,1);
+});
+
+async function clockFixture(t){
+ const f=await fixture(t),alex=await f.connect(false,'alex',true,true),alinda=await f.connect(false,'alinda',true,true);
+ const [a,b,c,d]=Array.from({length:4},()=>crypto.randomUUID());
+ const people=[a,b,c,d].map((id,i)=>({id,code:'TEST-'+i,name:'Synthetic '+i,employment_type:'Casual',active:true,start_date:'2026-01-01',schedules:[]}));
+ await f.db.prepare('INSERT INTO v2_staff_register VALUES(1,?,?,?,?,?)').bind(JSON.stringify({people,leave:[],ledger:[]}),'fixture','test',new Date().toISOString(),'{}').run();
+ const save=(who,cmd)=>ok(f,who.tokens,'save_staff_attendance',{command:{request_id:crypto.randomUUID(),...cmd}});
+ const read=(who,id)=>ok(f,who.tokens,'get_staff_data',{query:{resource:'clock_receipt',request_id:id}});
+ return {f,alex,alinda,a,b,c,d,save,read};
+}
+
+test('Attendance OAuth from both accounts through MCP to native shifts, individual receipts and payroll',async t=>{
+ const {f,alex,alinda,a,b,c,d,save,read}=await clockFixture(t);
+ const old=await f.connect(true,'alex',true);
+ const monday='2026-11-16T',command={request_id:crypto.randomUUID(),action:'in',employee_ids:[a],local_time:monday+'08:00'};
+ assert.equal((await f.rpc(old.tokens,'tools/call',{name:'save_staff_attendance',arguments:{command}})).response.status,403);
+ const status=await ok(f,alex.tokens,'get_access_status');assert.equal(status.staff_write_access,true);assert.equal(status.write_access,false);
+ const start=await save(alex,command);assert.equal(start.employees[0].verified,true);
+ assert.deepEqual(await save(alex,command),start);
+ assert.equal((await call(f,alinda.tokens,'get_staff_data',{query:{resource:'clock_receipt',request_id:start.request_id}})).isError,true);
+ let result=await save(alex,{action:'out',employee_ids:[a],local_time:monday+'10:00'});assert.equal(result.employees[0].verified,true);
+ await save(alinda,{action:'in',employee_ids:[a,b,c],local_time:monday+'11:00'});
+ await save(alinda,{action:'out',employee_ids:[c],local_time:monday+'13:00'});
+ assert.equal((await ok(f,alinda.tokens,'get_staff_data',{query:{resource:'open'}})).people.length,2);
+ const group={action:'out',group:'active_casuals',local_time:monday+'15:00'};
+ result=await save(alex,group);
+ assert.deepEqual(result.employees.map(r=>r.status),['saved','saved','already_out','no_shift']);
+ assert.deepEqual((await read(alex,result.request_id)).employees,result.employees);
+ assert.deepEqual((await save(alinda,group)).employees.map(r=>r.status),['already_out','already_out','already_out','no_shift']);
+ const forA=result.employees.find(p=>p.employee_id===a);
+ const correction={action:'correct',employee_ids:[a],local_time:monday+'16:30',correction:{shift_id:forA.shift_id,shift_revision:forA.revision,punch:'out',reason:'Synthetic supervisor confirmed time'}};
+ const corrected=await save(alinda,correction);assert.equal(corrected.actor,'alinda');assert.equal(corrected.employees[0].original_at,'2026-11-16T13:00:00.000Z');assert.equal(corrected.employees[0].verified,true);
+ assert.equal((await save(alinda,correction)).employees[0].status,'blocked');
+ const payroll=await ok(f,alex.tokens,'get_staff_data',{query:{resource:'hours',employee_id:a,from:'2026-11-16',to:'2026-11-16'}});
+ assert.equal(payroll.shifts.length,2);assert.equal(payroll.payroll_hours.rows[0].days[0].payable_seconds,7.5*3600);
+ const count=await f.db.prepare('SELECT COUNT(*) n FROM v2_staff_payroll').first();assert.equal(count.n,0);
+ const mixed=await save(alex,{action:'in',employee_ids:[d,crypto.randomUUID()],local_time:monday+'08:00'});
+ assert.equal(mixed.status,'partial');assert.equal(mixed.employees.filter(p=>p.verified).length,1);
+ const grants=(await(await f.req('/api/pa/connections',{headers:{Cookie:alinda.session}})).json()).grants;assert.equal(grants[0].staff_write_access,true);
+ for(const username of ['xalinda','xavier']){
+  const session=await f.login(username),client=await f.client(),auth=await f.begin(client);
+  assert.equal((await f.approve(auth,session,false,true,true)).status,403);
+ }
+});
+
+test('Future attendance runs once at the due time, rechecks shifts and honours revocation',async t=>{
+ const {f,alex,alinda,a,b,save,read}=await clockFixture(t);
+ const {dueAttendance}=await import('../src/pa-attendance.js');
+ const env={DB:f.db,APP_ACCESS_KEYS:JSON.stringify({alex:key,alinda:adminKey})};
+ const future=new Date(Date.now()+600000);future.setUTCSeconds(0,0);
+ const local=new Date(future.getTime()+7200000).toISOString().slice(0,16);
+ await save(alex,{action:'in',employee_ids:[a,b]});
+ const job=await save(alex,{action:'out',group:'active_casuals',local_time:local});
+ assert.equal(job.status,'scheduled');assert.equal(job.employees,undefined);
+ await dueAttendance(env);assert.equal((await read(alex,job.request_id)).status,'scheduled');
+ await save(alinda,{action:'out',employee_ids:[b]});
+ const revoked=await save(alinda,{action:'out',employee_ids:[a],local_time:local});
+ const grant=(await(await f.req('/api/pa/connections',{headers:{Cookie:alinda.session}})).json()).grants[0];
+ await f.req('/api/pa/connections',{body:{grant_id:grant.id},headers:{Cookie:alinda.session}});
+ t.mock.timers.enable({apis:['Date'],now:future.getTime()+1000});
+ await dueAttendance(env);await dueAttendance(env);
+ const done=await read(alex,job.request_id);assert.equal(done.status,'completed');
+ assert.equal(done.employees.find(p=>p.employee_id===a).verified,true);
+ assert.equal(done.employees.find(p=>p.employee_id===b).status,'already_out');
+ assert.equal((await f.db.prepare('SELECT status FROM v2_pa_clock_commands WHERE id=?').bind(revoked.request_id).first()).status,'denied');
+});
+
+test('Attendance corrections keep breaks and original punches, reject overlaps and protect locked weeks',async t=>{
+ const {f,alex,a,save}=await clockFixture(t);
+ const day='2026-11-17',id=crypto.randomUUID(),iso=time=>new Date(day+'T'+time+':00+02:00').toISOString();
+ const punches=[['in','08:00'],['break_start','10:00'],['break_end','10:30'],['out','12:00']].map(([kind,time])=>({kind,at:iso(time)}));
+ const payload=JSON.stringify({id,employee_id:a,punches});
+ await f.db.prepare('INSERT INTO v2_staff_time VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(crypto.randomUUID(),a,id,1,iso('08:00'),iso('12:00'),'out',payload,'punch','fixture',iso('12:00')).run();
+ await save(alex,{action:'in',employee_ids:[a],local_time:day+'T13:00'});
+ await save(alex,{action:'out',employee_ids:[a],local_time:day+'T15:00'});
+ const command={action:'correct',employee_ids:[a],correction:{shift_id:id,shift_revision:1,punch:'out',reason:'Synthetic review'}};
+ assert.equal((await save(alex,{...command,local_time:day+'T13:30'})).employees[0].status,'blocked');
+ const fixed=await save(alex,{...command,local_time:day+'T12:30'});
+ assert.equal(fixed.employees[0].verified,true);
+ const rows=(await f.db.prepare('SELECT payload FROM v2_staff_time WHERE shift_id=? ORDER BY revision').bind(id).all()).results;
+ assert.equal(rows[0].payload,payload);
+ assert.deepEqual(JSON.parse(rows[1].payload).punches.slice(0,3),punches.slice(0,3));
+ const hours=await ok(f,alex.tokens,'get_staff_data',{query:{resource:'hours',employee_id:a,from:day,to:day}});
+ const dayHours=hours.payroll_hours.rows[0].days[0];
+ assert.equal(dayHours.clock_gap_seconds,1800);
+ assert.equal(dayHours.recorded_break_seconds,3600);
+ assert.equal(hours.payroll_hours.rows[0].days[0].payable_seconds,6*3600);
+ await f.db.prepare('INSERT INTO v2_staff_payroll VALUES(1,?,?,?,?,?)').bind('run:2026-11-20',JSON.stringify({status:'Paid'}),'fixture','test',iso('16:00')).run();
+ assert.equal((await save(alex,{...command,local_time:day+'T12:40'})).status,'blocked');
+ const pre=await call(f,alex.tokens,'save_staff_attendance',{command:{request_id:crypto.randomUUID(),action:'in',employee_ids:[a],local_time:'2026-11-13T08:00'}});
+ assert.equal(pre.isError,true);
+});
+
+test('Duplicate simultaneous requests produce one punch, and an overdue scheduled punch expires',async t=>{
+ const {f,alex,a,save,read}=await clockFixture(t);
+ const command={request_id:crypto.randomUUID(),action:'in',employee_ids:[a]};
+ const [first,second]=await Promise.all([save(alex,command),save(alex,command)]);
+ assert.equal(first.employees[0].verified,true);assert.deepEqual(second.employees,first.employees);
+ assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM v2_staff_time').first()).n,1);
+ const changed=await call(f,alex.tokens,'save_staff_attendance',{command:{...command,action:'out'}});
+ assert.equal(changed.isError,true);
+ const local=new Date(Date.now()+7200000+10*60000).toISOString().slice(0,16);
+ const job=await save(alex,{action:'out',group:'active_casuals',local_time:local});
+ t.mock.timers.enable({apis:['Date'],now:Date.parse(job.effective_at)+3*60000});
+ const {dueAttendance}=await import('../src/pa-attendance.js');
+ await dueAttendance({DB:f.db,APP_ACCESS_KEYS:JSON.stringify({alex:key})});
+ assert.equal((await read(alex,job.request_id)).status,'expired');
+ assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM v2_staff_time').first()).n,1);
 });
