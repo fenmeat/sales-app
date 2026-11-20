@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFile} from 'node:fs/promises';
 import {build} from 'esbuild';
+import {wagesPanel} from '../public/pay-wages-ui.js';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 
 const date='2026-11-20';
@@ -48,6 +49,8 @@ test('wage corrections keep records, contracted leave, extra hours, prior UIF, a
  await save('fresh_start');
  const [a,b,c,d]=examples.map(x=>x.person.id);
  const read=async id=>(await get()).run.rows.find(r=>r.employee_id===id);
+ const firstView=await get();
+ assert.match(wagesPanel(firstView.run,register.leave),/jaarverlof wag op goedkeuring/);
  const absence=(id,extra={})=>({employee_id:id,dates:days,type:'Sick',note:'Confirmed absence and employer-approved additional pay',extra_minutes:300,...extra});
  // An unsuccessful reclassification cannot even partially reverse a balance.
  await save('wages_absence',absence(a),409);

@@ -31,6 +31,14 @@ const item=(title,value)=>`<div><dt>${h(title)}</dt><dd>${h(value)}</dd></div>`;
 const when=at=>new Date(at).toLocaleString('af-ZA',{timeZone:'Africa/Johannesburg'});
 const entries=(leave,id,date)=>leave.filter(x=>x.employee_id===id&&x.date===date&&['Approved','Pending'].includes(x.status));
 const dayName=date=>new Intl.DateTimeFormat('af-ZA',{timeZone:'Africa/Johannesburg',weekday:'long',day:'numeric',month:'short'}).format(new Date(date+'T12:00Z'));
+function employeeIssue(row,leave,issue){
+ const missing=issue.match(/^(\d{4}-\d\d-\d\d) · (?:Correct hours or mark absent|Confirm attendance or mark absent)\.$/);
+ if(missing){
+  const pending=entries(leave,row.employee_id,missing[1]).find(x=>x.status==='Pending');
+  if(pending)return dayName(missing[1])+' se '+label(pending.type).toLocaleLowerCase('af-ZA')+' wag op goedkeuring. Dié dag is nog nie by die loon ingereken nie. Kies Verlof en dan Gaan na by die aansoek.';
+ }
+ return wageMessage(issue);
+}
 function dayDetails(r,leave) {
  return r.source.days.map(d=>{
   const edit=r.day_edits?.[d.date];
@@ -42,7 +50,7 @@ function dayDetails(r,leave) {
  }).join('');
 }
 function detail(r,leave) {
- const id=r.employee_id,issues=[...new Set((r.issues??[]).map(wageMessage))];
+ const id=r.employee_id,issues=[...new Set((r.issues??[]).map(i=>employeeIssue(r,leave,i)))];
  const actions=r.wage_state?`<button data-slip="${id}">Druk loonstrokie</button> ${r.wage_state==='Approved'?`<button data-reopen="${id}">Heropen onbetaalde loon</button>`:''}`:
  `<button data-absence="${id}">Teken verlof aan of verander dit</button><button data-week="${id}">Bevestig gewerkte weekure</button>${r.wage_facts?.worked_week?`<button data-clear-week="${id}">Gebruik weer die dagure</button>`: ''}<button data-pay-profile="${id}">Loonkoers</button><button data-facts="${id}">Aftrekkings en ekstra betaling</button>
  ${r.paye_cents==null&&r.gross_cents!=null?`<button data-tax="${id}">Vul bevestigde belasting in</button>`:''}
@@ -64,7 +72,7 @@ function employeeCard(r,leave) {
  <div class="wage-head"><div><button class="wage-name" data-toggle="${id}" aria-expanded="${expanded.has(r.employee_id)}">${h(r.name)}</button> <span class="wage-status" data-state="${paid?'paid':ready?'ready':'open'}">${status(r)}</span></div>
  <div class="wage-net"><small>${netLabel(r)}</small><strong>${money(displayNet(r))}</strong></div></div>
  <dl class="wage-values">${item('Gewone ure',hoursLabel(r.ordinary_seconds))}${item('Oortydure',hoursLabel(r.overtime_seconds))}${item('Betaalde verlof',hoursLabel(r.leave_seconds))}${item('Bruto loon',money(r.gross_cents))}${item('UIF-aftrekking',uifAmount(r,'employee'))}${item('Belasting (PAYE)',money(r.paye_cents))}${item('Ander aftrekkings',money(other))}</dl>
- ${!ready&&r.issues?.length?`<p class="wage-next">${h(wageMessage(r.issues[0]))}</p>`:''}
+ ${!ready&&r.issues?.length?`<p class="wage-next">${h(employeeIssue(r,leave,r.issues[0]))}</p>`:''}
  <div class="wage-foot"><button data-toggle="${id}" aria-expanded="${expanded.has(r.employee_id)}">${expanded.has(r.employee_id)?'Vou toe':'Maak oop'}</button>
  ${ready&&!paid?`<label>Betaalmetode <select aria-label="Betaalmetode vir ${h(r.name)}" data-method="${id}">${['Bank','Cash'].map(m=>`<option value="${m}" ${m===r.profile?.payment_method?'selected':''}>${label(m)}</option>`).join('')}</select></label>`:''}
  <label class="check wage-check"><input type="checkbox" data-paid="${id}" aria-label="Betaal ${h(r.name)}" ${paid?'checked disabled':ready?'':'disabled'}> Betaal</label>
