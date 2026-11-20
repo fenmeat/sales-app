@@ -8,7 +8,7 @@ export const PAYROLL_SCHEMA=[
  `CREATE INDEX IF NOT EXISTS v2_staff_payroll_entity ON v2_staff_payroll(entity_key,revision)`
 ];
 async function savedState(db){
- const all=(await db.prepare(`SELECT p.* FROM v2_staff_payroll p WHERE NOT EXISTS (SELECT 1 FROM v2_staff_payroll n WHERE n.entity_key=p.entity_key AND n.revision>p.revision)`).all()).results;
+ const all=(await db.prepare(`SELECT p.* FROM v2_staff_payroll p JOIN (SELECT MAX(revision) revision FROM v2_staff_payroll GROUP BY entity_key) latest ON p.revision=latest.revision ORDER BY p.revision`).all()).results;
  const records=all.map(r=>({...JSON.parse(r.payload),saved_revision:r.revision,saved_at:r.saved_at,saved_by:r.actor}));
  return {revision:Math.max(0,...all.map(r=>r.revision)),settings:records.find(r=>r.key==='settings')??{key:'settings',company:null,profiles:[]},openings:records.filter(r=>r.key.startsWith('opening:')),runs:records.filter(r=>r.key.startsWith('run:'))};
 }

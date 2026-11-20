@@ -9,6 +9,17 @@ export const LEDGER_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_zoho_mirror_imports(id TEXT PRIMARY KEY,manifest TEXT NOT NULL,status TEXT NOT NULL,actor TEXT NOT NULL,created_at TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_zoho_mirror_parts(import_id TEXT NOT NULL,part INTEGER NOT NULL,digest TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(import_id,part))`,
  `CREATE TABLE IF NOT EXISTS v2_zoho_mirror_records(kind TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,digest TEXT NOT NULL,run_id TEXT NOT NULL,PRIMARY KEY(kind,id))`,
+ // Initialise existing mirrors once, then count additions in the same D1
+ // transaction as the record. An existing-record UPSERT changes no count.
+ `CREATE TABLE IF NOT EXISTS v2_zoho_record_counts(kind TEXT PRIMARY KEY,count INTEGER NOT NULL)`,
+ `INSERT INTO v2_zoho_record_counts SELECT kind,COUNT(*) FROM v2_zoho_mirror_records GROUP BY kind
+   LIMIT (CASE WHEN EXISTS(SELECT 1 FROM v2_zoho_record_counts) THEN 0 ELSE -1 END)`,
+ `CREATE TRIGGER IF NOT EXISTS v2_zoho_record_added AFTER INSERT ON v2_zoho_mirror_records BEGIN
+   INSERT INTO v2_zoho_record_counts VALUES(NEW.kind,1) ON CONFLICT(kind) DO UPDATE SET count=count+1;
+ END`,
+ `CREATE TRIGGER IF NOT EXISTS v2_zoho_record_removed AFTER DELETE ON v2_zoho_mirror_records BEGIN
+   UPDATE v2_zoho_record_counts SET count=count-1 WHERE kind=OLD.kind;
+ END`,
  `CREATE TABLE IF NOT EXISTS v2_zoho_mirror_versions(run_id TEXT NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,payload TEXT NOT NULL,digest TEXT NOT NULL,PRIMARY KEY(run_id,kind,id))`,
  `CREATE TABLE IF NOT EXISTS v2_zoho_mirror_runs(id TEXT PRIMARY KEY,status TEXT NOT NULL,started_at TEXT NOT NULL,finished_at TEXT,state TEXT NOT NULL,lease TEXT,lease_until INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,error TEXT)`,
  `CREATE UNIQUE INDEX IF NOT EXISTS v2_zoho_one_active ON v2_zoho_mirror_runs(status) WHERE status='running'`,
@@ -36,7 +47,7 @@ function reportPage(report,page){return {...report,lines:report.lines.slice((pag
 export async function ledgerStatus(db,{date,page=1,job_id}={}){
  await ensureLedger(db);const c=await control(db),job=await active(db);
  const runs=await queryRows(db,'SELECT id,status,started_at,finished_at,error FROM v2_zoho_mirror_runs ORDER BY started_at DESC LIMIT 5');
- const counts=await queryRows(db,'SELECT kind,COUNT(*) count FROM v2_zoho_mirror_records GROUP BY kind');
+ const counts=await queryRows(db,'SELECT kind,count FROM v2_zoho_record_counts WHERE count>0 ORDER BY kind');
  const config=c?JSON.parse(c.config):{},progress=job?JSON.parse(job.state):null;
  const status={available:true,enabled:!!c?.enabled,activation_pending:!!config.activate_after_success,revision:c?.revision??0,schedule:'22:00 Africa/Johannesburg',last_success:c?.last_success??null,baseline:c?.baseline??null,counts,running:job?{id:job.id,phase:progress.phase,page:progress.page,queued:progress.queue.length,calls:progress.calls,changed:progress.changed,error:job.error,retry_at:job.retry_at}:null,runs};
  if(job_id){
@@ -180,7 +191,7 @@ async function startRun(db){
 export async function scheduledLedger(env,event,options={}){
  await ensureLedger(env.DB);const c=await control(env.DB);if(!c||!c.enabled&&!JSON.parse(c.config).activate_after_success)return;
  if(c.enabled&&event.cron==='0 20 * * *')await startRun(env.DB);
- if(await active(env.DB))await advanceLedger(env,{maxCalls:20,...options});
+ await advanceLedger(env,{maxCalls:20,...options});
 }
 export async function advanceLedger(env,{read=readFenBooks,maxCalls=4,retryNow=false}={}){
  const db=env.DB;await ensureLedger(db);const job=await active(db);if(!job)return {idle:true};
@@ -196,6 +207,7 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4,retryNow=f
  try{
   while(used<maxCalls){
    if(state.phase==='finish'&&!state.queue.length){
+    let checkedGeneration;
     if(!state.payment_links_checked){
      // R02 payment exports can name an invoice outside their invoice cutoff
      // without its source ID. Once that Britos invoice is present, fetch only
@@ -203,8 +215,9 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4,retryNow=f
      const all=await generation(db,job.id),invoices=[...all.values()].filter(r=>r.kind==='invoice'&&r.value.lines.some(l=>cfg.mapping[l.item_id]?.owner)).map(r=>r.value);
      for(const r of all.values())if(r.kind==='payment'&&r.value.allocations.some(a=>!a.invoice_id&&invoices.some(i=>i.number===a.number&&i.customer_id===r.value.customer_id)))state.queue.push({kind:'payment_lookup',id:r.id,customer_id:r.value.customer_id,date:r.value.date,page:1});
      state.payment_links_checked=true;await checkpoint([]);if(state.queue.length)continue;
+     checkedGeneration=all;
     }
-    await commitRun(db,job.id,token,state,cfg);return {complete:true,run_id:job.id,calls:state.calls,changed:state.changed,unchanged:state.unchanged};
+    await commitRun(db,job.id,token,state,cfg,checkedGeneration);return {complete:true,run_id:job.id,calls:state.calls,changed:state.changed,unchanged:state.unchanged};
    }
    if(state.queue.length){
     if(state.queue[0].kind==='payment_lookup'){
@@ -271,8 +284,8 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4,retryNow=f
   return {failed:true,resumable:true,run_id:job.id,error:safeError(e),retry_at:retry};
  }finally{await db.prepare('UPDATE v2_zoho_mirror_runs SET lease=NULL,lease_until=0 WHERE id=? AND lease=?').bind(job.id,token).run();}
 }
-async function commitRun(db,runId,token,state,cfg){
- const all=await generation(db,runId);
+async function commitRun(db,runId,token,state,cfg,checkedGeneration){
+ const all=checkedGeneration??await generation(db,runId);
  const payments=[...all.values()].filter(r=>r.kind==='payment').map(r=>r.value),statements=[];
  if(state.inventory){
   const missing=[...all.values()].filter(r=>r.value.date>='2026-10-14'&&!state.inventory_ids[r.kind].includes(r.id));

@@ -101,7 +101,11 @@ const provider=new OAuthProvider({
   }},
 });
 const integrationPath=path=>path==='/mcp'||path.startsWith('/mcp/')||path.startsWith('/oauth/')||path.startsWith('/.well-known/oauth-')||path==='/api/pa/connections';
-export default {async scheduled(event,env,ctx){const results=await Promise.allSettled([queueTaskReminders(env).then(()=>flushTaskPush(env)),scheduledLedger(env,event)]);results.forEach((r,i)=>{if(r.status==='rejected')console.error('FenMeat scheduled operation failed: '+i);});},async fetch(request,env,ctx) {
+export default {async scheduled(event,env,ctx){const jobs=[];
+  // Both daily cron times also have a five-minute tick.
+  if(event.cron==='*/5 * * * *')jobs.push(queueTaskReminders(env).then(()=>flushTaskPush(env)));
+  if(event.cron!=='0 6 * * *')jobs.push(scheduledLedger(env,event));
+  const results=await Promise.allSettled(jobs);results.forEach((r,i)=>{if(r.status==='rejected')console.error('FenMeat scheduled operation failed: '+i);});},async fetch(request,env,ctx) {
   const url=new URL(request.url),path=url.pathname;
   if(['/pa-access','/pa-access/'].includes(path)&&request.method==='GET')return page(`<p>ChatGPT kan met jou toestemming FenMeat se data lees en verander. Elke verbinding se toegang verskyn hieronder. Vir Staff: herverbind die bestaande FenMeat-koppeling in ChatGPT en merk “Laat Staff-leestoegang toe” op die FenMeat-toestemmingsblad. Behou “Laat ook skryftoegang toe” indien jy steeds Sales en Production deur ChatGPT wil wysig. Staff is slegs lees. Bestaande verbindings kry nie vanself Staff-toegang nie.</p><section id="connections" hidden><h2>Verbindings</h2><div id="grants"></div></section><p>Om te koppel: open ChatGPT se Plugins, kies + en Add custom MCP server. Gebruik OAuth en hierdie adres:</p><p class="endpoint">${RESOURCE}</p>`);
   if(!integrationPath(path))return app.fetch(request,env,ctx);

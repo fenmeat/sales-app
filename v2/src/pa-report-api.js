@@ -2,7 +2,7 @@ import {taskOwner} from './task-workflow.js';
 import {originalFileBytes} from './task-files.js';
 import {check,UserError,dateKey,today} from './domain.js';
 import {workPage} from './task-pa-work.js';
-import {ensureTaskSchema,getTask,saveTask,latestSQL,decode} from './tasks-api.js';
+import {ensureTaskSchema,getTask,saveTask,latestSQL,taskHeadJoin,decode} from './tasks-api.js';
 import {EMAIL_SCHEMA,changeMail,readMail,mailReview,mailActions,mailSummaries,mailWork,projectMail} from './pa-email.js';
 import {isTaskManager,fullTaskAccess,taskVisibility} from './task-access.js';
 import {hash,isAdmin,keys} from './auth.js';
@@ -28,6 +28,7 @@ export const PA_REPORT_SCHEMA=[
  `CREATE INDEX IF NOT EXISTS v2_pa_report_attempts_feedback ON v2_pa_report_attempts(feedback_id,created_at)`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_files (id TEXT PRIMARY KEY,subject_key TEXT NOT NULL,actor TEXT NOT NULL,fingerprint TEXT NOT NULL,mime_type TEXT NOT NULL,filename TEXT NOT NULL,bytes BLOB NOT NULL,created_at TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_alerts (id TEXT PRIMARY KEY,username TEXT NOT NULL,subject_key TEXT NOT NULL,kind TEXT NOT NULL,created_at TEXT NOT NULL,read_at TEXT,push_sent_at TEXT,push_attempts INTEGER NOT NULL DEFAULT 0,next_attempt TEXT)`,
+ `CREATE INDEX IF NOT EXISTS v2_pa_push_pending ON v2_pa_report_alerts(created_at) WHERE push_sent_at IS NULL AND read_at IS NULL`,
  `CREATE INDEX IF NOT EXISTS v2_pa_report_alerts_unread ON v2_pa_report_alerts(username,read_at,created_at DESC)`,
  `CREATE TABLE IF NOT EXISTS v2_pa_report_reminders (username TEXT NOT NULL,subject_key TEXT NOT NULL,remind_at TEXT NOT NULL,request_id TEXT NOT NULL,PRIMARY KEY(username,subject_key))`
 ];
@@ -45,11 +46,10 @@ const canSee=(u,r)=>r.scope==='private'?u.username==='alex':isAdmin(u.username)|
 export async function visiblePaRows(env,user,rows){
  if(!rows.length||isAdmin(user.username))return rows.filter(r=>canSee(user,r));
  await ensureTaskSchema(env.DB);
- const sources=(await env.DB.prepare(`SELECT task_id AS id,coalesce(nullif(s.pa_task_id,''),json_extract(e.payload,'$.pa_task_id')) pa_task_id,
+ const sources=(await env.DB.prepare(`SELECT e.task_id AS id,coalesce(nullif(s.pa_task_id,''),json_extract(e.payload,'$.pa_task_id')) pa_task_id,
   json_extract(e.payload,'$.parent_cycle_id') parent_cycle_id,json_extract(e.payload,'$.kind') kind,
   json_extract(e.payload,'$.assigned_to') assigned_to,json_extract(e.payload,'$.created_by') created_by,
-  json_extract(e.payload,'$.visibility') visibility FROM v2_task_events e LEFT JOIN v2_task_sync s USING(task_id)
-  WHERE e.revision=(SELECT MAX(revision) FROM v2_task_events latest WHERE latest.task_id=e.task_id)`).all()).results;
+  json_extract(e.payload,'$.visibility') visibility FROM ${taskHeadJoin} LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`).all()).results;
  return rows.filter(r=>{
   if(r.scope!=='fenmeat')return false;
   const linked=sources.filter(t=>t.id===r.app_task_id||t.pa_task_id===r.id||t.parent_cycle_id===r.id);
@@ -197,7 +197,7 @@ export async function readPaReport(env,user,query={}){
   env.DB.prepare(feedbackSelect+(query.view==='inbox'?' WHERE 0':' ORDER BY f.created_at DESC,f.id DESC LIMIT 2000')),
   env.DB.prepare('SELECT * FROM v2_pa_report_alerts WHERE username=? AND read_at IS NULL ORDER BY created_at DESC LIMIT 100').bind(user.username),
   env.DB.prepare('SELECT subject_key,remind_at,request_id FROM v2_pa_report_reminders WHERE username=?').bind(user.username),
-  env.DB.prepare("SELECT resource_key,MAX(revision) revision FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' GROUP BY resource_key ORDER BY resource_key DESC LIMIT 30")
+  env.DB.prepare(query.view==='inbox'?'SELECT 1 WHERE 0':"SELECT resource_key,MAX(revision) revision FROM v2_pa_report_versions WHERE resource_key LIKE 'report-%' GROUP BY resource_key ORDER BY resource_key DESC LIMIT 30")
  ]);
  const raw=reg.results[0],register=raw?{...JSON.parse(raw.payload),revision:raw.revision,saved_at:raw.saved_at}:null,rawRows=await visiblePaRows(env,user,register?.rows||[]);
  const mails=user.username==='alex'&&query.view!=='inbox'?await mailSummaries(env.DB):new Map();

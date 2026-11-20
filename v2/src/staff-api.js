@@ -13,7 +13,8 @@ export const STAFF_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_staff_devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, code_hash TEXT UNIQUE, code_expires INTEGER NOT NULL, token_hash TEXT UNIQUE, expires INTEGER NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, created_by TEXT NOT NULL, created_at TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_staff_time (request_id TEXT PRIMARY KEY, employee_id TEXT NOT NULL, shift_id TEXT NOT NULL, revision INTEGER NOT NULL, start_at TEXT NOT NULL, end_at TEXT, state TEXT NOT NULL, payload TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(employee_id,revision))`,
  `CREATE INDEX IF NOT EXISTS v2_staff_time_shift ON v2_staff_time(shift_id,revision)`,
- `CREATE INDEX IF NOT EXISTS v2_staff_time_date ON v2_staff_time(start_at,end_at)`
+ `CREATE INDEX IF NOT EXISTS v2_staff_time_date ON v2_staff_time(start_at,end_at)`,
+ `CREATE INDEX IF NOT EXISTS v2_staff_time_employee_start ON v2_staff_time(employee_id,start_at)`
 ];
 const encoder=new TextEncoder();
 const canonical=value=>JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b))):v);
@@ -122,9 +123,11 @@ export async function staffApi({request,url,env,user,bodyOf}){
   const result={from,to,shifts,revisions,rows:periodHours(people,shifts,current.state.leave,from,to)};
   if(url.searchParams.get('navigation')==='1'){
    const filter=employeeId?' AND t.employee_id=?':'';
-   const dates=await db.prepare(`SELECT MAX(CASE WHEN start_at<? THEN start_at END) previous,
-    MIN(CASE WHEN start_at>=? THEN start_at END) next FROM v2_staff_time t
-    WHERE ${latestCondition}${filter}`).bind(new Date(dayStart(from)).toISOString(),new Date(dayStart(to)+86400000).toISOString(),...(employeeId?[employeeId]:[])).first();
+   const nearest=(operator,direction)=>`SELECT t.start_at FROM v2_staff_time t WHERE t.start_at${operator}?
+    ${filter} AND ${latestCondition} ORDER BY t.start_at ${direction} LIMIT 1`;
+   const person=employeeId?[employeeId]:[];
+   const dates=await db.prepare(`SELECT (${nearest('<','DESC')}) previous,(${nearest('>=','ASC')}) next`)
+    .bind(new Date(dayStart(from)).toISOString(),...person,new Date(dayStart(to)+86400000).toISOString(),...person).first();
    result.previous=dates.previous?dayAt(dates.previous):null;
    result.next=dates.next?dayAt(dates.next):null;
   }
