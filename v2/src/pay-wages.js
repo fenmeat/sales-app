@@ -27,16 +27,18 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  let longDay=false,dailyExcess=0,shortDayGuarantee=0;
  for(const day of days){
   const edit=row.day_edits?.[day.date],payable=day.payable_seconds??day.completed_seconds;
-  const resolved=edit?.reason && !day.needs_adjustment_review && (edit.absent===true||edit.minutes!==0);
+  const resolved=edit?.reason && !day.needs_adjustment_review && (edit.absent===true||Number.isFinite(edit.minutes)&&edit.minutes!==0);
+  if(edit?.pending_kind==='worked_pending')missing(day.date,'Worked with the team. Confirm the actual payable hours.'+(edit.estimate_minutes?' Provisional '+Math.floor(edit.estimate_minutes/60)+'h '+edit.estimate_minutes%60+'m.':''));
+  if(edit?.pending_kind==='sick_pending')missing(day.date,'Reported sick. Confirm paid sick leave or unpaid sick leave.');
   if(day.needs_workplace||day.needs_adjustment_review)missing(day.date,'Check the workplace or previous hours correction.');
   for(const issue of day.issues){
    if(issue==='Missing attendance record'||issue==='Schedule not verified')continue;
    missing(day.date,issue);
   }
   if(day.scheduled_minutes>0 && day.date<=today() && !day.first_in && !day.leave_days &&
-    !resolved && !row.paid_days?.includes(day.date) && !holidays.has(day.date))missing(day.date,'Correct hours or mark absent.');
+    !resolved && !edit?.pending_kind && !row.paid_days?.includes(day.date) && !holidays.has(day.date))missing(day.date,'Correct hours or mark absent.');
   if(!day.first_in&&!resolved&&!day.leave_days&&!day.scheduled_minutes&&day.scheduled_minutes==null&&!payable&&!row.paid_days?.includes(day.date))missing(day.date,'Confirm attendance or mark absent.');
-  if(day.first_in && payable<60 && !resolved)missing(day.date,'The clock entry is under one minute. Correct the hours.');
+  if(day.first_in && payable<60 && !resolved && !edit?.pending_kind)missing(day.date,'The clock entry is under one minute. Correct the hours.');
   if(day.overlap)missing(day.date,'Clock sessions overlap. Correct the attendance record.');
   if(day.date>today())hoursKnown=false;
   if(day.review_seconds)hoursKnown=false;
@@ -193,7 +195,7 @@ export function rebuildWages(clockRun,stored,staff,settings,runs,openings) {
    for(const key of ['paid_days','paid_days_note','included','sunday_seconds','holiday_seconds','special_cents','bonus_cents','commission_cents','meat_cents','other_deduction_cents','uif','uif_reason','cutover_uif','current_employee_cents','current_employer_cents','wage_facts','note'])
     if(old[key]!=null)row[key]=key==='special_cents'?(old.entered_special_cents??old.special_cents):key==='uif'?(old.input_uif??old.uif):key==='other_deduction_cents'?(old.entered_deduction_cents??old.other_deduction_cents):old[key];
    // A legacy explicitly reviewed exception is evidence, never a new blanket approval.
-   if(old.reviewed && !old.wage_facts && !posted(old)){
+   if(!old.wage_facts && !old.source_flags && (old.reviewed || ['ordinary_seconds','overtime_seconds','leave_seconds'].some(k=>old.suggested_hours && old.suggested_hours[k]!==old[k])) && !posted(old)){
     row.issues.push('Check the saved manual week against the current clock.');
     row.legacy_review={hours:old.suggested_hours,ordinary_seconds:old.ordinary_seconds,overtime_seconds:old.overtime_seconds,paye_cents:old.paye_cents,note:old.note};
    }else if(old.legacy_review && !row.wage_facts?.legacy_checked)row.legacy_review=old.legacy_review;

@@ -18,7 +18,8 @@ async function savedState(db,view=null){
   FROM names WHERE k IS NOT NULL
  ), ids(revision) AS (SELECT (SELECT revision FROM v2_staff_payroll WHERE entity_key=k ORDER BY revision DESC LIMIT 1) FROM names WHERE k IS NOT NULL)`;
  const range=view ? "CASE WHEN entity_key LIKE 'run:%' AND substr(entity_key,5,7) NOT IN (?,?) AND entity_key!=? THEN json_object('key',entity_key,'pay_date',substr(entity_key,5),'status',json_extract(payload,'$.status'),'totals',json_extract(payload,'$.totals')) ELSE payload END" : 'payload';
- const sql=latest+` SELECT p.revision,p.actor,p.saved_at,${range} AS payload FROM v2_staff_payroll p JOIN ids USING(revision) ORDER BY p.revision`;
+ const sql=view?latest+` SELECT p.revision,p.actor,p.saved_at,${range} AS payload FROM v2_staff_payroll p JOIN ids USING(revision) ORDER BY p.revision`
+  : 'SELECT p.revision,p.actor,p.saved_at,p.payload FROM v2_staff_payroll p JOIN (SELECT MAX(revision) revision FROM v2_staff_payroll GROUP BY entity_key) latest ON p.revision=latest.revision ORDER BY p.revision';
  const query=db.prepare(sql);
  const all=(await (view?query.bind(view.date.slice(0,7),view.month,'run:'+addDays(view.date,-7)):query).all()).results;
  const records=all.map(r=>({...JSON.parse(r.payload),saved_revision:r.revision,saved_at:r.saved_at,saved_by:r.actor}));
@@ -184,11 +185,15 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
     if(b.action==='wages_day'){
      const day=row.source.days.find(d=>d.date===b.day);
      check(day && day.date<=today(),'Choose a completed day in this week.');
-     check(['hours','absent','workplace','sick_paid','sick_unpaid'].includes(b.kind),'Choose a correction.');
+     check(['hours','absent','workplace','sick_paid','sick_unpaid','sick_pending','worked_pending'].includes(b.kind),'Choose a correction.');
      const edit={...row.day_edits[b.day],reason,by:user.username,at:stamp};
-     if(b.kind!=='workplace'){delete edit.sick_type;delete edit.sick_minutes;delete edit.absent;}
+     if(b.kind!=='workplace'){delete edit.sick_type;delete edit.sick_minutes;delete edit.absent;delete edit.pending_kind;delete edit.estimate_minutes;}
      if(b.kind==='workplace'){
       check(day.monday_rotation && ['Factory','Route'].includes(b.workplace),'Choose the Monday workplace.');edit.workplace=b.workplace;
+     }else if(b.kind==='worked_pending'||b.kind==='sick_pending'){
+      check(!day.leave_days && (b.kind!=='sick_pending'||!day.first_in),'Check the existing attendance or leave first.');
+      edit.pending_kind=b.kind;delete edit.minutes;delete edit.baseline_seconds;
+      if(b.estimate_minutes!=null){check(b.kind==='worked_pending'&&Number.isInteger(b.estimate_minutes)&&b.estimate_minutes>0&&b.estimate_minutes<=1440,'Enter estimated payable minutes.');edit.estimate_minutes=b.estimate_minutes;}
      }else if(b.kind==='sick_paid'||b.kind==='sick_unpaid'){
       check(!day.first_in&&!day.review_seconds&&!day.leave_days&&day.scheduled_minutes>0,'Use a scheduled day with no attendance or approved leave.');
       edit.sick_type=b.kind;edit.sick_minutes=b.kind==='sick_paid'?day.scheduled_minutes:0;edit.absent=true;edit.minutes=0;edit.baseline_seconds=day.clock_payable_seconds;

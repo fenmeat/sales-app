@@ -40,3 +40,10 @@ test('paid sick leave stays out of worked overtime and a recorded repayment is d
  const legal=week([10,8,7,7,7],{profile:{hours_agreement:null},fields:{wage_facts:{daily_resolved:true}}});
  assert.equal(legal.ready,true);assert.equal(legal.ordinary_seconds,38*3600);assert.equal(legal.overtime_seconds,3600);
 });
+
+test('confirmed attendance or illness without exact hours or entitlement stays visible and unpaid',()=>{
+ const f=week([8,8,8,8,9/3600],{edits:{'2026-11-20':{pending_kind:'worked_pending',estimate_minutes:345,reason:'Worked with team'}}});
+ assert.equal(f.net_cents,null);assert.match(f.issues.join(' '),/Worked with the team.*5h 45m/);
+ const s=week([8,null,8,8,8],{edits:{'2026-11-17':{pending_kind:'sick_pending',reason:'Illness reported'}}});
+ assert.equal(s.net_cents,null);assert.match(s.issues.join(' '),/Reported sick/);
+});
