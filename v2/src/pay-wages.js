@@ -201,7 +201,33 @@ export function rebuildWages(clockRun,stored,staff,settings,runs,openings) {
    }else if(old.legacy_review && !row.wage_facts?.legacy_checked)row.legacy_review=old.legacy_review;
   }
   row.source_flags=row.issues;
-  const result=wagePreview(row,people.get(row.employee_id),clockRun,settings,runs,openings);
+  const person=people.get(row.employee_id);
+  const preview=input=>wagePreview(input,person,clockRun,settings,runs,openings);
+  const result=preview(row);
+  const pending=row.source.days.filter(d=>row.day_edits?.[d.date]?.pending_kind);
+  if(pending.length && result.net_cents==null){
+   const scenario=structuredClone(row),assumptions=[];
+   for(const day of scenario.source.days){
+    const edit=scenario.day_edits?.[day.date];
+    if(!edit?.pending_kind)continue;
+    if(edit.pending_kind==='worked_pending' && edit.estimate_minutes){
+     assumptions.push(day.date+' estimated at '+edit.estimate_minutes+' payable minutes');
+     day.payable_seconds=edit.estimate_minutes*60;
+     edit.minutes=(day.payable_seconds-day.clock_payable_seconds)/60;
+    }else if(edit.pending_kind==='sick_pending' && day.scheduled_minutes>0){
+     assumptions.push(day.date+' paid as '+day.scheduled_minutes+' minutes of sick leave');
+     Object.assign(edit,{absent:true,minutes:0,sick_type:'sick_paid',sick_minutes:day.scheduled_minutes});
+    }else continue;
+    delete edit.pending_kind;
+   }
+   if(assumptions.length===pending.length){
+    const seconds=Math.round(sum(scenario.source.days,d=>d.payable_seconds));
+    scenario.ordinary_seconds=Math.min(seconds,45*3600);scenario.overtime_seconds=seconds-scenario.ordinary_seconds;
+    const estimate=preview(scenario);
+    result.estimate_net_cents=estimate.net_cents??estimate.estimate_net_cents??null;
+    result.estimate_note=assumptions.join(', ')+(estimate.net_cents==null?' · assumes full UIF':'');
+   }
+  }
   if(row.legacy_review && !row.wage_facts?.legacy_checked){result.ready=false;result.issues.push('Check the saved manual week against current hours and deductions.');}
   return result;
  });

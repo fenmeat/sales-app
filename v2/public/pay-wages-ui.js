@@ -13,7 +13,7 @@ const visible=run=>run.rows.filter(r=>group==='All Staff'||r.employment_type==='
 const total=(rows,k)=>{const valid=rows.filter(r=>r.included && Number.isSafeInteger(r[k]));return valid.length?valid.reduce((v,r)=>v+r[k],0):null;};
 const detail=(r,days)=>`<div class="wage-detail"><h3>${h(r.name)}</h3><p>${r.profile?h(r.profile.basis)+' · '+currency(r.profile.basis==='Hourly'?r.profile.rate_cents:r.profile.fixed_cents):'Agreed rate needed'}</p>
  ${r.profile?.rate_basis?'<p>Saved hourly rate '+currency(r.profile.agreed_rate_cents)+'. Pay uses the statutory minimum '+currency(r.profile.rate_cents)+'.</p>':''}
- ${r.estimate_net_cents!=null?'<p>Estimated net with full UIF: '+currency(r.estimate_net_cents)+'</p>':''}
+ ${r.estimate_net_cents!=null?'<p>Estimated net '+currency(r.estimate_net_cents)+' · '+h(r.estimate_note??'assumes full UIF')+'</p>':''}
  <p>Ordinary ${hoursLabel(r.ordinary_seconds)} · Overtime ${hoursLabel(r.overtime_seconds)} at 1.5× · Paid leave ${hoursLabel(r.leave_seconds)}</p>
  <p>PAYE ${currency(r.paye_cents)} · Employee UIF ${currency(r.uif_employee_cents)} · Employer UIF ${currency(r.uif_employer_cents)}</p>
  <p>Bonus ${currency(r.bonus_cents)} · Commission ${currency(r.commission_cents)} · Extra pay ${currency(r.special_cents)} · Meat ${currency(r.meat_cents)} · Other deductions ${currency(r.other_deduction_cents)}</p>
