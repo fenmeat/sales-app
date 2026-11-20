@@ -8,7 +8,7 @@ import {build} from 'esbuild';
 import {readFile} from 'node:fs/promises';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 const fenHourly=process.argv.includes('--fen-hourly');
-const {chromium}=await import(process.env.STAFF_PLAYWRIGHT_MODULE??'playwright');
+const {chromium,webkit,devices}=await import(process.env.STAFF_PLAYWRIGHT_MODULE??'playwright');
 const directory=await mkdtemp(join(tmpdir(),'fen-payroll-browser-')),out=process.env.STAFF_QA_SCREENSHOTS??join(directory,'screenshots');await mkdir(out,{recursive:true});
 const key='synthetic-browser-payroll-key-'.repeat(3),origin='http://localhost:8798';
 // Simulate Friday in this isolated Worker only so the real future-approval guard stays in place.
@@ -17,8 +17,8 @@ const bundle=await build({entryPoints:[new URL('../src/worker.js',import.meta.ur
 const mf=new Miniflare(convertV4MiniflareOptions({name:'payroll-browser-test',host:'127.0.0.1',port:8798,modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-09-30',assets:{directory:fileURLToPath(new URL('../public/',import.meta.url)),binding:'ASSETS',run_worker_first:true,routerConfig:{has_user_worker:true}},d1Databases:{DB:'payroll-browser-test'},resourcePersistencePath:directory,bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alinda:key})},outboundService:()=>{throw Error('No external traffic in payroll QA');}}));
 let browser;const errors=[];
 try{
- await mf.ready;browser=await chromium.launch({executablePath:process.env.STAFF_BROWSER_EXECUTABLE,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
- const context=await browser.newContext({viewport:{width:820,height:1180},hasTouch:true,isMobile:true,deviceScaleFactor:2,timezoneId:'Africa/Johannesburg'}),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
+ await mf.ready;const ipadSafari=process.env.STAFF_QA_WEBKIT==='1';browser=await (ipadSafari?webkit:chromium).launch({executablePath:process.env.STAFF_BROWSER_EXECUTABLE,headless:true,args:ipadSafari?[]:['--no-sandbox','--disable-dev-shm-usage']});
+ const context=await browser.newContext({...(ipadSafari?devices['iPad (gen 7)']:{}),viewport:{width:820,height:1180},hasTouch:true,isMobile:true,deviceScaleFactor:2,timezoneId:'Africa/Johannesburg'}),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
  assert.equal((await page.request.post(origin+'/api/login',{headers:{Origin:origin},data:{username:'alinda',key}})).status(),200);
  const id=crypto.randomUUID();assert.equal((await page.request.post(origin+'/api/staff',{headers:{Origin:origin},data:{request_id:crypto.randomUUID(),revision:0,action:'person',person:{id,name:'Synthetic Payroll Worker',code:'QA-PAY-01',team:'Production',start_date:'2026-01-01',birth_date:'1980-01-01',active:true}}})).status(),200);
  {
@@ -37,7 +37,7 @@ try{
  await page.getByRole('button',{name:'Add employer details',exact:true}).click();assert.equal(await page.getByLabel('Legal employer name').getAttribute('inputmode'),'text');await page.getByLabel('Legal employer name').fill('Synthetic Fen Payroll QA');await page.getByLabel('Employer address').fill('1 Synthetic Street, Test Town');await page.getByLabel('First Fen Friday pay date').fill('2026-11-20');await save();
  await page.locator('[data-pay-profile]').click();await page.getByLabel('Effective from').fill('2026-01-01');await page.getByLabel('Hourly rate (R)',{exact:true}).fill('40,00');await page.getByLabel('Fixed weekly amount (R; 0 for hourly)').fill('0');await page.getByLabel('Occupation',{exact:true}).fill('Synthetic packer');await page.getByLabel(/Written compressed-week agreement/).fill('Synthetic signed agreement');await page.getByLabel('UIF default').selectOption('Liable');await page.getByLabel('Rate source / reason').fill('Synthetic verified hourly rate');await save();
  await page.getByRole('button',{name:'Begin vars',exact:true}).click();await save();
- await page.getByText('App payroll from 16 November 2026',{exact:true}).waitFor();
+ await page.getByRole('heading',{name:'Pay Wages',exact:true}).waitFor();
  if(fenHourly){
   await page.getByRole('button',{name:'Pay setup',exact:true}).click();await page.locator('[data-pay-profile]').click();
   await page.getByLabel('Effective from').fill('2026-11-16');await page.getByLabel('Hourly rate (R)',{exact:true}).fill('38,28');
@@ -71,12 +71,12 @@ try{
  assert.ok(!(await page.locator('#payroll-print').innerText()).includes('Synthetic second worker'));
  await open();await page.locator('[data-one-paid="'+id+'"]').click();await page.getByLabel('Actual method').selectOption('Cash');await save();
  await open();await page.locator('[data-slip="'+id+'"]').click();await page.waitForFunction(()=>window.__prints===2);
- assert.match(await page.locator('#payroll-print').innerText(),/Cash/);await page.emulateMedia({media:'print'});await page.pdf({path:join(out,'synthetic-payslip.pdf')});await page.emulateMedia({media:'screen'});
+ assert.match(await page.locator('#payroll-print').innerText(),/Cash/);await page.emulateMedia({media:'print'});if(!ipadSafari)await page.pdf({path:join(out,'synthetic-payslip.pdf')});await page.emulateMedia({media:'screen'});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.screenshot({path:join(out,'pay-wages-ipad.png'),fullPage:true});
  await page.getByRole('button',{name:'Monthly UIF',exact:true}).click();await page.getByText('Monthly wages & UIF',{exact:true}).waitFor();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);await page.screenshot({path:join(out,'payroll-month-phone.png'),fullPage:true});
  const download=page.waitForEvent('download');await page.getByRole('button',{name:'Download CSV',exact:true}).click();await (await download).saveAs(join(out,'synthetic-month.csv'));assert.match(await readFile(join(out,'synthetic-month.csv'),'utf8'),/Incomplete November report/);
- await page.getByRole('button',{name:'Print report',exact:true}).click();await page.waitForFunction(()=>window.__prints===3);assert.equal(await page.locator('#payroll-print .payslip').count(),0,'monthly print replaces selected payslip');await page.emulateMedia({media:'print'});assert.match(await page.locator('#payroll-print').innerText(),/Incomplete November report/);await page.pdf({path:join(out,'synthetic-month.pdf'),preferCSSPageSize:true});await page.emulateMedia({media:'screen'});
+ await page.getByRole('button',{name:'Print report',exact:true}).click();await page.waitForFunction(()=>window.__prints===3);assert.equal(await page.locator('#payroll-print .payslip').count(),0,'monthly print replaces selected payslip');await page.emulateMedia({media:'print'});assert.match(await page.locator('#payroll-print').innerText(),/Incomplete November report/);if(!ipadSafari)await page.pdf({path:join(out,'synthetic-month.pdf'),preferCSSPageSize:true});await page.emulateMedia({media:'screen'});
  await page.reload();await page.getByRole('button',{name:'Payroll',exact:true}).click();await page.getByRole('button',{name:'History',exact:true}).last().click();await page.getByRole('button',{name:'Open week',exact:true}).click();await page.getByText('Paid',{exact:true}).waitFor();result=await (await page.request.get(origin+'/api/staff/payroll?pay_date=2026-11-20')).json();assert.equal(result.run.rows.find(r=>r.employee_id===id).wage_state,'Paid');assert.equal(result.run.status,'Draft');assert.equal(result.month.rows[0].uif_total_cents,2*expectedUif);assert.deepEqual(errors,[]);
  console.log('PASS: Alinda session, fresh start, existing profiles, weekly SARS PAYE, November UIF, weekly approval/payment, desktop/390px layout, persistent payslip/month print, CSV and reload. Synthetic data only.');
 }finally{await browser?.close();await mf.dispose();await rm(directory,{recursive:true,force:true});}

@@ -8,8 +8,19 @@ export const PAYROLL_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_staff_payroll (revision INTEGER PRIMARY KEY, entity_key TEXT NOT NULL, payload TEXT NOT NULL, action TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL)`,
  `CREATE INDEX IF NOT EXISTS v2_staff_payroll_entity ON v2_staff_payroll(entity_key,revision)`
 ];
-async function savedState(db){
- const all=(await db.prepare(`SELECT p.* FROM v2_staff_payroll p JOIN (SELECT MAX(revision) revision FROM v2_staff_payroll GROUP BY entity_key) latest ON p.revision=latest.revision ORDER BY p.revision`).all()).results;
+async function savedState(db,view=null){
+ // Seek to each distinct entity using the existing (entity_key, revision) index.
+ // Opening the wage table needs full rows only for the selected month(s) and the
+ // previous Friday. Older payslips stay addressable through the history picker.
+ const latest=`WITH RECURSIVE names(k) AS (
+  SELECT MIN(entity_key) FROM v2_staff_payroll UNION ALL
+  SELECT (SELECT MIN(entity_key) FROM v2_staff_payroll WHERE entity_key>names.k)
+  FROM names WHERE k IS NOT NULL
+ ), ids(revision) AS (SELECT (SELECT revision FROM v2_staff_payroll WHERE entity_key=k ORDER BY revision DESC LIMIT 1) FROM names WHERE k IS NOT NULL)`;
+ const range=view ? "CASE WHEN entity_key LIKE 'run:%' AND substr(entity_key,5,7) NOT IN (?,?) AND entity_key!=? THEN json_object('key',entity_key,'pay_date',substr(entity_key,5),'status',json_extract(payload,'$.status'),'totals',json_extract(payload,'$.totals')) ELSE payload END" : 'payload';
+ const sql=latest+` SELECT p.revision,p.actor,p.saved_at,${range} AS payload FROM v2_staff_payroll p JOIN ids USING(revision) ORDER BY p.revision`;
+ const query=db.prepare(sql);
+ const all=(await (view?query.bind(view.date.slice(0,7),view.month,'run:'+addDays(view.date,-7)):query).all()).results;
  const records=all.map(r=>({...JSON.parse(r.payload),saved_revision:r.revision,saved_at:r.saved_at,saved_by:r.actor}));
  return {revision:Math.max(0,...all.map(r=>r.revision)),settings:records.find(r=>r.key==='settings')??{key:'settings',company:null,profiles:[]},openings:records.filter(r=>r.key.startsWith('opening:')),runs:records.filter(r=>r.key.startsWith('run:'))};
 }
@@ -27,7 +38,9 @@ function carryDraftInputs(row,old){
  return row;
 }
 export async function payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,env}){
- const state=await savedState(db),timeVersion=(await db.prepare('SELECT COALESCE(MAX(rowid),0) revision FROM v2_staff_time').first()).revision;
+ if(request.method==='GET' && url.pathname.endsWith('/history'))return {events:(await db.prepare("SELECT revision,entity_key,action,actor,saved_at,json_extract(payload, '$.change_note') AS reason FROM v2_staff_payroll ORDER BY revision DESC LIMIT 100").all()).results};
+ const targetDate=friday(url.searchParams.get('pay_date')??nextFriday()),view=request.method==='GET'&&url.searchParams.get('view')==='wages'?{date:targetDate,month:url.searchParams.get('month')??targetDate.slice(0,7)}:null;
+ const state=await savedState(db,view),timeVersion=(await db.prepare('SELECT COALESCE(MAX(rowid),0) revision FROM v2_staff_time').first()).revision;
  const fresh=state.settings.fresh_start;
  const source={staff_revision:current.revision,time_version:timeVersion,payroll_revision:state.revision};
  const stale=run=>run?.status==='Draft'&&(JSON.stringify(run.source)!==JSON.stringify(source) ||
@@ -59,7 +72,6 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
  const wages=async(date,stored,edits)=>rebuildWages(await preview(date,edits),stored,current.state,state.settings,state.runs,state.openings);
  const payDate=friday(url.searchParams.get('pay_date')??nextFriday());
  if(request.method==='GET'){
-  if(url.pathname.endsWith('/history'))return {events:(await db.prepare("SELECT revision,entity_key,action,actor,saved_at,json_extract(payload, '$.change_note') AS reason FROM v2_staff_payroll ORDER BY revision DESC LIMIT 100").all()).results};
   const historical=fresh && payDate<fresh.first_pay_date;
   const stored=state.runs.find(r=>r.pay_date===payDate);
   const operational=fresh && payDate>=fresh.first_pay_date;
@@ -172,10 +184,14 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
     if(b.action==='wages_day'){
      const day=row.source.days.find(d=>d.date===b.day);
      check(day && day.date<=today(),'Choose a completed day in this week.');
-     check(['hours','absent','workplace'].includes(b.kind),'Choose a correction.');
+     check(['hours','absent','workplace','sick_paid','sick_unpaid'].includes(b.kind),'Choose a correction.');
      const edit={...row.day_edits[b.day],reason,by:user.username,at:stamp};
+     if(b.kind!=='workplace'){delete edit.sick_type;delete edit.sick_minutes;delete edit.absent;}
      if(b.kind==='workplace'){
       check(day.monday_rotation && ['Factory','Route'].includes(b.workplace),'Choose the Monday workplace.');edit.workplace=b.workplace;
+     }else if(b.kind==='sick_paid'||b.kind==='sick_unpaid'){
+      check(!day.first_in&&!day.review_seconds&&!day.leave_days&&day.scheduled_minutes>0,'Use a scheduled day with no attendance or approved leave.');
+      edit.sick_type=b.kind;edit.sick_minutes=b.kind==='sick_paid'?day.scheduled_minutes:0;edit.absent=true;edit.minutes=0;edit.baseline_seconds=day.clock_payable_seconds;
      }else{
       check(Number.isInteger(b.minutes)&&b.minutes>=0&&b.minutes<=1440,'Enter total paid minutes for this day.');
       check(b.kind!=='absent'||(!day.first_in&&!day.review_seconds&&!day.leave_days&&b.minutes===0),'A clocked or leave day cannot be marked absent.');
@@ -187,7 +203,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
      const f={...row.wage_facts};
      if(b.extra_cents!=null){check(Number.isSafeInteger(b.extra_cents)&&b.extra_cents>=0,'Enter the extra pay in cents.');row.special_cents=b.extra_cents;row.entered_special_cents=b.extra_cents;}
      for(const k of ['special_checked','short_day_checked','daily_resolved','legacy_checked','fixed_checked','weekly_bonus'])if(b[k]===true)f[k]=true;
-     if(b.uif){check(['Liable','Exempt'].includes(b.uif),'Choose UIF treatment.');row.uif=b.uif;row.uif_reason=reason;}
+     if(b.uif){check(['Liable','Exempt'].includes(b.uif),'Choose UIF treatment.');row.uif=b.uif;row.input_uif=b.uif;row.uif_reason=reason;}
      if(b.cutover_uif){check(['Full weekly share','Confirmed current amounts'].includes(b.cutover_uif),'Choose the current UIF treatment.');row.cutover_uif=b.cutover_uif;if(b.cutover_uif==='Confirmed current amounts'){row.current_employee_cents=b.employee_uif;row.current_employer_cents=b.employer_uif;}}
      for(const k of ['bonus_cents','commission_cents','meat_cents','other_deduction_cents'])if(b[k]!=null){check(Number.isSafeInteger(b[k])&&b[k]>=0,'Enter a valid amount.');row[k]=b[k];}
      if(b.paid_days){check(row.profile?.fen_hourly_only,'Check the paid day arrangement.');paidDaySeconds(b.paid_days,row.source.days);row.paid_days=b.paid_days;row.paid_days_note=reason;}

@@ -5,7 +5,7 @@ import {ageIndependentEstimate,weeklyPaye} from './weekly-paye.js';
 
 export const posted = row => ['Approved','Paid'].includes(row.wage_state);
 export function postedRun(run) {
- if (!run.individual_wages) return run;
+ if (!run.individual_wages || !run.rows) return run;
  const rows=run.rows.filter(posted);
  return {...run,rows,partial_approval:rows.length<run.rows.length,status:rows.length?'Approved':'Draft'};
 }
@@ -24,7 +24,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  let hoursKnown=true;
  const missing=(date,msg)=>{hoursKnown=false;stop(date+' · '+msg);};
  const ordinaryDays=(person.schedules??[]).filter(s=>s.from<=run.from).at(-1)?.minutes??[];
- let longDay=false;
+ let longDay=false,dailyExcess=0,shortDayGuarantee=0;
  for(const day of days){
   const edit=row.day_edits?.[day.date],payable=day.payable_seconds??day.completed_seconds;
   const resolved=edit?.reason && !day.needs_adjustment_review && (edit.absent===true||edit.minutes!==0);
@@ -40,15 +40,18 @@ export function wagePreview(row,person,run,settings,runs,openings) {
   if(day.overlap)missing(day.date,'Clock sessions overlap. Correct the attendance record.');
   if(day.date>today())hoursKnown=false;
   if(day.review_seconds)hoursKnown=false;
-  if(payable>(ordinaryDays.filter(n=>n>0).length>5?8:9)*3600 || (day.scheduled_minutes>0 && payable>day.scheduled_minutes*60))longDay=true;
-  if(payable>0 && payable<4*3600 && !facts.short_day_checked)stop(day.date+' · Check the four-hour minimum payment.');
-  
+  const statutoryLimit=(ordinaryDays.filter(n=>n>0).length>5?8:9)*3600;
+  const ordinaryLimit=day.scheduled_minutes>0?Math.min(statutoryLimit,day.scheduled_minutes*60):statutoryLimit;
+  if(payable>ordinaryLimit){longDay=true;dailyExcess+=payable-ordinaryLimit;}
+  if(payable>=60 && payable<4*3600)shortDayGuarantee+=4*3600-payable;
+
+
  }
  if(!days.some(d=>d.payable_seconds>0||d.leave_days||row.day_edits?.[d.date]?.absent||row.paid_days?.includes(d.date)||holidays.has(d.date)))hoursKnown=false;
  for(const issue of row.source_flags??row.issues){
   if(/Rate changes inside|handmatige weekure/.test(issue))stop(issue);
  }
- if(longDay && !profile?.hours_agreement && !facts.daily_resolved)stop('Confirm the applicable hours agreement or enter the legally due extra pay.');
+ if(longDay && !profile?.hours_agreement && !facts.daily_resolved)stop('Confirm the applicable hours agreement or apply statutory daily overtime.');
  if(profile?.hours_agreement && (days.filter(d=>d.payable_seconds>0).length>5 || days.some(d=>d.first_in&&d.last_out&&(Date.parse(d.last_out)-Date.parse(d.first_in))>12*3600000) || row.overtime_seconds>36000) && !facts.daily_resolved)
   stop('Hours exceed the compressed-week limits. Check and record any extra pay due.');
  if(row.included===false){stop('Excluded from this week.');return answer;}
@@ -64,7 +67,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  const month=run.pay_date.slice(0,7);
  const prior=priorFor(person.id,run.pay_date,runs.map(postedRun),settings.fresh_start?[]:openings);
  const previous=runs.filter(r=>r.pay_date<run.pay_date&&r.pay_date.slice(0,7)===month).map(postedRun);
- if(previous.some(r=>!r.rows.some(x=>x.employee_id===person.id&&(posted(x)||(['Approved','Paid'].includes(r.status)&&x.included)))))stop('Confirm the earlier unpaid week for this employee before finalising monthly UIF.');
+ if(previous.some(r=>r.pay_date>=person.start_date && !r.rows.some(x=>x.employee_id===person.id&&(posted(x)||(['Approved','Paid'].includes(r.status)&&x.included)))))stop('Confirm the earlier unpaid week for this employee before finalising monthly UIF.');
 
  let uif=row.uif;
  if(uif==='Review' && (row.ordinary_seconds+row.overtime_seconds+prior.ordinary_seconds>=86400))uif='Liable';
@@ -120,10 +123,21 @@ export function wagePreview(row,person,run,settings,runs,openings) {
    }
   }
   // Remove holiday work from the ordinary/OT earnings buckets once. Apply the separate statutory payment.
+  if(facts.daily_resolved && profile.basis==='Hourly'){
+   const extra=Math.max(0,Math.round(dailyExcess)-raw.overtime_seconds);
+   raw.overtime_seconds+=extra;raw.ordinary_seconds-=extra;
+  }
+  for(const d of days){
+   const edit=row.day_edits?.[d.date];
+   if(!edit?.sick_type)continue;
+   if(d.first_in || (d.leave_days && d.paid_leave_minutes!==(edit.sick_minutes??0)))missing(d.date,'Reconcile the sick day with the new attendance or leave entry.');
+   if(!d.leave_days && edit.sick_type==='sick_paid')raw.leave_seconds+=edit.sick_minutes*60;
+  }
   const holidayOrdinary=Math.min(raw.ordinary_seconds,holidaySeconds);
   raw.ordinary_seconds+=weekendOrdinary-holidayOrdinary;
   raw.overtime_seconds+=weekendOvertime-(holidaySeconds-holidayOrdinary);
   raw.holiday_seconds=holidaySeconds;raw.sunday_seconds=sundaySeconds;
+  if(profile.basis==='Hourly' && shortDayGuarantee && !days.some(d=>holidays.has(d.date)))holidayPay+=Math.round(shortDayGuarantee*profile.rate_cents/3600);
   raw.special_cents+=holidayPay;
   answer.entered_special_cents=row.special_cents;
   answer.statutory_special_cents=holidayPay;
@@ -136,6 +150,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  answer.recorded_gross_cents=amounts.gross_cents;
  if(!hoursKnown)return answer;
  Object.assign(answer,amounts);
+ answer.input_uif=row.uif;
  if(!uifAvailable){answer.uif_employee_cents=null;answer.uif_employer_cents=null;}
  let tax=null;
  const taxProfile=profile.tax_treatment;
@@ -173,7 +188,7 @@ export function rebuildWages(clockRun,stored,staff,settings,runs,openings) {
   if(old && posted(old))return old;
   if(old){
    for(const key of ['paid_days','paid_days_note','included','sunday_seconds','holiday_seconds','special_cents','bonus_cents','commission_cents','meat_cents','other_deduction_cents','uif','uif_reason','cutover_uif','current_employee_cents','current_employer_cents','wage_facts','note'])
-    if(old[key]!=null)row[key]=key==='special_cents'?(old.entered_special_cents??old.special_cents):old[key];
+    if(old[key]!=null)row[key]=key==='special_cents'?(old.entered_special_cents??old.special_cents):key==='uif'?(old.input_uif??old.uif):old[key];
    // A legacy explicitly reviewed exception is evidence, never a new blanket approval.
    if(old.reviewed && !old.wage_facts && !posted(old)){
     row.issues.push('Check the saved manual week against the current clock.');

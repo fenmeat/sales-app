@@ -13,32 +13,28 @@ settings revision with a Monday start and Friday 20 November payday. Earlier
 payroll remains with the auditors. No openings, pay runs or payments are created
 by activation. Earlier saved wages and payslips are available for reference.
 
-Use **Week wages → Refresh draft from clock → Review pay**. For a standard full
-week with no adjustments, select **SARS weekly table** and confirm the treatment.
-The Worker applies the 2027 weekly table and age at tax year end. For a directive,
-non-standard or partial employment period, annual bonus, special payment,
-commission, medical credit or pension adjustment, use auditor-confirmed PAYE for
-this week. The SARS weekly table is valid through 28 February 2027.
+Open **Staff → Payroll → Pay Wages** and choose the Friday and employee group.
+A tap on an amount shows clock evidence, breaks, manual adjustments, agreed and
+statutory pay, SARS PAYE and both UIF shares. Each employee can be approved
+independently. Missing amounts display as pending. Estimates using full UIF are
+labelled separately. An employer-confirmed upper bound for earlier November
+remuneration can resolve the cutover ceiling for multiple employees at once.
 
-In November, where earlier remuneration can affect the monthly UIF ceiling,
-confirm the full weekly share only when the evidence supports both contributions.
-Otherwise enter the current employee and employer UIF amounts confirmed by the
-auditors and identify the source in the review note. No historic wages or
-deductions are imported. The month resets in December. November's screen, print
-and CSV cover only approved app weeks from the 16th.
+**Approve Ready Employees** freezes the selected people's payslips. Print the
+payment list, pay externally, then record the actual date and method per person.
+An unpaid approval can be reopened with a reason. Previously paid snapshots are
+retained. Earlier November wages remain with the auditors.
 
-**Approve week** freezes payslips. **Record payment** is used only after paying
-outside the app. **Next Friday** loads the next week. Future approvals remain blocked.
+Hourly wages use actual payable work up to 45 hours and 1.5 times the agreed
+hourly rate thereafter. Paid leave is separate from worked hours. A long day
+requires a documented applicable hours arrangement or settlement under the daily
+limits. The 2026 national minimum applies while keeping a higher agreed rate.
+Tax directives, special remuneration and the first-month UIF ceiling may require
+current supporting facts. The weekly SARS table expires on 28 February 2027.
 
-Sources: [SARS weekly PAYE tables](https://www.sars.gov.za/tax-rates/employers/tax-deduction-tables/),
-[2027 employer guide](https://www.sars.gov.za/guide-for-employers-in-respect-of-employees-tax-2027/),
+Sources: [BCEA](https://www.gov.za/documents/basic-conditions-employment-act),
+[SARS weekly PAYE](https://www.sars.gov.za/tax-rates/employers/tax-deduction-tables/),
 [SARS UIF](https://www.sars.gov.za/types-of-tax/unemployment-insurance-fund/).
-
-## FenMeat hourly wages with daily overtime
-
-In **Staff → Payroll → Pay setup**, open the existing worker, select the effective date and hourly rate, and tick **FenMeat pays 100% of hourly wages**. This dated setting applies to that person. Opening **Week wages** shows ordinary and overtime pay, paid days off, PAYE, employee UIF, deductions and net. A provisional net assumes standard weekly tax treatment and the indicated deductions. Check the monthly UIF headroom during the review.
-
-Use **Save paid days off** for an employer-approved scheduled day without work or leave. Select the date and record the source. The amount is preserved when clock records change. The provisional estimate uses the latest completed clock records when the week is reopened. Final review requires the completed week, checked clock records, agreed breaks, overtime and any special earnings. If People and the original ID disagree, record the verified payroll date and the document checked under Pay setup. The clocking date stays intact. Alinda reviews and approves the run before payment is recorded.
 
 ## Original setup before activating Begin vars
 
@@ -64,7 +60,7 @@ It accepts evidenced manual payroll hours without creating attendance events.
 Open shifts block approval. Other clock warnings require an explicit recorded
 review; a missing schedule is never silently treated as an absence or paid day.
 
-## Calculation boundary
+## Earlier payroll workflow and calculation history
 
 - Integer seconds and integer cents. Each earnings line is rounded once to a
   cent; totals add those lines. No rounding of worked time to tenths of hours.
