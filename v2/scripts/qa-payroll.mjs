@@ -55,6 +55,7 @@ try{
  assert.equal(schedule.status(),200);
  await page.reload();await page.getByRole('button',{name:'Lone',exact:true}).click();
  const open=async()=>{await page.locator('[data-wage="'+id+'"]').waitFor({state:'visible'});if(!await page.locator('[data-facts="'+id+'"]').count() && !await page.locator('[data-slip="'+id+'"]').count())await page.locator('[data-toggle="'+id+'"]').first().click();};
+ await page.getByText('Nog geen finale bedrag',{exact:true}).waitFor();
  await page.locator('[data-toggle="'+incompleteId+'"]').first().click();
  await page.locator('[data-absence="'+incompleteId+'"]').click();
  await page.getByRole('button',{name:'Stoor',exact:true}).click();

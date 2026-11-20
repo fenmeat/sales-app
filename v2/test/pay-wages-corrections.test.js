@@ -66,7 +66,7 @@ test('wage corrections keep records, contracted leave, extra hours, prior UIF, a
  assert.deepEqual((await staff()).state.ledger,revised.state.ledger);
  for(const [id,gross,extra] of [[a,171450,19050],[b,172035,19115]]){
   const row=await read(id);assert.deepEqual([row.leave_seconds,row.extra_hours_cents,row.overtime_seconds,row.gross_cents,row.paye_cents],[40*3600,extra,0,gross,0]);
-  assert.equal(row.net_cents,null);assert.equal(row.estimate_net_cents,gross-Math.round(gross/100));
+  assert.equal(row.net_cents,null);assert.equal(row.uif_employee_cents,null);assert.equal(row.estimate_uif_employee_cents,Math.round(gross/100));assert.equal(row.estimate_net_cents,gross-Math.round(gross/100));
  }
  const work={employee_id:c,minutes:45*60,note:'Confirmed total worked after breaks'};
  await save('wages_worked_week',work);

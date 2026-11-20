@@ -200,7 +200,11 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  if(!hoursKnown)return answer;
  Object.assign(answer,amounts);
  answer.input_uif=row.uif;
- if(!uifAvailable){answer.uif_employee_cents=null;answer.uif_employer_cents=null;}
+ if(!uifAvailable){
+  answer.estimate_uif_employee_cents=amounts.uif_employee_cents;
+  answer.estimate_uif_employer_cents=amounts.uif_employer_cents;
+  answer.uif_employee_cents=null;answer.uif_employer_cents=null;
+ }
  let tax=null;
  const taxProfile=profile.tax_treatment;
  try{
