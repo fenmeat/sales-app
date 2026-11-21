@@ -1,0 +1,3 @@
+-- Read-only Zoho authorisation; existing route data and access keys are untouched.
+CREATE TABLE IF NOT EXISTS v2_zoho_states (state_hash TEXT PRIMARY KEY NOT NULL, session_hash TEXT NOT NULL, expires INTEGER NOT NULL, client_fingerprint TEXT NOT NULL, accounts_url TEXT NOT NULL, verifier TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS v2_zoho_connection (id INTEGER PRIMARY KEY CHECK(id=1), client_fingerprint TEXT NOT NULL, encrypted_tokens TEXT NOT NULL, accounts_url TEXT NOT NULL, api_domain TEXT NOT NULL, connected_at TEXT NOT NULL, connected_by TEXT NOT NULL, organisations TEXT NOT NULL, last_checked TEXT);

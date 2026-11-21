@@ -1,0 +1,56 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {suggestRows,monthlyReport} from '../src/payroll-domain.js';
+import {rebuildWages,postedRun} from '../src/pay-wages.js';
+
+function week(durations,options={}) {
+ const from=options.from??'2026-11-16',dates=durations.map((_,i)=>new Date(Date.parse(from+'T12:00Z')+i*86400000).toISOString().slice(0,10));
+ const person={id:'test-worker',name:'Test Worker',active:true,employment_type:'Casual',start_date:from,birth_date:'1980-05-01',schedules:[{from,minutes:[540,540,540,540,540,0,0]}]};
+ const profile={employee_id:person.id,basis:'Hourly',from,rate_cents:3200,fixed_cents:0,uif:'Liable',break_rule:'Recorded breaks',payment_method:'Cash',hours_agreement:'Signed test arrangement',...options.profile};
+ const settings={profiles:[profile],fresh_start:{start_date:'2026-11-16',first_pay_date:'2026-11-20'}},staff={people:[person],leave:[]};
+ const shifts=durations.flatMap((hours,i)=>hours==null?[]:[{employee_id:person.id,punches:[{kind:'in',at:dates[i]+'T06:00:00.000Z'},{kind:'out',at:new Date(Date.parse(dates[i]+'T06:00Z')+hours*3600000).toISOString()}]}]);
+ const date=dates.at(-1),clock={pay_date:date,from,to:date,rows:suggestRows(staff,shifts,settings,date,options.edits?{[person.id]:options.edits}:{})};
+ Object.assign(clock.rows[0],options.fields??{});
+ return rebuildWages(clock,null,staff,settings,[],[]).rows[0];
+}
+test('weekly allocation, known zero PAYE, both UIF shares, statutory floor and higher agreed rate',()=>{
+ const r=week([10,8,7,7,7]);assert.deepEqual([r.ready,r.overtime_seconds,r.net_cents],[true,0,123552]);
+ const half=week([10,10,10,9,9]);assert.deepEqual([half.ordinary_seconds,half.overtime_seconds,half.gross_cents,half.paye_cents,half.uif_employee_cents,half.uif_employer_cents,half.net_cents],[162000,10800,158400,0,1584,1584,156816]);
+ const taxable=week([9,9,9,9,9],{profile:{rate_cents:4400}});assert.equal(taxable.paye_cents,1300);assert.equal(taxable.ready,true);
+ const floor=week([8,8,8,8,8],{profile:{rate_cents:3000}});assert.equal(floor.profile.rate_cents,3023);assert.equal(floor.gross_cents,120920);
+});
+test('missing clock affects one worker while a long day still follows weekly overtime',()=>{
+ assert.equal(week([8,8,null,8,8]).net_cents,null);
+ assert.equal(week([8,8,8,8,9/3600]).net_cents,null);
+ const unresolved=week([10,8,7,7,7],{profile:{hours_agreement:null}});assert.equal(unresolved.ready,true);assert.equal(unresolved.overtime_seconds,0);
+ const directed=week([8,8,8,8,8],{profile:{tax_treatment:'Directive',directive_from:'2026-11-16',directive_to:'2027-01-01',directive_bps:1200}});assert.equal(directed.paye_cents,15360);
+});
+test('approved and paid people enter the monthly report independently of other unapproved wages',()=>{
+ const ready=week([8,8,8,8,8]);const frozen={...ready,wage_state:'Paid'};
+ const run={pay_date:'2026-11-20',status:'Draft',individual_wages:true,rows:[frozen,{...ready,employee_id:'other'}]};
+ const month=monthlyReport('2026-11',[postedRun(run)],[],{first_pay_date:run.pay_date},[],{start_date:'2026-11-16',first_pay_date:run.pay_date});
+ assert.equal(month.rows.length,1);assert.equal(month.rows[0].paid_net_cents,126720);assert.equal(month.partial,true);
+});
+
+test('paid sick leave stays out of worked overtime and a recorded repayment is deducted once',()=>{
+ const sick=week([8,null,8,8,8],{edits:{'2026-11-17':{sick_type:'sick_paid',sick_minutes:480,absent:true,minutes:0,reason:'Employer confirmation'}}});
+ assert.equal(sick.ready,true);assert.equal(sick.ordinary_seconds,32*3600);assert.equal(sick.leave_seconds,8*3600);assert.equal(sick.overtime_seconds,0);
+ const adjusted=week([8,8,8,8,8],{fields:{wage_facts:{amendments:[{kind:'Authorised repayment',cents:1200,reference:'TEST'}]}}});
+ assert.equal(adjusted.net_cents,125520);assert.equal(adjusted.other_deduction_cents,1200);
+ const legal=week([10,8,7,7,7],{profile:{hours_agreement:null},fields:{wage_facts:{daily_resolved:true}}});
+ assert.equal(legal.ready,true);assert.equal(legal.ordinary_seconds,39*3600);assert.equal(legal.overtime_seconds,0);
+});
+
+test('confirmed attendance or illness without exact hours or entitlement stays visible and unpaid',()=>{
+ const f=week([8,8,8,8,9/3600],{edits:{'2026-11-20':{pending_kind:'worked_pending',estimate_minutes:345,reason:'Worked with team'}}});
+ assert.equal(f.net_cents,null);assert.equal(f.estimate_net_cents,119592);assert.match(f.issues.join(' '),/Worked with the team.*5h 45m/);
+ const s=week([8,null,8,8,8],{edits:{'2026-11-17':{pending_kind:'sick_pending',reason:'Illness reported'}}});
+ assert.equal(s.net_cents,null);assert.equal(s.estimate_net_cents,129888);assert.match(s.issues.join(' '),/Reported sick/);
+});
+
+test('Friday public holiday removes its own ordinary and overtime hours from ordinary earnings',t=>{
+ t.mock.timers.enable({apis:['Date'],now:new Date('2026-12-25T17:00:00Z')});
+ const r=week([10,10,10,10,8],{from:'2026-12-21'});
+ assert.equal(r.ordinary_seconds,40*3600);assert.equal(r.overtime_seconds,0);
+ assert.equal(r.holiday_seconds,8*3600);assert.equal(r.gross_cents,185600);
+});

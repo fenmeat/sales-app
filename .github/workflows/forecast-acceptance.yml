@@ -1,0 +1,44 @@
+name: Forecast browser acceptance
+on:
+  push:
+    branches: [test/forecast-0395, build/sales-v2-cloudflare]
+    paths:
+      - 'v2/public/app.js'
+      - 'v2/public/styles.css'
+      - 'v2/src/forecast*.js'
+      - 'v2/scripts/qa-forecast.mjs'
+      - '.github/workflows/forecast-acceptance.yml'
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: v2/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm install --prefix "$RUNNER_TEMP/forecast-browser" --no-audit --no-fund playwright@1.62.1
+      - run: node "$RUNNER_TEMP/forecast-browser/node_modules/playwright/cli.js" install --with-deps "${{ matrix.browser }}"
+      - name: Check Morning Load on phones and tablets
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/forecast-browser/node_modules/playwright/index.mjs" node scripts/qa-forecast.mjs
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: forecast-${{ matrix.browser }}
+          path: /tmp/fenmeat-forecast/
+          retention-days: 7
