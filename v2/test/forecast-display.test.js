@@ -13,11 +13,11 @@ vm.runInContext(source.slice(source.indexOf('function forecastWarningText('),sou
 function card(f,unit='bag: 5 x 400 g'){
  const item={name:'Test product',code:'TEST',forecast:f,unit,price_cents:8500,planned:0,loaded:11};
  const before=structuredClone(item);
- const html=context.morningProduct(item,'2026-11-09');
+ const html=context.morningProduct(item,'2026-11-09','2026-11-16-R01');
  assert.deepEqual(item,before);
  const {document}=parseHTML('<html><body>'+html+'</body></html>');
  const values=Array.from(document.querySelectorAll('.forecast-summary dd'),el=>el.textContent);
- return {values,why:document.querySelector('.forecast-why').textContent,evidence:document.querySelector('.forecast-evidence')?.textContent,details:document.querySelector('details').textContent,document};
+ return {values,why:document.querySelector('.forecast-why').textContent,evidence:document.querySelector('.forecast-evidence')?.textContent,details:document.querySelector('.forecast-details').textContent,document};
 }
 
 test('Chakalaka card reconciles the five figures and places the calculation in closed details',()=>{
@@ -27,7 +27,10 @@ test('Chakalaka card reconciles the five figures and places the calculation in c
  assert.equal(c.why,'Why 22 bags? 15 expected sales + 7 extra bags to avoid running short.');
  assert.equal(c.evidence,'Based on 7 similar visits. Sales not yet checked against invoices.');
  assert.match(c.document.querySelector('.forecast-meta').textContent,/TEST · 5 × 400 g · R\s?85[,.]00/);
- assert.equal(c.document.querySelector('details').hasAttribute('open'),false);
+ const panels=[...c.document.querySelectorAll('.product-disclosures > details')];
+ assert.deepEqual(panels.map(el=>el.querySelector('summary').textContent),['Forecast','More details']);
+ assert.ok(panels.every(el=>!el.hasAttribute('open')));
+ for(const selector of ['.forecast-columns','.forecast-summary','.forecast-why','.forecast-evidence'])assert.ok(panels[0].querySelector(selector));
  assert.match(c.details,/14[,.]479/);assert.match(c.details,/Similar visits used: 7/);
  assert.match(c.details,/12 sold \+ 3 extra = 15/);assert.match(c.details,/already covers this minimum/);
  assert.match(c.details,/0[,.]947/);

@@ -326,11 +326,29 @@ footer p{margin:7px 0}
 .forecast-summary dd{font-weight:650;margin:0}
 .forecast-summary .suggested-total{border-top:1px solid var(--line);color:#124e79}
 .suggested-total dt,.suggested-total dd{font-weight:750}
-.forecast-meta,.forecast-evidence,.forecast-why,.forecast-details{font-size:14px;line-height:1.4;font-weight:400}
+.forecast-meta,.forecast-evidence,.forecast-why,.product-disclosures{font-size:14px;line-height:1.4;font-weight:400}
 .forecast-meta,.forecast-evidence{margin:3px 0;color:#405970}
 .forecast-why{margin:8px 0 0}
 .forecast-why strong{font-weight:700}
-.forecast-details{margin:0}
-.forecast-details summary{display:list-item;width:fit-content;min-height:44px;padding:11px 0;color:var(--blue);font-weight:650;cursor:pointer}
+.product-disclosures details{margin:0}
+.product-disclosures summary{display:list-item;width:fit-content;min-height:44px;padding:11px 0;color:var(--blue);font-weight:650;cursor:pointer}
 .forecast-details p{margin:0 0 6px;max-width:62ch}
-@media print{.forecast-details:not([open]){display:none}}
+/* Keep both controls in place as either full-width panel opens below them. */
+@media screen{
+ @supports selector(details::details-content){
+  .product-disclosures{display:grid;grid-template-columns:max-content minmax(0,1fr);column-gap:18px}
+  .product-disclosures details{display:contents}
+  .product-disclosures summary{grid-row:1}
+  .forecast-breakdown>summary{grid-column:1}
+  .forecast-details>summary{grid-column:2}
+  .product-disclosures details::details-content{grid-column:1/-1;min-width:0}
+  .product-disclosures details:not([open])::details-content{display:none}
+ }
+}
+@media screen and (max-width:1100px){
+ .capture-table.morning-table tbody{gap:6px}
+ .capture-table.morning-table tr{padding:7px 10px 8px;row-gap:2px}
+}
+@media print{
+ .forecast-breakdown>summary,.forecast-details:not([open]){display:none}
+}

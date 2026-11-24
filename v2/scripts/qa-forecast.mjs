@@ -41,7 +41,7 @@ const server=createServer(async(req,res)=>{
  try{res.setHeader('Content-Type',({'.js':'text/javascript','.css':'text/css','.html':'text/html','.svg':'image/svg+xml'})[extname(file)]||'application/octet-stream');res.end(await readFile(file));}catch{res.writeHead(404);res.end();}
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));const origin='http://127.0.0.1:'+server.address().port;
-const profiles=[['chromium-phone',chromium,devices['Pixel 7']],['chromium-small-phone',chromium,{viewport:{width:320,height:740},isMobile:true,hasTouch:true}],['chromium-tablet',chromium,devices['iPad Pro 11']],['webkit-iphone',webkit,devices['iPhone 13']],['webkit-ipad',webkit,devices['iPad Pro 11']]];
+const profiles=[['chromium-phone',chromium,devices['Pixel 7']],['chromium-small-phone',chromium,{viewport:{width:320,height:740},isMobile:true,hasTouch:true}],['chromium-tablet',chromium,devices['iPad Pro 11']],['chromium-desktop',chromium,{viewport:{width:1440,height:900}}],['webkit-iphone',webkit,devices['iPhone 13']],['webkit-ipad',webkit,devices['iPad Pro 11']]];
 try{for(const [name,engine,device]of profiles){
  if(process.env.TEXT_BROWSER&&!name.startsWith(process.env.TEXT_BROWSER))continue;
  run=structuredClone(initial);revision=7;
@@ -53,9 +53,13 @@ try{for(const [name,engine,device]of profiles){
  await page.goto(origin+'/sales',{waitUntil:'commit'});await page.getByRole('heading',{name:'Morning load',exact:true}).waitFor();
  const loadMs=Math.round(await page.evaluate(()=>performance.now()));
  const cards=page.locator('.morning-table tbody tr'),card=cards.filter({hasText:'SYNTHETIC CHAKALAKA'});
- const rows=card.locator('.forecast-summary dd'),details=card.locator('.forecast-details');
+ const rows=card.locator('.forecast-summary dd'),details=card.locator('.forecast-details'),forecast=card.locator('.forecast-breakdown');
  const plan=card.locator('[data-qty=planned]'),loaded=card.locator('[data-qty=loaded]');
  assert.equal(await cards.count(),products.length);
+ assert.equal(await cards.locator('details[open]').count(),0);
+ assert.equal(await rows.first().isVisible(),false);
+ await forecast.locator('summary').click();
+ assert.equal(await rows.first().isVisible(),true);
  assert.deepEqual(await rows.allTextContents(),['15','7','22','12','11']);
  assert.match(await card.innerText(),/Why 22 bags\?\s+15 expected sales \+ 7 extra bags to avoid running short/);
  assert.match(await card.innerText(),/Based on 7 similar visits. Sales not yet checked against invoices/);
@@ -63,22 +67,28 @@ try{for(const [name,engine,device]of profiles){
  assert.equal(await plan.inputValue(),'0');
  const box=cards.filter({hasText:'SYNTHETIC BOX'}),newProduct=cards.filter({hasText:'SYNTHETIC NEW PRODUCT'});
  assert.deepEqual(await box.locator('.forecast-summary dd').allTextContents(),['5','8','13','10','0']);
- assert.match(await box.innerText(),/Why 13 boxes/);
- assert.match(await newProduct.innerText(),/No suggested load. Enter your own plan/);
+ assert.match(await box.locator('.forecast-why').textContent(),/Why 13 boxes/);
+ assert.match(await newProduct.locator('.forecast-why').textContent(),/No suggested load. Enter your own plan/);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,name+' no horizontal overflow');
  assert.ok((await card.locator('.forecast-summary div').evaluateAll(es=>es.map(e=>e.scrollWidth<=e.clientWidth+1))).every(Boolean),name+' figures fit');
  assert.ok(await rows.first().evaluate(e=>parseFloat(getComputedStyle(e).fontSize)>=15));
  const beforeOpen=writes.length;
  await details.locator('summary').click();
  assert.match(await details.innerText(),/Recent-sales minimum: 12 sold \+ 3 extra = 15/);
+ assert.equal(await rows.first().isVisible(),true);
+ await forecast.locator('summary').click();
+ assert.equal(await rows.first().isVisible(),false);
+ assert.equal(await details.locator('p').first().isVisible(),true);
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth),true,name+' open details fit');
  await details.locator('summary').click();
  assert.equal(writes.length,beforeOpen);
  await page.getByRole('button',{name:'Refresh suggestions',exact:true}).click();
  await page.getByText('Forecast checked · More details',{exact:true}).waitFor();
+ assert.equal(await cards.locator('details[open]').count(),0);
  assert.equal(await plan.inputValue(),'0');assert.equal(await box.locator('[data-qty=planned]').inputValue(),'7');
  assert.equal(await box.locator('[data-qty=loaded]').inputValue(),'4');
  await plan.fill('29');await card.locator('[data-copy-plan]').click();
+ assert.equal(await cards.locator('details[open]').count(),0);
  assert.equal(await loaded.inputValue(),'29');assert.equal(await rows.nth(2).textContent(),'22');
  // Choosing the whole-route suggestion is explicit; cancel keeps the edit.
  await page.locator('.capture-actions summary').click();

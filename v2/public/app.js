@@ -75,10 +75,24 @@ function workflowDock(r){
 }
 function render(){
  const c=state.bootstrap.catalog,r=state.result?.run;
+ const openPanels=app.querySelectorAll('.product-disclosures details[open]');
  app.innerHTML=header()+`<main class="shell"><div class="print-title">${escape(routeName(c.routes.find(x=>x.code===state.route),state.date))} · ${escape(state.date)}</div><div class="route-context"><label>Route<select id="route-select" ${c.routes.length?'':'disabled'}>${routeOptions(c.routes)}</select></label><label>Date<input id="date" type="date" value="${state.date}"></label></div>${r?`<div class="view-heading"><h1>${viewNames[state.tab]}</h1>${c.routes.find(x=>x.code===state.route)?.invoice_enabled?'<button id="print-shop-list">Print Shop List</button>':''}<span class="phase-badge">${escape(r.phase)}</span></div>${state.tab==='recon'?`<div class="metrics">${metric('Loaded','metric-loaded','—','Actual morning quantities')}${metric('Stock sales','metric-sold','—','Load less returns')}${metric('Stock differences','metric-stock','—','Against invoice quantities')}${metric('Cash difference','metric-cash','—','Counted less expected')}</div>`:''}${state.tab==='evening'?'<section class="sales-total" aria-labelledby="sales-value-title"><h2 id="sales-value-title">Total sales value</h2><strong id="evening-sales-value" aria-live="polite" aria-atomic="true">—</strong><p id="evening-sales-note"></p></section>':''}<div id="view">${view()}</div>${footerNotes()}`:`<section class="panel">${setupView()}</section>`}</main>${r?workflowDock(r):''}`;
+ for(const panel of openPanels)document.getElementById(panel.id)?.setAttribute('open','');
  bind();if(r)updateStats();dockObserver.disconnect();if($('.workflow-dock'))dockObserver.observe($('.workflow-dock'));
 }
 function changeView(tab){if(state.busy)return;state.tab=tab;render();window.scrollTo({top:0,behavior:'instant'});}
+// Print current view includes the same forecast figures as the expanded screen.
+let collapsedForPrint=[];
+window.addEventListener('beforeprint',()=>{
+ for(const panel of app.querySelectorAll('.forecast-breakdown:not([open])')){
+  collapsedForPrint.push(panel);
+  panel.open=true;
+ }
+});
+window.addEventListener('afterprint',()=>{
+ for(const panel of collapsedForPrint)panel.open=false;
+ collapsedForPrint=[];
+});
 document.addEventListener('click',e=>{if(!e.target.closest('.more-menu'))$('.more-menu')?.removeAttribute('open');if(!e.target.closest('.capture-actions'))$('.capture-actions')?.removeAttribute('open');});
 document.addEventListener('keydown',e=>{if(e.key==='Escape'){$('.more-menu')?.removeAttribute('open');$('.capture-actions')?.removeAttribute('open');}});
 
@@ -143,7 +157,7 @@ function forecastUnit(unit){
  const description=parts.length&&(Object.hasOwn(names,key)||key==='each')?parts.join(':').trim():full;
  return {one:noun[0],many:noun[1],description:description.replace(/\s+x\s+/gi,' × ')};
 }
-function morningProduct(i,expectedVisit){
+function morningProduct(i,expectedVisit,runKey){
  const f=i.forecast??{},unit=forecastUnit(i.unit);
  const qty=Number.isFinite(f.qty)?f.qty:null,expected=Number.isFinite(f.base)?Math.ceil(f.base):null;
  const extra=qty!=null&&expected!=null?qty-expected:null;
@@ -164,16 +178,24 @@ function morningProduct(i,expectedVisit){
  if(count===0)evidence.push('No sales records for similar visits.');
  if(/(?:Legacy|Provisional) actuals: invoice reconciliation unverified\./.test(f.warning))evidence.push('Sales not yet checked against invoices.');
  const meta=[i.code,unit.description,money(i.price_cents)].filter(Boolean).map(escape).join(' · ');
+ const panelKey=escape(runKey+'-'+i.code);
  return `<strong class="product-name">${escape(i.name)}</strong><p class="forecast-meta">${meta}</p>
+ <div class="product-disclosures">
+ <details id="forecast-${panelKey}" class="forecast-breakdown"><summary>Forecast</summary>
  <div class="forecast-columns" aria-hidden="true"><span>Description</span><span>${unit.many[0].toUpperCase()+unit.many.slice(1)}</span></div>
  <dl class="forecast-summary" aria-label="Forecast in ${unit.many}">${summary}</dl>
  ${why}${evidence.length?'<p class="forecast-evidence">'+evidence.join(' ')+'</p>':''}
- <details class="forecast-details"><summary>More details</summary>${forecastDetails(f,expectedVisit)}</details>`;
+ ${savedAdjustment(i)}</details>
+ <details id="details-${panelKey}" class="forecast-details"><summary>More details</summary>${forecastDetails(f,expectedVisit)}</details>
+ </div>`;
+}
+function savedAdjustment(i){
+ return i.adjustment?'<small>Previously saved non-sale stock: '+number(i.adjustment)+' · '+escape(i.adjustment_reason)+'</small>':'';
 }
 function captureProduct(i,evening){
  const unit=String(i.unit??'').split(':')[0].trim();
- const product=evening?`<details class="capture-product-details"><summary><span class="capture-product-title"><strong class="product-name">${escape(i.name)}</strong>${unit?'<span class="capture-unit">'+escape(unit)+'</span>':''}</span><span class="product-details-label">Details <span aria-hidden="true">⌄</span></span></summary><div class="product-detail-body"><small>${escape(i.code)} · ${escape(i.unit)} · ${money(i.price_cents)}</small></div></details>`:morningProduct(i,state.result.forecast_status?.expected_visit);
- return '<td class="product">'+product+(i.adjustment?'<small>Previously saved non-sale stock: '+number(i.adjustment)+' · '+escape(i.adjustment_reason)+'</small>':'')+'</td>';
+ const product=evening?`<details class="capture-product-details"><summary><span class="capture-product-title"><strong class="product-name">${escape(i.name)}</strong>${unit?'<span class="capture-unit">'+escape(unit)+'</span>':''}</span><span class="product-details-label">Details <span aria-hidden="true">⌄</span></span></summary><div class="product-detail-body"><small>${escape(i.code)} · ${escape(i.unit)} · ${money(i.price_cents)}</small></div></details>`:morningProduct(i,state.result.forecast_status?.expected_visit,state.date+'-'+state.route);
+ return '<td class="product">'+product+(evening?savedAdjustment(i):'')+'</td>';
 }
 
 function view(){
