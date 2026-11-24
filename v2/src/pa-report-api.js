@@ -12,7 +12,7 @@ import {hash,isAdmin,keys} from './auth.js';
 async function stepReportPage(db,offset=0){
  offset=Number(offset);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  const rows=(await db.prepare(latestSQL+" WHERE json_extract(e.payload,'$.task_type')='workflow' ORDER BY e.saved_at DESC,e.task_id LIMIT 26 OFFSET ?").bind(offset).all()).results;
- return {items:rows.slice(0,25).map(decode).map(t=>({task_id:t.id,pa_task_id:t.pa_task_id,revision:t.revision,title:t.title,status:t.status,assigned_to:t.assigned_to,updated_at:t.updated_at,progress:t.progress,ready_for_approval:!!t.ready_for_approval,next_action:t.next_action,next_assigned_to:t.next_assigned_to,next_action_date:t.next_action_date,url:'/tasks?task='+t.id,steps:(t.steps||[]).filter(s=>s.status!=='Complete').map(s=>({id:s.id,description:s.description,assigned_to:s.assigned_to,due_date:s.due_date,status:s.status,overdue:s.overdue,blocked:s.blocked}))})),next_offset:rows.length>25?offset+25:null};
+ return {items:rows.slice(0,25).map(decode).map(t=>({task_id:t.id,pa_task_id:t.pa_task_id,revision:t.revision,title:t.title,status:t.status,assigned_to:t.assigned_to,updated_at:t.updated_at,progress:t.progress,ready_for_approval:!!t.ready_for_approval,next_action:t.next_action,next_assigned_to:t.next_assigned_to,next_action_date:t.next_action_date,url:'/tasks?task='+t.id,steps:(t.steps||[]).filter(s=>!['Complete','Waived'].includes(s.status)).map(s=>({id:s.id,description:s.description,assigned_to:s.assigned_to,due_date:s.due_date,status:s.status,overdue:s.overdue,blocked:s.blocked}))})),next_offset:rows.length>25?offset+25:null};
 }
 
 // A versioned read model of the existing PA register, never a second master.
@@ -87,7 +87,7 @@ async function writeMail(env,user,b){
   const {task_id,step_id}=b.data.delivery_step;
   await ensureTaskSchema(env.DB);
   const task=await getTask(env.DB,task_id);
-  check(task&&(task.id===row.app_task_id||task.pa_task_id===row.id)&&task.steps?.some(s=>s.id===step_id&&s.status!=='Complete'),'Kies die bestaande e-posstap op hierdie taak.');
+  check(task&&(task.id===row.app_task_id||task.pa_task_id===row.id)&&task.steps?.some(s=>s.id===step_id&&!['Complete','Waived'].includes(s.status)),'Kies die bestaande e-posstap op hierdie taak.');
  }
  const reconcile=b.action==='reconcile_step';
  if(reconcile)check(user.via==='pa','Hierdie handeling is vir PA.',403);
@@ -101,12 +101,12 @@ async function writeMail(env,user,b){
    const step=task?.steps?.find(s=>s.id===step_id);
    try{
     check(step&&(task.id===row.app_task_id||task.pa_task_id===row.id),'Gaan die oorspronklike stap na.');
-    if(m.followup_required&&step.status!=='Complete'&&!task.steps.some(s=>s.id!==step_id&&s.required!==false&&s.status!=='Complete')){
+    if(m.followup_required&&!['Complete','Waived'].includes(step.status)&&!task.steps.some(s=>s.id!==step_id&&s.required!==false&&!['Complete','Waived'].includes(s.status))){
      const added=await saveTask(env,user,{task_id,revision:task.revision,action:'step_add',step_id:'mail-followup-'+m.message_id,
       request_id:'mail-next-'+m.message_id,data:{description:'Volg die e-pos op',assigned_to:task.assigned_to,due_date:m.review_date,dependencies:[step_id]}});
      task=added.task;
     }
-    if(step.status!=='Complete')await saveTask(env,user,{task_id,step_id,revision:task.revision,action:'step_complete',
+    if(!['Complete','Waived'].includes(step.status))await saveTask(env,user,{task_id,step_id,revision:task.revision,action:'step_complete',
      request_id:'mail-step-'+m.message_id,note:'Gmail het die versending bevestig.',proof_url:'https://mail.google.com/mail/u/0/#sent/'+m.message_id});
     result.step_updated=true;
    }catch{result.step_updated=false;result.step_notice='Die e-pos is gestuur. PA moet die taakstap nog nagaan.';}

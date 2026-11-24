@@ -3,7 +3,7 @@ import {check,UserError,dateKey,today} from './domain.js';
 import {isAdmin,keys,hash} from './auth.js';
 import {isTaskManager,taskVisibility,taskReadScope,canSeeTask,canManageTask,fullTaskAccess,taskView,stepFileAccess} from './task-access.js';
 import {isInvoiceRep} from './invoice-auth.js';
-import {projectTask,taskType,syncRequired,stepReminder} from './task-workflow.js';
+import {projectTask,taskType,syncRequired,stepReminder,standardSteps,supplierSteps} from './task-workflow.js';
 import {taskOwner} from './task-workflow.js';
 import {registerTaskText,changePaWork,unfinishedWork} from './task-pa-work.js';
 import {workflowAction,validateSteps,completeReminder} from './task-workflow-actions.js';
@@ -146,7 +146,10 @@ export async function saveTask(env,user,b){
  check((old?.revision??0)===b.revision,'This task changed. Reload before saving.',409);
  check(env.TASK_WORKFLOWS_READ_ONLY!=='true'||!old||taskType(old)!=='workflow'||b.action==='restore_task_revision','Stapwysigings is tydelik gesluit vir onderhoud.',503);
  const manager=isTaskManager(user.username),manage=old&&canManageTask(user,old);
- const action=b.action??'create';
+ let action=b.action??'create';
+ if(action==='complete'&&old?.dispatch_step_id&&old.task_type==='workflow'){
+  action='step_complete';b={...b,action,step_id:old.dispatch_step_id};
+ }
  if(old&&!fullTaskAccess(user,old))check(['step_start','step_note','step_complete'].includes(action),'Jy kan net jou eie stap bywerk.',403);
  if(b.data&&Object.hasOwn(b.data,'visibility')){
   check(manager,'Slegs taakbestuurders kan sigbaarheid kies.',403);
@@ -160,13 +163,15 @@ export async function saveTask(env,user,b){
   check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||['area','steps'].includes(k)),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat','Personal PA matters cannot be imported into FenMeat.');
   if(!admin){check(manager||!b.data.assigned_to||b.data.assigned_to===user.username,'You can only create tasks for yourself.',403);check(Object.keys(b.data).every(k=>selfEditable.includes(k)||['area','steps'].includes(k)||(manager&&k==='visibility'))&&['general','stocktake'].includes(b.data.kind??'general'),'Only admins can create linked PA or PO tasks.',403);}
   task=validateTask({...(manager&&!admin&&b.data.assigned_to&&b.data.assigned_to!==user.username?{visibility:'assigned'}:{}),kind:'general',priority:'Normal',assigned_to:user.username,...b.data,id:b.task_id,area:'Fen Meat',status:'Pending',created_by:user.username,created_at:at,completion:null,waiting_reason:''},env);
+  const supplierPlan=user.via==='pa'&&task.kind==='po_dispatch'&&!b.data.steps;
+  if(supplierPlan){task.task_type='workflow';task.dispatch_step_id='dispatch';}
   check(!b.data.steps||task.task_type==='workflow','Kies Taak met stappe.');
   if(task.task_type==='workflow'){
-   const inputs=b.data.steps||[{id:'step-1',description:task.title,notes:task.details,assigned_to:task.assigned_to,due_date:task.due_date||task.review_date,status:'Pending',requires_evidence:task.requires_evidence}];
+   const inputs=b.data.steps||(supplierPlan?supplierSteps(task):null)||[{id:'step-1',description:task.title,notes:task.details,assigned_to:task.assigned_to,due_date:task.due_date||task.review_date,status:'Pending',requires_evidence:task.requires_evidence}];
    check(Array.isArray(inputs)&&inputs.length<=100,'Gebruik 1 tot 100 stappe.');
    const steps=[];
    for(const input of inputs){
-    check(!input.completion&&!input.attachments?.length&&input.status!=='Complete'&&input.status!=='Completed','Voltooi elke nuwe stap afsonderlik.');
+    check(!input.waiver&&input.status!=='Waived'&&!input.completion&&!input.attachments?.length&&input.status!=='Complete'&&input.status!=='Completed','Voltooi elke nuwe stap afsonderlik.');
     check(manager||input.assigned_to===user.username,'Jy kan net eie stappe skep.',403);
     check(input.files===undefined||Array.isArray(input.files)&&input.files.length<=12,'Kies hoogstens 12 stapdokumente.');
     const added=[];for(const f of input.files||[])added.push(await attachmentData(f));files.push(...added);
@@ -194,6 +199,27 @@ export async function saveTask(env,user,b){
   if(['pa_request','pa_claim','pa_result','pa_resume','pa_recover'].includes(action)){
    if(action==='pa_result'&&b.files){check(Array.isArray(b.files)&&b.files.length<=4,'Kies hoogstens vier verslaglêers.');for(const input of b.files)files.push(await attachmentData(input));}
    await changePaWork(task,b,user,env.DB,at,files,safeURL);
+  }else if(action==='standardize_task'){
+   check(admin,'Net administrateurs kan bestaande take omskakel.',403);
+   check(!task.step_format&&taskType(task)!=='workflow','Hierdie taak gebruik reeds die stapformaat.',409);
+   if(b.review){
+    check(task.kind==='stocktake'&&b.review.assigned_to==='pa','Behou die oorspronklike telpersoon.');
+    task.native_review={assigned_to:'pa',description:text(b.review.description,1000,true),due_date:dateKey(b.review.due_date)};
+   }
+   if(b.steps){
+    check(Array.isArray(b.steps)&&b.steps.length>0,'Kies die stappe.');
+    check(task.kind!=='stocktake'&&taskType(task)!=='reminder','Behou die telling of herhalende herinnering se eie proses.');
+    check(b.steps.every(s=>!s.attachments?.length&&!s.completion?.attachments?.length&&!s.waiver),'Behou bestaande dokumente op die oorspronklike taak.');
+    check(b.steps.filter(s=>s.status==='Complete').every(s=>s.completion?.note?.trim()),'Elke oorgedraagde voltooiing benodig ’n bron.');
+    task.steps=validateSteps(b.steps,taskUsers(env));
+    task.legacy_completion=task.completion;
+    task.historical_closure=task.status==='Complete'&&task.steps.every(s=>s.status==='Complete');
+    const done=task.steps.every(s=>s.status==='Complete');
+    check(!done||task.status==='Complete','Behou die bestaande finale goedkeuring.');
+    task.task_type='workflow';
+    if(!done&&task.status!=='Cancelled'){task.status='Pending';task.completion=null;}
+   }
+   task.last_reason=text(b.note,2000,true);
   }else if(action==='set_visibility'){
    check(admin,'Slegs administrateurs kan taaktoegang verander.',403);
    check(['operational','assigned','confidential'].includes(b.data?.visibility),'Kies wie die taak mag sien.');
@@ -202,7 +228,7 @@ export async function saveTask(env,user,b){
    check(admin,'Only admins can restore task history.',403);check(Number.isSafeInteger(b.restore_revision)&&b.restore_revision>0&&b.restore_revision<old.revision,'Choose an earlier saved revision.');text(b.note,2000,true);
    const row=await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? AND revision=?').bind(old.id,b.restore_revision).first();check(row,'Earlier task not found.',404);const restored=JSON.parse(row.payload);
    check(restored.id===old.id&&restored.parent_cycle_id===old.parent_cycle_id&&(!restored.pa_task_id||restored.pa_task_id===old.pa_task_id),'Preserve the task and PA identity.');task={...restored,pa_task_id:old.pa_task_id,last_reason:b.note,restored_from:b.restore_revision};
-  }else if(['start_workflow','step_add','step_update','step_complete','step_reopen','step_start','step_note','step_delete','step_reorder','approve_workflow','status_override'].includes(action)){task=await workflowAction({task,b,user,admin,manage,users:taskUsers(env),at,db:env.DB});
+  }else if(['start_workflow','step_add','step_update','step_complete','step_reopen','step_waive','step_start','step_note','step_delete','step_reorder','approve_workflow','status_override'].includes(action)){task=await workflowAction({task,b,user,admin,manage,users:taskUsers(env),at,db:env.DB});
   }else if(action==='update'){
    check(manage||managesOwnTask(user,old),'Only admins can change tasks assigned by someone else. You can change your reminder.',403);check(b.data&&Object.keys(b.data).every(k=>(admin?editable:selfEditable).includes(k)||(manage&&k==='visibility')),'Unknown task field.');
    if(!manage)check(!Object.hasOwn(b.data,'assigned_to')||b.data.assigned_to===user.username,'You can only keep tasks assigned to yourself.',403);
@@ -311,13 +337,19 @@ export async function saveTask(env,user,b){
   await changePaWork(task,{action:'pa_request',request_id:b.request_id,note:task.details||task.title},user,env.DB,at,files,safeURL);
  if(['create','note','respond'].includes(action)&&user.via!=='pa')registerTaskText(task,{...b,action},user,at);
  if(old?.assigned_to!==task.assigned_to&&task.feedback_request?.status==='pending')task.feedback_request={...task.feedback_request,status:'cancelled',cancelled_at:at};
+ if(action==='create'||action==='standardize_task')task.step_format=1;
  if(task.task_type!=='legacy')task=projectTask(task);
  check(!(task.status==='Complete'||action==='complete')||!unfinishedWork(task),'Handel eers die oop PA-opdrag af.');
  check(statusSet.has(task.status),'Invalid task status.');
  if(task.reminder_mode==='once'&&(!old||old.reminder_mode!=='once'||old.reminder_at!==task.reminder_at))check(Date.parse(task.reminder_at)>Date.parse(at),'Choose a reminder time in the future.');
  for(const key of ['revision','updated_at','updated_by','pa_sync','progress','next_action','next_action_date','next_assigned_to','ready_for_approval'])delete task[key];
+ if(task.task_type==='workflow')delete task.native_step;
+ if(task.step_format&&task.task_type!=='workflow'){
+  const [step]=standardSteps(task);
+  task.native_step={id:step.id,description:step.description,assigned_to:step.assigned_to,status:step.status,due_date:step.due_date};
+ }
  if(task.steps)task.steps=task.steps.map(({blocked,effective_status,overdue,...step})=>step);
- if(old&&['update','step_add','step_update','step_delete','step_reorder','step_reopen','step_start','step_note','approve_workflow','start_workflow','restore_task_revision','status_override','reminder','followup_reminder'].includes(action)){
+ if(old&&['update','step_add','step_update','step_delete','step_reorder','step_reopen','step_waive','step_start','step_note','approve_workflow','start_workflow','restore_task_revision','status_override','reminder','followup_reminder'].includes(action)){
   const reason=optionalText(b.note,2000),changes=taskChanges(old,task);
   const reduced=old.requires_evidence&&!task.requires_evidence||(old.steps||[]).some(s=>{const n=task.steps?.find(n=>n.id===s.id);return n&&(s.requires_evidence&&!n.requires_evidence||s.required!==false&&n.required===false||(s.dependencies||[]).some(id=>!n.dependencies?.includes(id)));});
   check(!reduced||reason,'Sê waarom die bewys- of stapvereiste verander.');
@@ -449,6 +481,7 @@ const taskSaveContract={
  visibility:'For new ordinary business work set data.visibility to operational. assigned limits sharing to administrators and task participants. confidential is for Alex and Alinda. Older unclassified tasks keep assignment-based access.',
  update:'Read the current task first. save_task({task:{action:"update",task_id:task.id,revision:task.revision,request_id,data:{only_changed_fields},note}}). Use existing usernames from users. Use details for the description.',
  identifiers:'task_id and save_task request_id: 8–90 ASCII letters, digits or hyphens. UUIDs are safe. save_app_data request_id: 16–80. Reuse the SAME request_id and identical content for a retry; a changed request needs a new request_id. Never use a task id as the request id.',
+ standardize:'Admin only. standardize_task preserves a single native reminder or stocktake. For a researched existing cycle pass steps with sourced confirmations, latest revision and a reason in note. Read back the same id. step_waive requires a reason.',
  workflow:'Create data.task_type=workflow and data.steps=[{id,description,assigned_to,due_date,status:Pending or In Progress,notes,reminder_mode:due/daily/off,requires_evidence,files?}]. Steps stay under one parent. step_add/step_update use step_id and data; step_start/step_complete/step_reopen/step_note use step_id. step_note accepts note/files; add/update accept files. step_delete requires confirm:true and note; step_reorder uses all step_ids in desired order. approve_workflow is separate final approval after all required steps finish, by Alex or assigned_to, also by any task manager for ordinary operational workflows. Read ready_for_approval, progress and steps; never create duplicate tasks per step.',
  actions:'Use complete, reopen, wait or cancel for status, not data.status. wait requires note (the waiting reason) and review_date; reopen requires note. Workflow steps retain their existing completion/evidence rules.',
  reminder:'reminder_mode: once, daily or off. once requires a future UTC ISO timestamp with milliseconds; 07:00 Africa/Johannesburg is 05:00:00.000Z. A future open reminder displays Scheduled until its due date, then Pending.',

@@ -44,3 +44,5 @@
 .task-brief div {display:grid;grid-template-columns:minmax(10rem,12rem) minmax(0,1fr);gap:.7rem}
 .task-brief dt {font-weight:700}.task-brief dd {margin:0;white-space:pre-line;overflow-wrap:anywhere}
 @media(max-width:630px){.task-brief div{grid-template-columns:1fr;gap:.1rem}}
+
+.workflow progress { accent-color: #25763d; }

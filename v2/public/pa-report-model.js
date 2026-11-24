@@ -1,5 +1,5 @@
 import {projectTask,localDate} from './task-workflow.js';
-import {taskOwner,ownStep} from './task-workflow.js';
+import {taskOwner,ownStep,stepClosed} from './task-workflow.js';
 export const paOpen=t=>['Pending','Scheduled','Waiting'].includes(t.status);
 export const paDue=t=>t.next_action_date||t.review_date||t.due_date;
 // A person's confirmation saves immediately; the PA spreadsheet remains authoritative.
@@ -14,7 +14,7 @@ export function unifiedWork(app,pa){
   const completion_requested=paOpen(r)&&f?.action==='complete'&&f.status==='pending';
   const part_pending=completion_requested&&f.completion_scope==='part';
   const completion_pending=completion_requested&&!part_pending&&f.actor===r.assigned_to&&stages.length===0&&!needsReview(r);
-  const workflow=stages.find(t=>t.task_type==='workflow');
+  const workflow=stages.find(t=>t.task_type==='workflow'&&t.id===r.app_task_id)||stages.find(t=>t.task_type==='workflow'&&(!r.app_task_id||stages.length===1));
   const edited=paOpen(r)&&stages.length===1&&stages[0].last_edit&&stages[0].pa_sync?.status==='pending'&&stages[0].kind==='general'?stages[0]:null;
   const scheduled=(['Pending','Scheduled'].includes(r.status)||r.responsibility&&r.status==='Waiting')&&r.review_date>day;
   const status=workflow?.status||edited?.status||(completion_pending?'Klaar gemeld':scheduled?'Scheduled':['Waiting','Scheduled'].includes(r.status)&&r.review_date&&r.review_date<=day?'Pending':r.status);
@@ -31,7 +31,7 @@ export function workCounts(rows,username){const active=rows.filter(paOpen);retur
 export function selectWork(rows,{username,admin,scope='mine',status='open',search='',person='',date='',priority=''}){
  const statusFor=r=>{
   if(scope!=='mine'||!paOpen(r)||!r.steps?.length||r.ready_for_approval)return r.status;
-  const mine=r.steps.filter(s=>s.assigned_to===username&&s.status!=='Complete');
+  const mine=r.steps.filter(s=>s.assigned_to===username&&!stepClosed(s));
   if(!mine.length)return r.status;
   if(ownStep(r,username,'open'))return 'Pending';
   return mine.some(s=>!s.blocked&&s.effective_status==='Scheduled')?'Scheduled':'Waiting';
