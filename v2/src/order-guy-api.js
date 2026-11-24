@@ -66,7 +66,16 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
  const bases=r.register.materials.map(m=>m.stock.available_from??m.stock.date).filter(d=>d&&d<from&&d>=addDays(from,-31));
  const historyFrom=bases.length?bases.sort()[0]:from;
  const saved=await db.prepare('SELECT e.* FROM v2_production_events e JOIN (SELECT production_date,MAX(revision) revision FROM v2_production_events WHERE production_date BETWEEN ? AND ? GROUP BY production_date) latest ON latest.production_date=e.production_date AND latest.revision=e.revision ORDER BY e.production_date').bind(historyFrom,to).all();
- const plans=[];for(const e of saved.results){try{plans.push(await readPlan(e.production_date));}catch{plans.push({plan:JSON.parse(e.payload),revision:e.revision,saved_at:e.saved_at,actor:e.actor,stale:null,source_warning:'Current route demand could not be verified.'});}}
+ const plans=[];
+ for(const e of saved.results){
+  if(e.production_date<from){
+   // History uses the saved decision. Current POS stock and a fresh route comparison
+   // belong to the requested ordering window, not to a past production day.
+   plans.push({plan:normaliseProductionPlan(JSON.parse(e.payload)),revision:e.revision,saved_at:e.saved_at,actor:e.actor,stale:null});
+   continue;
+  }
+  try{plans.push(await readPlan(e.production_date));}catch{plans.push({plan:JSON.parse(e.payload),revision:e.revision,saved_at:e.saved_at,actor:e.actor,stale:null,source_warning:'Current route demand could not be verified.'});}
+ }
  // A forecast is a read-only purchasing estimate, never a synthetic saved plan.
  // Confirmed plans claim their route coverage first, including explicit zero.
  const claimed=new Map();for(const p of plans.filter(p=>p.plan.phase==='confirmed'))for(const route of p.plan.routes)claimed.set(p.plan.target_date+'|'+route,p.plan.date);
@@ -91,5 +100,5 @@ export async function orderGuyApi({request,url,db,user,catalog,bodyOf,readPlan,f
    forecast_days.push({...base,status:'forecast',plan,sources:sources.map(({run,forecasts,...s})=>s),settings_date:settingsPlan?.date??null});
   }catch{forecast_days.push({...base,status:'forecast_unavailable',source_warning:'The current app forecast could not be read. Requirements remain unresolved.'});}
  }
- return {...orderGuyReport({register:r.register,registry_revision:r.revision,plans,forecast_days,from,to,catalog}),register:r.register,registry_saved_at:r.saved_at,plans,catalog};
+ return {...orderGuyReport({register:r.register,registry_revision:r.revision,plans,forecast_days,from,to,catalog}),register:r.register,registry_saved_at:r.saved_at,plans:plans.filter(p=>p.plan.date>=from),catalog};
 }

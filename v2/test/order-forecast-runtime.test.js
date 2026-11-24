@@ -40,6 +40,8 @@ test('real Worker exports current forecast days, draft fallback and confirmed ze
  assert.equal(projectedRaw.stock.date,'2026-10-12');assert.equal(projectedRaw.stock.qty,100);
  assert.equal(projectedRaw.projection.qty,90);assert.equal(projectedRaw.projection.consumption,10);
  assert.deepEqual(projectedRaw.projection.days.map(d=>d.date),['2026-10-13','2026-10-14']);
+ assert.deepEqual(projected.plans,[],'Only return plans inside the selected order window');
+ assert.ok(projectedRaw.projection.days.every(d=>!Object.hasOwn(d,'contributions')&&d.target_date),'Keep daily evidence without copying entire historical contribution lists');
  assert.equal(projectedRaw.quantity_review,true);assert.equal(projectedRaw.inventory_ready,true);
  assert.deepEqual(await snapshot(),beforeProjection);
  // Friday and the intervening weekend target the same next route. The count

@@ -193,7 +193,7 @@ export function orderGuyReport({register,registry_revision,plans,forecast_days=[
    // below, and apply the buying window's buffer only to that window.
    balance+=incoming-use;
    result.consumption+=use;result.incoming+=incoming;
-   result.days.push({date,gross:use,incoming,basis:coverage?.status??'unknown',contributions:row?.contributions??[]});
+   result.days.push({date,gross:use,incoming,basis:coverage?.status??'unknown',target_date:coverage?.target_date??null,revision:coverage?.revision??null});
    if(balance< -1e-6)return fail('Die berekende verbruik op '+date+' oorskry die bewese voorraad. Bevestig ontbrekende ontvangste of ’n nuwe telling.');
   }
   // A negative estimate means the earlier count cannot explain recorded usage.
