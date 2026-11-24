@@ -30,4 +30,22 @@ test('real Worker exports current forecast days, draft fallback and confirmed ze
  assert.deepEqual(await snapshot(),before);
  // The sync export uses exactly the same calculation; only generation time changes.
  const again=(await call('/api/sync/order-guy?from=2026-10-12&to=2026-10-14')).data;delete r.generated_at;delete again.generated_at;assert.deepEqual(again,r);assert.deepEqual(await snapshot(),before);
+
+ // Same saved count is carried to a later buying window without redating it.
+ for(const m of register.materials){Object.assign(m.stock,{qty:100,date:'2026-10-12',available_from:'2026-10-12',availability_confirmed:true,count:{packs:20,loose:0,pack_qty:5,unit:m.unit,included_incoming:[]}});}
+ await call('/api/recipes',{register,revision:1,reason:'Synthetic dated full-pack count',request_id:crypto.randomUUID()});
+ const beforeProjection=await snapshot();
+ const projected=(await call('/api/order-guy?from=2026-10-15&to=2026-10-15')).data;
+ const projectedRaw=projected.rows.find(x=>x.material==='RAW');
+ assert.equal(projectedRaw.stock.date,'2026-10-12');assert.equal(projectedRaw.stock.qty,100);
+ assert.equal(projectedRaw.projection.qty,90);assert.equal(projectedRaw.projection.consumption,10);
+ assert.deepEqual(projectedRaw.projection.days.map(d=>d.date),['2026-10-13','2026-10-14']);
+ assert.equal(projectedRaw.quantity_review,true);assert.equal(projectedRaw.inventory_ready,true);
+ assert.deepEqual(await snapshot(),beforeProjection);
+ // Friday and the intervening weekend target the same next route. The count
+ // day owns it once; moving the buying window cannot recreate that demand.
+ const weekend=(await call('/api/order-guy?from=2026-10-19&to=2026-10-19')).data;
+ assert.equal(weekend.coverage[0].status,'covered_by_other_day');
+ assert.deepEqual(await snapshot(),beforeProjection);
+
 });

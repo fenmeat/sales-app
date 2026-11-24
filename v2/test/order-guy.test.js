@@ -82,3 +82,45 @@ test('non-purchased uncounted ingredients retain usage and cost without blocking
  const {plan,reg,report}=fixture(['W01']);plan.groups[0].planned=1;reg.materials[0].procure=false;reg.materials[0].stock={qty:null,date:null,reserve:null,incoming:[],source:''};
  const r=report(),raw=r.rows.find(x=>x.material==='M1');assert.equal(raw.gross,10);assert.equal(raw.stock.qty,null);assert.equal(raw.procure,false);assert.equal(raw.order_packs,null);assert.equal(r.complete,true);assert.equal(recipeCost(reg.recipes[0],reg,date).total,100);
 });
+
+test('older full-pack count projects consumption separately, excluding count-day activity and historical buffers',()=>{
+ const {plan,reg,saved,report}=fixture(['W01']);plan.groups[0].planned=1;
+ const s=reg.materials[0].stock;Object.assign(s,{date:'2026-10-06',available_from:'2026-10-06',availability_confirmed:true,qty:25,reserve:5,count:{packs:5,loose:0,pack_qty:5,unit:'kg',included_incoming:[]}});
+ const previous=structuredClone(saved);previous.plan.date='2026-10-07';previous.plan.target_date='2026-10-08';
+ const counted=structuredClone(previous);counted.plan.date='2026-10-06';counted.plan.groups[0].planned=100;
+ const before=JSON.stringify({reg,saved,previous,counted});
+ const r=report({plans:[counted,previous,saved]}).rows.find(r=>r.material==='M1');
+ assert.equal(r.inventory_ready,true);assert.equal(r.projection.qty,15);assert.equal(r.projection.consumption,10);assert.equal(r.opening_qty,15);assert.equal(r.net,1.5);assert.equal(r.order_packs,1);
+ assert.equal(r.quantity_review,true);assert.equal(r.projection.estimated,true);assert.deepEqual(r.projection.days.map(d=>d.date),['2026-10-07']);
+ assert.equal(JSON.stringify({reg,saved,previous,counted}),before);
+});
+test('projection retains missing history, explicit zero and overspent stock as different outcomes',()=>{
+ const {plan,reg,saved,report}=fixture(['W01']);plan.groups[0].planned=1;
+ Object.assign(reg.materials[0].stock,{date:'2026-10-06',available_from:'2026-10-06',availability_confirmed:true,qty:0,count:{packs:0,loose:0,pack_qty:5,unit:'kg'}});
+ const previous=structuredClone(saved);previous.plan.date='2026-10-07';previous.plan.target_date='2026-10-08';
+ let r=report().rows.find(r=>r.material==='M1');assert.equal(r.net,null);assert.match(r.inventory_reason,/2026-10-07/);
+ r=report({plans:[previous,saved]}).rows.find(r=>r.material==='M1');assert.equal(r.net,null);assert.match(r.inventory_reason,/oorskry/);
+ previous.plan.groups[0].planned=0;r=report({plans:[previous,saved]}).rows.find(r=>r.material==='M1');assert.equal(r.projection.qty,0);assert.equal(r.net,11.5);
+ reg.materials[0].stock.date=reg.materials[0].stock.available_from='2026-09-01';r=report({plans:[previous,saved]}).rows.find(r=>r.material==='M1');assert.equal(r.net,null);assert.match(r.inventory_reason,/31 dae/);
+});
+test('only confirmed timely incoming enters a projected balance; included deliveries and future deliveries are not duplicated',()=>{
+ const {plan,reg,saved,report}=fixture(['W01']);plan.groups[0].planned=1;const s=reg.materials[0].stock;
+ Object.assign(s,{date:'2026-10-06',available_from:'2026-10-06',availability_confirmed:true,qty:0,count:{packs:0,loose:0,pack_qty:5,unit:'kg',included_incoming:['ALREADY-COUNTED']},incoming:[{qty:100,date:'2026-10-07',reference:'ALREADY-COUNTED',confirmed:true},{qty:15,date:'2026-10-07',reference:'VERIFIED-DELIVERY'},{qty:100,date:'2026-10-09',reference:'LATER'}]});
+ const previous=structuredClone(saved);previous.plan.date='2026-10-07';previous.plan.target_date='2026-10-08';
+ const read=()=>report({plans:[previous,saved]}).rows.find(r=>r.material==='M1');
+ assert.match(read().inventory_reason,/inkomende/);s.incoming[1].confirmed=true;
+ const r=read();assert.equal(r.projection.incoming,15);assert.equal(r.projection.qty,5);assert.equal(r.net,6.5);assert.equal(r.order_packs,2);
+});
+test('explicit carried availability begins at its own opening date rather than consuming from the old physical date',()=>{
+ const {plan,reg,saved,report}=fixture(['W01']);plan.groups[0].planned=1;const s=reg.materials[0].stock;
+ Object.assign(s,{date:'2026-10-01',available_from:'2026-10-07',availability_confirmed:true,qty:25,count:{packs:5,loose:0,pack_qty:5,unit:'kg'}});
+ const previous=structuredClone(saved);previous.plan.date='2026-10-07';previous.plan.target_date='2026-10-08';
+ const r=report({plans:[previous,saved]}).rows.find(r=>r.material==='M1');assert.equal(r.projection.qty,15);assert.equal(r.net,0);assert.equal(s.date,'2026-10-01');
+});
+
+test('a later historical delivery cannot hide a shortage on an earlier day',()=>{
+ const {plan,reg,saved,report}=fixture(['W01']);plan.groups[0].planned=1;
+ Object.assign(reg.materials[0].stock,{date:'2026-10-05',available_from:'2026-10-05',availability_confirmed:true,qty:0,count:{packs:0,loose:0,pack_qty:5,unit:'kg'},incoming:[{qty:100,date:'2026-10-07',reference:'LATE',confirmed:true}]});
+ const a=structuredClone(saved),b=structuredClone(saved);a.plan.date='2026-10-06';b.plan.date='2026-10-07';
+ const r=report({plans:[a,b,saved]}).rows.find(r=>r.material==='M1');assert.equal(r.net,null);assert.match(r.inventory_reason,/2026-10-06.*oorskry/);
+});

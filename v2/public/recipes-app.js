@@ -87,7 +87,7 @@ function materialDialog(existing){const m=structuredClone(existing??{id:'',name:
   Object.assign(m,{id:String(f.get('id')).trim(),name:String(f.get('name')).trim(),supplier:String(f.get('supplier')).trim(),unit:String(f.get('unit')).trim(),pack_qty:number(f,'pack_qty'),procure:f.get('procure')==='yes',notes:String(f.get('notes')),source:m.source||String(f.get('reason'))});
   if(m.pack_qty!==oldPack)delete m.pack_spec;
   m.price={amount:number(f,'price'),status:f.get('price_status'),date:f.get('price_date')||null,valid_until:f.get('valid_until')||null,source:String(f.get('price_source'))};
-  m.stock={...m.stock,reserve:number(f,'reserve'),incoming:String(f.get('incoming')).split('\n').filter(s=>s.trim()).map(s=>{const [date,n,...ref]=s.split(',');const qty=Number(n);if(!n?.trim()||!Number.isFinite(qty))throw Error('Use date, quantity, PO reference for each delivery.');return {date:date.trim(),qty,reference:ref.join(',').trim()};})};
+  m.stock={...m.stock,reserve:number(f,'reserve'),incoming:String(f.get('incoming')).split('\n').filter(s=>s.trim()).map(s=>{const [date,n,...ref]=s.split(',');const qty=Number(n);if(!n?.trim()||!Number.isFinite(qty))throw Error('Use date, quantity, PO reference for each delivery.');const entry={date:date.trim(),qty,reference:ref.join(',').trim()},prior=m.stock.incoming.find(x=>x.date===entry.date&&x.qty===entry.qty&&x.reference===entry.reference);return prior?{...prior,...entry}:entry;})};
   const register=structuredClone(state.result.register);const i=register.materials.findIndex(x=>x.id===m.id);if(!existing&&i>=0)throw Error('This material code already exists.');if(i>=0)register.materials[i]=m;else register.materials.push(m);await saveRegister(register,String(f.get('reason')));
  });
 }
