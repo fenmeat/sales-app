@@ -17,7 +17,7 @@ export function standardSteps(task, day=localDate()) {
  const closed=['Complete','Cancelled','Archived','Klaar gemeld'].includes(task.status);
  const review=!closed&&task.native_review;
  const due=review?.due_date||task.next_action_date||task.review_date||task.due_date||'';
- return [...(task.native_history||[]),{id:'current',description:!closed&&(review?.description||task.responsibility?.action)||task.title,
+ return [...(task.native_history||[]),{id:'current',description:!closed&&(review?.description||task.responsibility?.action||(task.details?.length<=240?task.details:''))||task.title,
    assigned_to:review?.assigned_to||taskOwner(task),due_date:due,status:task.completion_pending?'Complete':task.status,
    effective_status:task.status,overdue:!closed&&!!due&&due<day,
    waiting_reason:task.waiting_reason,document_url:task.document_url,
@@ -49,14 +49,18 @@ export function projectTask(t,day=localDate()){
   const steps=stepView(t.steps,day),open=steps.filter(s=>s.required!==false&&!stepClosed(s));
   const ready=open.filter(s=>!s.blocked),actionable=ready.filter(s=>['Pending','In Progress'].includes(s.effective_status));
   const future=ready.filter(s=>s.effective_status==='Scheduled'),waiting=ready.filter(s=>s.effective_status==='Waiting');
-  // Existing closed workflows stay closed. Every new/reopened workflow needs
-  // explicit final approval; completing a child never supplies that approval.
+  // An existing approval or recorded closure remains authoritative. Workflows
+  // with a separate sign-off can wait for it after their work is finished.
   const approved=!!t.approval||t.status==='Complete'&&(!!t.completion||t.historical_closure===true);
   const ready_for_approval=!open.length&&!approved;
   let status=!open.length?(approved?'Complete':'Pending'):actionable.length?'Pending':waiting.length?'Waiting':future.length?'Scheduled':'Waiting';
   const next=[...actionable,...waiting,...future][0]||open[0];
   const override=t.status_override;if(open.length&&override&&(!override.until||override.until>day))status=override.status;
   return {...result,status,steps,ready_for_approval,next_action:next?.description||(ready_for_approval?'Wag vir finale goedkeuring.':'Taak afgehandel.'),next_action_date:next?.due_date||'',next_assigned_to:next?.assigned_to||t.assigned_to,waiting_reason:next?.waiting_reason||'',progress:stepProgress(steps)};
+ }
+ if(t.native_review&&t.status!=='Complete'){
+  const review=t.native_review, date=review.due_date;
+  return {...result,status:t.status==='Waiting'&&(!date||date>day)?'Waiting':date>day?'Scheduled':'Pending',next_action:review.description,next_action_date:date,next_assigned_to:review.assigned_to};
  }
  if(type==='reminder'&&t.status!=='Complete'){
   const date=t.status==='Waiting'?t.review_date||t.due_date:t.due_date||t.review_date;return {...result,status:t.status==='Waiting'&&date>day?'Waiting':date>day?'Scheduled':'Pending',next_action:t.details||t.title,next_action_date:date||''};

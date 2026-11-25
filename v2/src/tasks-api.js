@@ -355,7 +355,11 @@ export async function saveTask(env,user,b){
  for(const key of ['revision','updated_at','updated_by','pa_sync','progress','next_action','next_action_date','next_assigned_to','ready_for_approval'])delete task[key];
  if(task.task_type==='workflow')delete task.native_step;
  if(task.step_format&&task.task_type!=='workflow'){
-  if(action==='update'||action.startsWith('pa_'))delete task.native_review;
+  if(task.native_review&&action==='update'){
+   if(old.assigned_to!==task.assigned_to||old.details!==task.details)delete task.native_review;
+   else if(old.review_date!==task.review_date)task.native_review={...task.native_review,due_date:task.review_date||task.due_date};
+  }
+  if(action==='pa_result'&&b.next_action&&task.native_review)task.native_review={...task.native_review,description:text(b.next_action,1000,true)};
   const step=standardSteps(task).at(-1);
   task.native_step={id:step.id,description:step.description,assigned_to:step.assigned_to,status:step.status,due_date:step.due_date};
  }

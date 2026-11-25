@@ -9,7 +9,7 @@ export function validateSteps(steps,users){
   check(/^[a-zA-Z0-9-]{1,90}$/.test(s.id||'')&&!ids.has(s.id),'Elke stap moet ’n unieke verwysing hê.');ids.add(s.id);
   check((users.includes(s.assigned_to)||s.assigned_to==='pa'),'Kies wie hierdie stap moet doen.');check(['Pending','In Progress','Scheduled','Waiting','Complete','Waived'].includes(s.status),'Kies ’n geldige stapstatus.');
   check(s.status!=='Waived'||(s.waiver?.by&&s.waiver?.at&&s.waiver?.reason?.trim()),'Gee die rede waarom die stap verval.');
-  const due_date=s.due_date?dateKey(s.due_date):'';check(!['Waiting','Scheduled'].includes(s.status)||due_date,'Kies wanneer ons weer moet opvolg.');check(s.status!=='Waiting'||s.waiting_reason?.trim(),'Sê waarvoor ons wag.');
+  const due_date=s.due_date?dateKey(s.due_date):'';check(s.status!=='Scheduled'||due_date,'Kies wanneer ons weer moet opvolg.');check(s.status!=='Waiting'||s.waiting_reason?.trim(),'Sê waarvoor ons wag.');
   check(Array.isArray(s.dependencies||[])&&(s.dependencies||[]).length<=100,'Ongeldige vorige stappe.');
   check(s.status!=='Complete'||(s.completion?.recorded_source&&s.completion?.note||s.completion?.by&&s.completion?.at&&Number.isFinite(Date.parse(s.completion.at))),'Voltooiing moet ’n persoon en datum hê.');
   const reminder_mode=s.reminder_mode||'due';check(['due','daily','off'].includes(reminder_mode),'Kies ’n stapherinnering.');
@@ -31,7 +31,7 @@ export async function workflowAction({task,b,user,admin,manage:manager=admin,use
   if(!manager)check(steps.every(s=>s.assigned_to===user.username),'Jy kan net eie stappe opstel.',403);
   if(!admin)check(steps.every(s=>s.status!=='Complete'),'Slegs ’n admin kan bestaande voltooiings met bronbewys oordra.',403);
   if(steps.some(s=>s.status==='Complete'))check(admin&&steps.filter(s=>s.status==='Complete').every(s=>s.completion?.note||s.completion?.proof_url),'Gee die bevestiging vir elke reeds voltooide stap.');
-  task.require_final_approval=b.require_final_approval===true;task.legacy_completion=task.completion;task.task_type='workflow';task.pa_required=!!(task.pa_task_id||task.parent_cycle_id||b.pa_required);task.steps=validateSteps(steps,users);task.status='Pending';task.completion=null;task.repeat='none';task.last_reason=clean(b.note);
+  delete task.native_review;task.require_final_approval=b.require_final_approval===true;task.legacy_completion=task.completion;task.task_type='workflow';task.pa_required=!!(task.pa_task_id||task.parent_cycle_id||b.pa_required);task.steps=validateSteps(steps,users);task.status='Pending';task.completion=null;task.repeat='none';task.last_reason=clean(b.note);
  }else{
   check(taskType(task)==='workflow','Hierdie taak het nog nie stappe nie.');check(task.status!=='Cancelled','Heropen die taak eers.');
   if(action==='approve_workflow'){
@@ -92,7 +92,7 @@ export async function workflowAction({task,b,user,admin,manage:manager=admin,use
   }
  }
  if(['step_add','step_reopen','start_workflow'].includes(action)){task.approval=null;task.completion=null;task.status='Pending';}
- if(['step_complete','step_waive'].includes(action)&&!task.require_final_approval&&task.steps.every(s=>s.required===false||stepClosed(s))){
+ if(['step_complete','step_waive'].includes(action)&&(task.require_final_approval===false||task.step_format===1&&task.require_final_approval!==true)&&task.steps.every(s=>s.required===false||stepClosed(s))){
   task.status='Complete';task.completion={by:user.username,at,note:'Alle vereiste stappe is afgehandel.'};return task;
  }
  const projected=projectTask(task);task.status=projected.status;task.completion=task.status==='Complete'?originalCompletion:null;if(task.status!=='Complete')task.approval=null;return task;
