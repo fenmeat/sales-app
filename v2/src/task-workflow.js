@@ -17,8 +17,8 @@ export function standardSteps(task, day=localDate()) {
  const closed=['Complete','Cancelled','Archived','Klaar gemeld'].includes(task.status);
  const review=!closed&&task.native_review;
  const due=review?.due_date||task.next_action_date||task.review_date||task.due_date||'';
- return [{id:'current',description:!closed&&(review?.description||task.responsibility?.action)||task.title,
-   assigned_to:review?.assigned_to||taskOwner(task),due_date:due,status:task.status,
+ return [...(task.native_history||[]),{id:'current',description:!closed&&(review?.description||task.responsibility?.action)||task.title,
+   assigned_to:review?.assigned_to||taskOwner(task),due_date:due,status:task.completion_pending?'Complete':task.status,
    effective_status:task.status,overdue:!closed&&!!due&&due<day,
    waiting_reason:task.waiting_reason,document_url:task.document_url,
    completion:task.completion?{by:task.completion.by,at:task.completion.at,note:task.completion.note}:null,requires_evidence:task.requires_evidence}];
@@ -109,12 +109,12 @@ export function taskBrief(task, username) {
     task.next_action || task.details || task.title);
   const current = task.next_assigned_to || task.email || task.app_edit_pending;
   const single = current ? next : task.responsibility?.action || next;
-  const completed = task.steps?.filter(s=>s.status==='Complete').map(s=>s.description);
+  const completed = (task.steps||task.native_history)?.filter(s=>s.status==='Complete').map(s=>s.description) || task.stages?.filter(t=>t.status==='Complete').map(t=>t.title);
   const progress = task.progress && typeof task.progress === 'object' ?
     task.progress.done+' van '+task.progress.total+' stappe klaar.' :
     task.outcome || task.display_progress || task.part_confirmation?.note || task.completion?.note || task.last_update?.text || 'Geen vordering is nog aangeteken nie.';
   return {owner, situation: task.responsibility?.situation || (task.details?.length<=240?task.details:'') || task.title,
     action: !closed && !['Waiting','Scheduled'].includes(task.status) && (step || owner === username) ?
       step?.description || single : 'Niks op hierdie stadium nie',
-    progress: completed?.length ? completed.join(' · ') : task.outcome || (task.part_pending ? 'Jou aandeel is as klaar aangemeld.' : progress), next: closed ? 'Geen verdere stap nie.' : single};
+    progress: task.completion_pending ? 'Jy het die taak klaar gemerk.' : completed?.length ? completed.join(' · ') : task.outcome || (task.part_pending ? 'Jou aandeel is as klaar aangemeld.' : progress), next: task.completion_pending ? 'PA werk die taakregister by.' : closed ? 'Geen verdere stap nie.' : single};
 }

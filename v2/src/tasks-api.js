@@ -202,9 +202,14 @@ export async function saveTask(env,user,b){
   }else if(action==='standardize_task'){
    check(admin,'Net administrateurs kan bestaande take omskakel.',403);
    check(!task.step_format&&taskType(task)!=='workflow','Hierdie taak gebruik reeds die stapformaat.',409);
+   if(b.native_history){
+    check(!b.steps&&(!task.repeat||task.repeat==='none')&&Array.isArray(b.native_history)&&b.native_history.length<=20,'Hou herhalende werk by sy eie datum.');
+    check(b.native_history.every(s=>s.id!=='current'&&s.status==='Complete'&&s.completion?.note&&!s.attachments?.length&&!s.completion?.attachments?.length),'Gebruik bevestigde geskiedenis van hierdie taak.');
+    task.native_history=validateSteps(b.native_history,taskUsers(env));
+   }
    if(b.review){
-    check(task.kind==='stocktake'&&b.review.assigned_to==='pa','Behou die oorspronklike telpersoon.');
-    task.native_review={assigned_to:'pa',description:text(b.review.description,1000,true),due_date:dateKey(b.review.due_date)};
+    check((task.kind==='stocktake'&&b.review.assigned_to==='pa')||(taskType(task)==='reminder'&&[task.assigned_to,'pa','alinda','alex'].includes(b.review.assigned_to)),'Behou die oorspronklike telpersoon.');
+    task.native_review={assigned_to:b.review.assigned_to,description:text(b.review.description,1000,true),due_date:dateKey(b.review.due_date)};
    }
    if(b.steps){
     check(Array.isArray(b.steps)&&b.steps.length>0,'Kies die stappe.');
@@ -345,7 +350,8 @@ export async function saveTask(env,user,b){
  for(const key of ['revision','updated_at','updated_by','pa_sync','progress','next_action','next_action_date','next_assigned_to','ready_for_approval'])delete task[key];
  if(task.task_type==='workflow')delete task.native_step;
  if(task.step_format&&task.task_type!=='workflow'){
-  const [step]=standardSteps(task);
+  if(action==='update'||action.startsWith('pa_'))delete task.native_review;
+  const step=standardSteps(task).at(-1);
   task.native_step={id:step.id,description:step.description,assigned_to:step.assigned_to,status:step.status,due_date:step.due_date};
  }
  if(task.steps)task.steps=task.steps.map(({blocked,effective_status,overdue,...step})=>step);

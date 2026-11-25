@@ -38,7 +38,7 @@ try{
  await page.reload();await card.getByText('PA vergelyk die pryse nadat jy die twee kwotasies gegee het.',{exact:true}).waitFor();
  await card.getByRole('button',{name:'Herinner my'}).click();await dialog.locator('[name=remind_at]').fill('2027-01-05T10:00');await dialog.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await saved();
  await card.getByRole('button',{name:'Delegeer',exact:true}).click();await dialog.locator('[name=assigned_to]').selectOption('alinda');await dialog.locator('[name=note]').fill('Gaan die kwotasies na.');await dialog.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await saved();
- await card.getByRole('button',{name:'Merk klaar',exact:true}).click();assert.equal(await dialog.locator('[name=completion_scope]').inputValue(),'part');await dialog.getByRole('button',{name:'Stoor voltooiing',exact:true}).click();await saved();
+ await card.getByRole('button',{name:'Merk huidige stap klaar',exact:true}).click();assert.equal(await dialog.locator('[name=completion_scope]').inputValue(),'part');await dialog.getByRole('button',{name:'Stoor voltooiing',exact:true}).click();await saved();
  await page.locator('#pa-scope').selectOption('pa');await card.waitFor();await card.getByText('Niks op hierdie stadium nie',{exact:true}).waitFor();
  for(const size of [{width:834,height:1194},{width:1194,height:834}]){await page.setViewportSize(size);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));}
  history=await convo();assert.equal(history.subject.status,'Pending');
