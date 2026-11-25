@@ -1,5 +1,8 @@
 name: Text editing browser acceptance
 on:
+  pull_request:
+    branches: [build/sales-v2-cloudflare]
+    paths: ['v2/**', '.github/workflows/text-editing.yml']
   push:
     branches: [perf/d1-november-2026, fix/task-responsibility, feature/task-access-0480, feature/task-steps,perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
     paths:
@@ -58,6 +61,9 @@ jobs:
           cache-dependency-path: v2/package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npm run build
+      - name: Verify worker and task integration tests
+        if: matrix.browser == 'chromium'
+        run: npm test
       - name: Install isolated browser tools
         run: npm install --prefix "$RUNNER_TEMP/text-browser" --no-audit --no-fund playwright@1.62.1
       - name: Install browser
