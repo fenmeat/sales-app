@@ -68,7 +68,7 @@ export async function readTaskWorkspace(env,user,query={}){
   for(const answer of replies.results){
    const sourceIds=user.username==='alex'?JSON.parse(answer.payload).source_task_ids||[]:[];
    for(const key of [answer.subject_key,...sourceIds]){
-    const row=byId.get(key);if(row&&!row.latest_answer)row.latest_answer=answer.text;
+    const row=byId.get(key);if(row&&!row.latest_answer){row.latest_answer=answer.text;row.latest_answer_at=answer.created_at;}
    }
   }
  }
@@ -76,7 +76,7 @@ export async function readTaskWorkspace(env,user,query={}){
   const original=items.find(r=>r.id===row.id);
   const results=(original.stages||[original]).flatMap(t=>(t.pa_work||[]).flatMap(j=>j.results||[]));
   const latest=results.sort((a,b)=>b.at.localeCompare(a.at))[0];
-  if(latest)row.latest_work_answer=latest.answer;
+  if(latest){row.latest_work_answer=latest.answer;if(!row.latest_answer||Date.parse(latest.at)>Date.parse(row.latest_answer_at))row.latest_answer=latest.answer;}
  }
  const pageTasks=new Map();for(const r of items){for(const t of r.stages||[])pageTasks.set(t.id,brief(t));if(!r.is_pa)pageTasks.set(r.id,brief(r));}
  pa.rows=canonical.filter(r=>included.has(r.id)).map(r=>({...r,subject_key:r.id,subject_hash:page.find(p=>p.id===r.id).subject_hash}));

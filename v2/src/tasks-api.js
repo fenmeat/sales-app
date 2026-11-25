@@ -160,8 +160,8 @@ export async function saveTask(env,user,b){
  check(b.files===undefined||appendFiles||['create','pa_result','step_add','step_update','step_note'].includes(action),'Files cannot be added with this task action.');
  if(action==='create'){
   check(!old,'This task already exists.',409);
-  check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||['area','steps'].includes(k)),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat','Personal PA matters cannot be imported into FenMeat.');
-  if(!admin){check(manager||!b.data.assigned_to||b.data.assigned_to===user.username,'You can only create tasks for yourself.',403);check(Object.keys(b.data).every(k=>selfEditable.includes(k)||['area','steps'].includes(k)||(manager&&k==='visibility'))&&['general','stocktake'].includes(b.data.kind??'general'),'Only admins can create linked PA or PO tasks.',403);}
+  check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||['area','steps','require_final_approval'].includes(k)),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat','Personal PA matters cannot be imported into FenMeat.');
+  if(!admin){check(manager||!b.data.assigned_to||b.data.assigned_to===user.username,'You can only create tasks for yourself.',403);check(Object.keys(b.data).every(k=>selfEditable.includes(k)||['area','steps','require_final_approval'].includes(k)||(manager&&k==='visibility'))&&['general','stocktake'].includes(b.data.kind??'general'),'Only admins can create linked PA or PO tasks.',403);}
   task=validateTask({...(manager&&!admin&&b.data.assigned_to&&b.data.assigned_to!==user.username?{visibility:'assigned'}:{}),kind:'general',priority:'Normal',assigned_to:user.username,...b.data,id:b.task_id,area:'Fen Meat',status:'Pending',created_by:user.username,created_at:at,completion:null,waiting_reason:''},env);
   const supplierPlan=user.via==='pa'&&task.kind==='po_dispatch'&&!b.data.steps;
   if(supplierPlan){task.task_type='workflow';task.dispatch_step_id='dispatch';}
@@ -171,13 +171,18 @@ export async function saveTask(env,user,b){
    check(Array.isArray(inputs)&&inputs.length<=100,'Gebruik 1 tot 100 stappe.');
    const steps=[];
    for(const input of inputs){
-    check(!input.waiver&&input.status!=='Waived'&&!input.completion&&!input.attachments?.length&&input.status!=='Complete'&&input.status!=='Completed','Voltooi elke nuwe stap afsonderlik.');
+    const historical=admin&&user.via==='pa'&&task.kind==='general'&&input.status==='Complete'&&input.completion?.note?.trim()&&safeURL(input.completion?.recorded_source);
+    check(!input.waiver&&input.status!=='Waived'&&!input.attachments?.length&&input.status!=='Completed'&&(historical||(!input.completion&&input.status!=='Complete')),'Gee die oorspronklike bevestiging vir elke voltooide stap.');
+    if(historical)check(!input.completion.attachments?.length&&(!input.completion.at||(Number.isFinite(Date.parse(input.completion.at))&&Date.parse(input.completion.at)<=Date.now()+60000)),'Kontroleer die datum en bron van die bevestiging.');
     check(manager||input.assigned_to===user.username,'Jy kan net eie stappe skep.',403);
     check(input.files===undefined||Array.isArray(input.files)&&input.files.length<=12,'Kies hoogstens 12 stapdokumente.');
     const added=[];for(const f of input.files||[])added.push(await attachmentData(f));files.push(...added);
-    const {files:ignored,...step}=input;steps.push({...step,status:step.status||'Pending',attachments:added.map(f=>f.id),completion:null});
+    const {files:ignored,...step}=input;steps.push({...step,status:step.status||'Pending',attachments:added.map(f=>f.id),completion:historical?{recorded_source:historical,note:text(input.completion.note,3000,true),...(input.completion.at?{at:input.completion.at}:{}),...(input.completion.by?{by:text(input.completion.by,80,true)}:{})}:null});
    }
+   check(b.data.require_final_approval===undefined||typeof b.data.require_final_approval==='boolean','Kies of finale goedkeuring nodig is.');
+   task.require_final_approval=b.data.require_final_approval===true;
    task.steps=validateSteps(steps,taskUsers(env));task.approval=null;
+   if(!task.require_final_approval&&task.steps.every(s=>s.required===false||s.status==='Complete')){task.status='Complete';task.historical_closure=true;}
   }
   if(task.kind==='stocktake'&&!task.required_materials.length){
    const register=await env.DB.prepare('SELECT payload FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();
@@ -364,7 +369,7 @@ export async function saveTask(env,user,b){
   task.last_reason=reason;
  }
  if(action==='set_visibility')task.last_edit={by:user.username,at,reason:task.last_reason,previous_revision:old.revision,changes:taskChanges(old,task)};
- if(taskVisibility(task)==='confidential')check(isAdmin(task.assigned_to)&&(task.steps||[]).every(s=>isAdmin(s.assigned_to)),'Delegeer vertroulike werk net aan Alex of Alinda.');
+ if(taskVisibility(task)==='confidential')check(isAdmin(task.assigned_to)&&(task.steps||[]).every(s=>s.assigned_to==='pa'||isAdmin(s.assigned_to)),'Delegeer vertroulike werk net aan Alex of Alinda.');
  const revision=b.revision+1;
  const statements=[env.DB.prepare('INSERT INTO v2_task_events(request_id,fingerprint,task_id,revision,action,payload,actor,saved_at) VALUES(?,?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,task.id,revision,action,JSON.stringify(task),user.username,at)];
  statements.push(...files.flatMap(file=>fileStatements(env.DB,task.id,user.username,at,file)));
@@ -488,7 +493,7 @@ const taskSaveContract={
  update:'Read the current task first. save_task({task:{action:"update",task_id:task.id,revision:task.revision,request_id,data:{only_changed_fields},note}}). Use existing usernames from users. Use details for the description.',
  identifiers:'task_id and save_task request_id: 8–90 ASCII letters, digits or hyphens. UUIDs are safe. save_app_data request_id: 16–80. Reuse the SAME request_id and identical content for a retry; a changed request needs a new request_id. Never use a task id as the request id.',
  standardize:'Admin only. standardize_task preserves a single native reminder or stocktake. For a researched existing cycle pass steps with sourced confirmations, latest revision and a reason in note. Read back the same id. step_waive requires a reason.',
- workflow:'Create data.task_type=workflow and data.steps=[{id,description,assigned_to,due_date,status:Pending or In Progress,notes,reminder_mode:due/daily/off,requires_evidence,files?}]. Steps stay under one parent. step_add/step_update use step_id and data; step_start/step_complete/step_reopen/step_note use step_id. step_note accepts note/files; add/update accept files. step_delete requires confirm:true and note; step_reorder uses all step_ids in desired order. approve_workflow is separate final approval after all required steps finish, by Alex or assigned_to, also by any task manager for ordinary operational workflows. Read ready_for_approval, progress and steps; never create duplicate tasks per step.',
+ workflow:'Create data.task_type=workflow and data.steps=[{id,description,assigned_to,due_date,status:Pending or In Progress,notes,reminder_mode:due/daily/off,requires_evidence,files?}]. Steps stay under one parent. step_add/step_update use step_id and data; step_start/step_complete/step_reopen/step_note use step_id. step_note accepts note/files; add/update accept files. step_delete requires confirm:true and note; step_reorder uses all step_ids in desired order. Completing or waiving the last required step closes the task. For a separate sign-off set data.require_final_approval=true when creating a workflow. approve_workflow is then final approval after all required steps finish, by Alex or assigned_to, also by any task manager for ordinary operational workflows. Read ready_for_approval, progress and steps; never create duplicate tasks per step.',
  actions:'Use complete, reopen, wait or cancel for status, not data.status. wait requires note (the waiting reason) and review_date; reopen requires note. Workflow steps retain their existing completion/evidence rules.',
  reminder:'reminder_mode: once, daily or off. once requires a future UTC ISO timestamp with milliseconds; 07:00 Africa/Johannesburg is 05:00:00.000Z. A future open reminder displays Scheduled until its due date, then Pending.',
  readback:'After saving, call get_tasks({query:{task_id:result.task.id}}) and check the actual saved fields and revision before reporting success. History is append-only; these reads include the latest 50 event summaries.',

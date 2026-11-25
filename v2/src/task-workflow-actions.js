@@ -31,7 +31,7 @@ export async function workflowAction({task,b,user,admin,manage:manager=admin,use
   if(!manager)check(steps.every(s=>s.assigned_to===user.username),'Jy kan net eie stappe opstel.',403);
   if(!admin)check(steps.every(s=>s.status!=='Complete'),'Slegs ’n admin kan bestaande voltooiings met bronbewys oordra.',403);
   if(steps.some(s=>s.status==='Complete'))check(admin&&steps.filter(s=>s.status==='Complete').every(s=>s.completion?.note||s.completion?.proof_url),'Gee die bevestiging vir elke reeds voltooide stap.');
-  task.legacy_completion=task.completion;task.task_type='workflow';task.pa_required=!!(task.pa_task_id||task.parent_cycle_id||b.pa_required);task.steps=validateSteps(steps,users);task.status='Pending';task.completion=null;task.repeat='none';task.last_reason=clean(b.note);
+  task.require_final_approval=b.require_final_approval===true;task.legacy_completion=task.completion;task.task_type='workflow';task.pa_required=!!(task.pa_task_id||task.parent_cycle_id||b.pa_required);task.steps=validateSteps(steps,users);task.status='Pending';task.completion=null;task.repeat='none';task.last_reason=clean(b.note);
  }else{
   check(taskType(task)==='workflow','Hierdie taak het nog nie stappe nie.');check(task.status!=='Cancelled','Heropen die taak eers.');
   if(action==='approve_workflow'){
@@ -92,6 +92,9 @@ export async function workflowAction({task,b,user,admin,manage:manager=admin,use
   }
  }
  if(['step_add','step_reopen','start_workflow'].includes(action)){task.approval=null;task.completion=null;task.status='Pending';}
+ if(['step_complete','step_waive'].includes(action)&&!task.require_final_approval&&task.steps.every(s=>s.required===false||stepClosed(s))){
+  task.status='Complete';task.completion={by:user.username,at,note:'Alle vereiste stappe is afgehandel.'};return task;
+ }
  const projected=projectTask(task);task.status=projected.status;task.completion=task.status==='Complete'?originalCompletion:null;if(task.status!=='Complete')task.approval=null;return task;
 }
 export function completeReminder(task,at){

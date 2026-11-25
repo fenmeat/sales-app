@@ -28,3 +28,19 @@ test('migration preserves recurrence and a waiver unlocks dependent work without
  const result=saved.data.task;assert.equal(result.steps[0].completion,null);assert.equal(result.steps[0].waiver.reason,waive.note);
  assert.equal(result.progress.done,0);assert.equal(result.progress.remaining,1);assert.equal(result.next_action,'b');
 });
+
+test('the last required step closes the task and retains the original evidence',async t=>{
+ const {call,task}=await fixture(t);
+ const input=task({task_type:'workflow',steps:[
+  {id:'first',description:'Check the order',assigned_to:'alinda',status:'Pending'},
+  {id:'next',description:'Record the receipt',assigned_to:'alex',status:'Pending',dependencies:['first']}
+ ]});
+ let r=await call('alex','/api/tasks',input);
+ assert.equal(r.status,200);
+ for(const [id,actor] of [['first','alinda'],['next','alex']]){
+  r=await call(actor,'/api/tasks',{task_id:input.task_id,revision:r.data.task.revision,request_id:crypto.randomUUID(),action:'step_complete',step_id:id,note:'Original confirmation'});
+  assert.equal(r.status,200,JSON.stringify(r.data));
+ }
+ assert.equal(r.data.task.status,'Complete');assert.equal(r.data.task.ready_for_approval,false);
+ assert.equal(r.data.task.steps[0].completion.by,'alinda');assert.equal(r.data.task.progress.remaining,0);
+});

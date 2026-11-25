@@ -24,7 +24,7 @@ test('admin evidence edits persist, retain history and allow only the edited tas
  assert.equal((await db.prepare('SELECT COUNT(DISTINCT task_id) n FROM v2_task_events').first()).n,2);
 });
 test('step edits preserve completed evidence and cannot skip dependencies or silently remove required work',async t=>{
- const {call,task}=await fixture(t),b=task({task_type:'workflow',requires_evidence:true,pa_task_id:'TSK-00988'});await call('alex','/api/tasks',b);
+ const {call,task}=await fixture(t),b=task({task_type:'workflow',require_final_approval:true,requires_evidence:true,pa_task_id:'TSK-00988'});await call('alex','/api/tasks',b);
  assert.equal((await write(call,b.task_id,1,'step_update',{step_id:'step-1',data:{requires_evidence:false}})).status,400);
  assert.equal((await write(call,b.task_id,1,'step_update',{step_id:'step-1',data:{requires_evidence:false},note:'Recorded confirmation is sufficient.'},'alinda')).status,200);
  assert.equal((await write(call,b.task_id,2,'step_add',{step_id:'pay',data:{description:'Confirm payment',assigned_to:'alinda',status:'Pending',required:true,requires_evidence:true,dependencies:['step-1']}})).status,200);

@@ -384,7 +384,7 @@ test('Tasks MCP keeps read grants read-only and acknowledges only a verified cur
 
 test('authorised MCP creates and edits one five-step task, reads progress, and requires explicit approval',async t=>{
  const f=await fixture(t),write=await f.connect(true),items=['alex','alinda','xavier','xavier','alex'].map((assigned_to,i)=>({id:'step-'+i,description:'Synthetic service step '+i,assigned_to,due_date:'2099-11-23',status:'Pending'}));
- let saved=(await ok(f,write.tokens,'save_task',{task:{action:'create',revision:0,request_id:crypto.randomUUID(),data:{title:'Synthetic five-step MCP service',task_type:'workflow',due_date:'2099-11-23',assigned_to:'alex',pa_required:true,steps:items}}})).task;
+ let saved=(await ok(f,write.tokens,'save_task',{task:{action:'create',revision:0,request_id:crypto.randomUUID(),data:{title:'Synthetic five-step MCP service',require_final_approval:true,task_type:'workflow',due_date:'2099-11-23',assigned_to:'alex',pa_required:true,steps:items}}})).task;
  const read=async()=>{const result=await ok(f,write.tokens,'get_tasks',{query:{task_id:saved.id}});return result.task||result.tasks?.[0];};
  assert.equal((await read()).steps.length,5);
  const edit=async(action,extra={})=>{saved=(await ok(f,write.tokens,'save_task',{task:{task_id:saved.id,revision:saved.revision,request_id:crypto.randomUUID(),action,...extra}})).task;return read();};

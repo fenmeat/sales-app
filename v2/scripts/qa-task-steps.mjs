@@ -103,6 +103,7 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  await page.locator('#pa-new').click();await page.locator('[name=title]').fill('Synthetic ordinary '+name);await page.locator('[name=repeat]').selectOption('weekly');await page.getByRole('button',{name:'Stoor',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});
  const ordinary=(await api('/api/tasks')).data.tasks.find(t=>t.title==='Synthetic ordinary '+name);assert.equal(ordinary.visibility,'operational');assert.equal(ordinary.kind,'general');assert.equal(ordinary.task_type,'reminder');assert.equal(ordinary.repeat,'weekly');
  await page.locator('#pa-new').click();await page.locator('[name=title]').fill('Synthetic workflow '+name);await page.locator('[name=assigned_to]').selectOption('alinda');await page.locator('[name=task_type]').selectOption('workflow');
+ await page.locator('[name=require_final_approval]').check();
  for(let i=1;i<5;i++)await page.locator('[data-add-draft]').click();
  const rows=page.locator('.draft-step');assert.equal(await rows.count(),5);assert.deepEqual(errors,[]);
  for(let i=0;i<5;i++){await rows.nth(i).locator('[data-field=description]').fill('Synthetic step '+(i+1));await rows.nth(i).locator('[data-field=assigned_to]').selectOption(['alex','alinda','xavier','xavier','alex'][i]);assert.equal(await rows.nth(i).locator('[data-scan]').count(),1);}

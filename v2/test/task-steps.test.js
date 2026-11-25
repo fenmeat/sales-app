@@ -9,7 +9,7 @@ const file=()=>({id:crypto.randomUUID(),filename:'synthetic-scan.pdf',mime_type:
 const steps=()=>['alex','alinda','xavier','xavier','alex'].map((assigned_to,i)=>({id:'step-'+i,description:'Synthetic step '+i,assigned_to,due_date:'2026-11-18',status:'Pending',reminder_mode:'due',notes:'Note '+i}));
 test('five delegated steps retain one task, own lists, evidence, revisions, final approval and reopened history',async t=>{
  const {call,task,db}=await fixture(t),scan=file(),items=steps();items[3].files=[scan];
- const b=task({task_type:'workflow',assigned_to:'alex',steps:items,pa_required:true,reminder_mode:'off'});
+ const b=task({task_type:'workflow',require_final_approval:true,assigned_to:'alex',steps:items,pa_required:true,reminder_mode:'off'});
  let r=await call('alex','/api/tasks',b);assert.equal(r.status,200,JSON.stringify(r.data));let saved=r.data.task;
  assert.equal(saved.steps.length,5);assert.equal(saved.progress.percent,0);assert.deepEqual(saved.steps[3].attachments,[scan.id]);assert.equal((await call('alex','/api/tasks',b)).data.replayed,true);
  assert.equal((await db.prepare('SELECT COUNT(DISTINCT task_id) n FROM v2_task_events').first()).n,1);
@@ -37,7 +37,7 @@ test('five delegated steps retain one task, own lists, evidence, revisions, fina
 });
 test('step reminders are independent, deduplicated, overdue-aware and invalidated by changed dates',async t=>{
  const {call,task,db}=await fixture(t),items=steps().slice(0,3);items[2].reminder_mode='off';
- const r=await call('alex','/api/tasks',task({task_type:'workflow',assigned_to:'alex',steps:items,reminder_mode:'off'}));assert.equal(r.status,200);
+ const r=await call('alex','/api/tasks',task({task_type:'workflow',require_final_approval:true,assigned_to:'alex',steps:items,reminder_mode:'off'}));assert.equal(r.status,200);
  for(const time of ['2026-11-18T06:00:00Z','2026-11-18T06:05:00Z','2026-11-19T06:00:00Z','2026-11-19T06:05:00Z','2026-11-20T06:05:00Z'])await queueTaskReminders(env(db),new Date(time));
  const notices=(await db.prepare("SELECT * FROM v2_task_notifications WHERE kind IN ('due','step_due','step_overdue')").all()).results;
  assert.equal(notices.filter(n=>n.kind==='step_due').length,2);assert.equal(notices.filter(n=>n.kind==='step_overdue').length,2);assert.equal(notices.filter(n=>n.kind==='due').length,0);

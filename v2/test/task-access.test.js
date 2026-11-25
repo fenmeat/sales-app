@@ -26,7 +26,7 @@ test('four signed-in managers can run ordinary tasks and steps without sharing a
   const scan=file();await act('note',{note:'Scan on existing task',files:[scan]},other);
   assert.ok(saved.attachments.includes(scan.id));
   await act('complete');await act('reopen',{note:'New information'},other);await act('cancel',{note:'Cancelled'},other);await act('reopen',{note:'Rescheduled'});
-  await act('start_workflow',{note:'Two deliveries',steps:['tapiz','mosa'].map((assigned_to,i)=>({id:'step-'+i,assigned_to,description:'Delivery '+i,status:'Pending'}))});
+  await act('start_workflow',{note:'Two deliveries',require_final_approval:true,steps:['tapiz','mosa'].map((assigned_to,i)=>({id:'step-'+i,assigned_to,description:'Delivery '+i,status:'Pending'}))});
   await act('step_update',{step_id:'step-0',data:{assigned_to:other,due_date:'2099-11-25'}});
   const proof=file();await act('step_note',{step_id:'step-1',note:'Package scanned',files:[proof]},other);
   for(const step of saved.steps)await act('step_complete',{step_id:step.id});

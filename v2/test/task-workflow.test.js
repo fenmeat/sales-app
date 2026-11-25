@@ -23,7 +23,7 @@ test('recurring reminder retains completed occurrence and schedules exactly one 
  assert.equal(nextOccurrence('2027-01-31','monthly','2027-02-28'),'2027-03-31');
 });
 test('workflow waits three weeks, blocks dependent completion and automatically returns on the South African date',async t=>{
- const {call,task,db}=await fixture(t);const b=task({task_type:'workflow',pa_required:true,assigned_to:'alinda'});let r=await call('alex','/api/tasks',b);assert.equal(r.status,200);
+ const {call,task,db}=await fixture(t);const b=task({task_type:'workflow',require_final_approval:true,pa_required:true,assigned_to:'alinda'});let r=await call('alex','/api/tasks',b);assert.equal(r.status,200);
  r=await send(call,b.task_id,1,'step_add',{step_id:'future',data:step('future',{due_date:'2099-11-30',status:'Scheduled',dependencies:['step-1']})});assert.equal(r.status,200);
  r=await send(call,b.task_id,2,'step_add',{step_id:'proof',data:step('proof',{dependencies:['future'],requires_evidence:true})});assert.equal(r.status,200);
  assert.equal((await send(call,b.task_id,3,'step_complete',{step_id:'proof'})).status,400);
