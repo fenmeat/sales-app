@@ -41,7 +41,7 @@ test('PA email follows an immutable approval, Gmail evidence and the existing ta
  const workspace=await call('alex','/api/tasks/workspace?scope=private&status=scheduled');assert.equal(workspace.data.pa.workspace.rows[0].email.label,task.email.label);
  const ctx=await lookup('report-context');assert.deepEqual(ctx.followup.find(r=>r.id===key).email,task.email);
  assert.equal(projectMail(rows[0],task.email,future).email.phase,'due');assert.equal(projectMail(rows[0],task.email,future).status,'Pending');
- const sections=['emails','activity','tasks','tomorrow','rabbi'].map(id=>({id,title:id,items:[{id,text:task.email.label,title:'Synthetic',pa_task_ids:id==='tasks'?[key]:[]}]}));
+ const sections=['emails','activity','tasks','tomorrow','rabbi'].map(id=>({id,title:id,items:[{id,requires_action:id==='tasks',text:task.email.label,title:'Synthetic',pa_task_ids:id==='tasks'?[key]:[]}]}));
  await publish('report',{date:today(),source_at:new Date().toISOString(),source_url:source,register_revision:1,sections});
  const published=(await readPaReport(env,pa)).report.sections[2].items[0];
  assert.equal(published.text,task.email.label);assert.equal(published.email_updates[0].sent_at,evidence.sent_at);
@@ -69,7 +69,7 @@ test('a direct human reply can reuse only its exact reviewed draft and reply att
  const env={DB:db,APP_ACCESS_KEYS:JSON.stringify({alex:'a'.repeat(40)})},url='https://docs.google.com/spreadsheets/d/example/edit';
  const ids=['TSK-00004','TSK-00005'],rows=ids.map(id=>({id,title:'Follow-up',area:'Legal',scope:'private',assigned_to:'alex',status:'Waiting',review_date:today(),source_url:url}));
  await savePaReport(env,user,{operation:'register',revision:0,data:{source_at:new Date().toISOString(),source_url:url,rows},request_id:crypto.randomUUID(),reason:'Synthetic register'});
- const sections=['emails','activity','tasks','tomorrow','rabbi'].map(id=>({id,title:id,items:[{id,text:'Synthetic report item',title:'Status',pa_task_ids:id==='tasks'?[ids[0]]:[]}]}));
+ const sections=['emails','activity','tasks','tomorrow','rabbi'].map(id=>({id,title:id,items:[{id,requires_action:id==='tasks',text:'Synthetic report item',title:'Status',pa_task_ids:id==='tasks'?[ids[0]]:[]}]}));
  await savePaReport(env,user,{operation:'report',revision:0,request_id:crypto.randomUUID(),reason:'Synthetic linked report',data:{date:today(),source_at:new Date().toISOString(),source_url:url,register_revision:1,sections}});
  const write=(id,action,revision,data)=>savePaReport(env,user,{operation:'email_followup',subject_key:id,action,revision,data,request_id:crypto.randomUUID(),reason:'Synthetic evidence'});
  const thread_id='ffee332211',parent_id='abcd0123';
@@ -77,7 +77,7 @@ test('a direct human reply can reuse only its exact reviewed draft and reply att
   const data={envelope:{from:'a@example.com',to:['law@example.com'],subject:'Case',body:'Confirm item '+i,scope:'Check item '+i,thread_id,parent_id},review_date:today(),next_action:'Gaan die antwoord na.'};
   await write(key,'draft',0,data);await write(key,'submit',1);
   const m=await readMail(db,key),subject=(await readPaReport(env,user,{resource:'summary',id:key})).subject;
-  const originalKey=i===0?'report-'+today()+':tasks':key;
+  const originalKey=key;
   const original=(await readPaReport(env,user,{resource:'summary',id:originalKey})).subject;
   const ask={action:'respond',request_id:crypto.randomUUID(),subject_key:originalKey,subject_hash:original.subject_hash,note:'Skryf die opvolg.'};
   assert.equal((await call('alex','/api/pa-report/feedback',ask)).status,200);

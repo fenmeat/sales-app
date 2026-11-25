@@ -28,7 +28,7 @@ export async function readTaskWorkspace(env,user,query={}){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
  const admin=isAdmin(user.username),rep=isInvoiceRep(user.username),status=query.status||'open',scope=query.scope||'mine',search=String(query.search||'').trim().slice(0,200),offset=Number(query.offset||0),size=25;
  check(statuses.has(status)&&['mine','pa','others','fenmeat','private','all'].includes(scope),'Choose a task list.');
- check(admin||scope==='mine'||isTaskManager(user.username)&&['pa','others','fenmeat'].includes(scope),'Only admins can view other task lists.',403);check(scope!=='private'||user.username==='alex','Private tasks are for Alex only.',403);
+ check(admin||['mine','all'].includes(scope)||isTaskManager(user.username)&&['pa','others','fenmeat'].includes(scope),'Only admins can view other task lists.',403);check(scope!=='private'||user.username==='alex','Private tasks are for Alex only.',403);
  check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  const access=taskReadScope(user);
  const statements=[env.DB.prepare(latestSQL+' WHERE '+access.sql).bind(...access.params)];

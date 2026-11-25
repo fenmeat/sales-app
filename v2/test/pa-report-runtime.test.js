@@ -12,7 +12,7 @@ async function setup(t){const f=await fixture(t),env={DB:f.db,APP_ACCESS_KEYS:JS
  await publish('register',{source_at:new Date().toISOString(),source_url:source,rows});
  return {...f,env,rows,publish};
 }
-const reportData=()=>({date:new Date().toISOString().slice(0,10),source_at:new Date().toISOString(),source_url:'https://mail.google.com/mail/#sent/synthetic',register_revision:1,coverage:'Synthetic source coverage',sections:['emails','activity','tasks','tomorrow','rabbi'].map((id,n)=>({id,title:id,items:[{id:'item-'+n,title:id==='rabbi'?'SHARED SCRIPTURE':'PRIVATE BRIEFING '+id,text:id==='rabbi'?'Shared Scripture reading\nPractical example':'Private report narrative\nSecond paragraph',needs_reply:n===0,question:'What should happen next?',pa_task_ids:n===0?['TSK-00003']:[],links:[{label:'Source',url:source}]}]}))});
+const reportData=()=>({date:new Date().toISOString().slice(0,10),source_at:new Date().toISOString(),source_url:'https://mail.google.com/mail/#sent/synthetic',register_revision:1,coverage:'Synthetic source coverage',sections:['emails','activity','tasks','tomorrow','rabbi'].map((id,n)=>({id,title:id,items:[{id:'item-'+n,title:id==='rabbi'?'SHARED SCRIPTURE':'PRIVATE BRIEFING '+id,text:id==='rabbi'?'Shared Scripture reading\nPractical example':'Private report narrative\nSecond paragraph',requires_action:n===0,needs_reply:n===0,question:'What should happen next?',pa_task_ids:n===0?['TSK-00003']:[],links:[{label:'Source',url:source}]}]}))});
 
 test('full report and private PA are server-isolated; staff see only their existing assignments',async t=>{
  const {call,publish}=await setup(t);await publish('report',reportData());
@@ -52,7 +52,9 @@ test('answers are durable and idempotent, complete only records evidence, and ch
 test('report item replies use a verified source hash and do not leak to other users',async t=>{
  const {call,publish}=await setup(t);await publish('report',reportData());
  const item=(await call('alex','/api/pa-report')).data.report.sections[0].items[0],body={request_id:crypto.randomUUID(),subject_key:item.subject_key,subject_hash:item.subject_hash,action:'respond',note:'Draft a response for my review.'};
- assert.equal((await call('alex','/api/pa-report/feedback',body)).status,200);
+ assert.equal((await call('alex','/api/pa-report/feedback',body)).status,400);
+ const task=(await call('alex','/api/pa-report')).data.rows.find(r=>r.id==='TSK-00003');
+ assert.equal((await call('alex','/api/pa-report/feedback',{...body,subject_key:task.id,subject_hash:task.subject_hash})).status,200);
  assert.equal((await call('alinda','/api/pa-report/feedback',{...body,request_id:crypto.randomUUID()})).status,404);
  assert.equal((await call('alinda','/api/pa-report')).data.feedback.length,0);
  assert.equal((await call('alex','/api/pa-report')).data.feedback[0].source_task_ids[0],'TSK-00003');

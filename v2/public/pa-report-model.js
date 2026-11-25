@@ -24,7 +24,7 @@ export function unifiedWork(app,pa){
  for(const t of app.tasks){
   const parent=byApp.get(t.id)||canonical.get(t.pa_task_id);
   if(parent&&(paOpen(parent)||!paOpen(t)||t.task_type==='workflow'))continue;
-  rows.push({...t,...(t.email&&t.task_type!=='workflow'&&paOpen(t)&&t.email.phase!=='cancelled'?{status:t.email.phase==='sent'&&t.email.review_date>day?'Scheduled':'Pending',next_action:t.email.next_action,next_action_date:t.email.review_date}:{}),is_pa:false,scope:'fenmeat',review_group:'Take uit die app',subject_key:t.id});
+  rows.push({...t,...(t.email&&t.task_type!=='workflow'&&paOpen(t)&&t.email.phase!=='cancelled'?{status:t.email.phase==='sent'&&t.email.review_date>day?'Scheduled':'Pending',next_action:t.email.next_action,next_action_date:t.email.review_date}:{}),is_pa:false,scope:t.visibility==='private'?'private':'fenmeat',review_group:t.visibility==='private'?'Private PA':'Take uit die app',subject_key:t.id});
  }
  return rows;
 }
@@ -37,11 +37,11 @@ export function selectWork(rows,{username,admin,scope='mine',status='open',searc
   if(ownStep(r,username,'open'))return 'Pending';
   return mine.some(s=>!s.blocked&&s.effective_status==='Scheduled')?'Scheduled':'Waiting';
  };
- return rows.filter(r=>(scope==='mine'?(taskOwner(r)===username||ownStep(r,username)):scope==='pa'?(taskOwner(r)==='pa'||ownStep(r,'pa','open')):scope==='others'?!!taskOwner(r)&&!['pa',username].includes(taskOwner(r)):scope==='private'?r.scope==='private':scope==='fenmeat'?r.scope==='fenmeat':admin)
+ return rows.filter(r=>(scope==='mine'?(taskOwner(r)===username||ownStep(r,username)):scope==='pa'?(taskOwner(r)==='pa'||ownStep(r,'pa','open')):scope==='others'?!!taskOwner(r)&&!['pa',username].includes(taskOwner(r)):scope==='private'?r.scope==='private':scope==='fenmeat'?r.scope==='fenmeat':scope==='all')
  &&(status==='all'||status==='open'&&statusFor(r)==='Pending'||status==='scheduled'&&statusFor(r)==='Scheduled'||status==='closed'&&['Complete','Cancelled','Archived'].includes(r.status)||status==='complete'&&r.status==='Complete'||status==='cancelled'&&r.status==='Cancelled'||status==='waiting'&&statusFor(r)==='Waiting'||status==='submitted'&&r.completion_pending)
  &&(!person||taskOwner(r)===person||r.steps?.some(s=>s.assigned_to===person))
  &&(!date||[r.due_date,r.review_date,paDue(r)].includes(date)||r.steps?.some(s=>s.due_date===date))
  &&(!priority||r.priority===priority)
- &&(!search||[r.title,r.next_action,r.details,taskOwner(r),r.review_group].join(' ').toLowerCase().includes(search.toLowerCase())))
+ &&(!search||[r.id,r.pa_task_id,r.app_task_id,r.title,r.next_action,r.details,r.supplier,r.outcome,taskOwner(r),r.assigned_to,r.review_group,...(r.steps||[]).map(s=>s.description),...(r.stages||[]).flatMap(t=>[t.id,t.title,t.details,t.supplier])].join(' ').toLowerCase().includes(search.toLowerCase())))
  .sort((a,b)=>Number(paOpen(b))-Number(paOpen(a))||({Critical:0,High:1,Normal:2,Low:3}[a.priority]??2)-({Critical:0,High:1,Normal:2,Low:3}[b.priority]??2)||(paDue(a)||'9999').localeCompare(paDue(b)||'9999')||a.title.localeCompare(b.title));
 }

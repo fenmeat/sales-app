@@ -1,3 +1,5 @@
+import {taskBrief} from '../src/task-workflow.js';
+import {workHTML,noticeLabel,workLabel} from '../public/task-pa-work-ui.js';
 import {mountProposal} from '../public/task-mail-proposal.js';
 import {createWorkspaceCache} from '../public/task-workspace-cache.js';
 import {taskOwner,taskType,projectTask,statusLabel,localDate} from '../src/task-workflow.js';
@@ -46,7 +48,7 @@ async function screen(username,tasks=[],view='',mailPages=null,paState=null){
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','REPORT_FILE_ACCEPT','fileData','renderPaWorkspace','conversationHTML','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','mountProposal','createWorkspaceCache','taskOwner',source)(document,{addEventListener(){}}, Object.assign(globalThis.location,{origin:'https://ui-test.example'}),{replaceState(_state,_title,url){globalThis.location.href=new URL(url,globalThis.location.href).href;}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,REPORT_FILE_ACCEPT,fileData,renderPaWorkspace,conversationHTML,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,mountProposal,createWorkspaceCache,taskOwner);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','REPORT_FILE_ACCEPT','fileData','renderPaWorkspace','conversationHTML','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','mountProposal','createWorkspaceCache','taskOwner','taskBrief','workHTML','noticeLabel','workLabel',source)(document,{addEventListener(){}}, Object.assign(globalThis.location,{origin:'https://ui-test.example'}),{replaceState(_state,_title,url){globalThis.location.href=new URL(url,globalThis.location.href).href;}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,REPORT_FILE_ACCEPT,fileData,renderPaWorkspace,conversationHTML,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,mountProposal,createWorkspaceCache,taskOwner,taskBrief,workHTML,noticeLabel,workLabel);
  return {document,dialog,posts,postPaths,getPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 
@@ -216,8 +218,8 @@ test('admins can open the original task editor from report, conversation and clo
   const button=ui.document.querySelector('[data-edit-task]');assert.ok(button);await button.onclick();
   let form=ui.dialog.querySelector('form');assert.equal(form.elements.title.value,task.title);assert.equal(form.elements.due_date.value,'');assert.equal(form.elements.review_date.value,task.review_date);assert.equal(form.elements.edit_reason.required,true);
   assert.ok(ui.getPaths.includes('/api/tasks?id='+task.id));
-  ui.dialog.close();ui.document.querySelector('[data-open-case]')?.onclick();
-  if(username==='alex'){const edit=[...ui.dialog.querySelectorAll('button')].find(b=>b.textContent==='Wysig oorspronklike taak');assert.ok(edit);await edit.onclick();assert.equal(ui.dialog.querySelector('form').elements.title.value,task.title);}
+  ui.dialog.close();await ui.document.querySelector('[data-open-case]')?.onclick();
+  if(username==='alex'){const edit=[...ui.dialog.querySelectorAll('button')].find(b=>b.textContent==='Wysig oorspronklike taak'||b.id==='edit');assert.ok(edit,ui.dialog.innerHTML+' '+ui.document.querySelector('#message').textContent);await edit.onclick();assert.equal(ui.dialog.querySelector('form').elements.title.value,task.title);}
  }
 });
 test('the original task edit action is absent for staff and private PA-only subjects create no task',async()=>{

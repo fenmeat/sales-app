@@ -110,13 +110,13 @@ function validateReminder(task){
  return t;
 }
 function validateTask(raw,env){
- const t=validateReminder(raw);check(['operational','assigned','confidential'].includes(taskVisibility(t)),'Kies wie die taak mag sien.');t.task_type=t.task_type||taskType(t);check(['reminder','workflow','legacy'].includes(t.task_type),'Kies ’n taaksoort.');t.repeat=t.repeat||'none';check(['none','daily','weekly','monthly'].includes(t.repeat),'Kies ’n herhaling.');check(t.task_type==='reminder'||t.repeat==='none','Slegs herinneringe kan herhaal.');if(t.task_type==='reminder')check(!t.pa_task_id&&!t.parent_cycle_id&&t.kind==='general','Gekoppelde werk kan nie ’n gewone herinnering wees nie.');t.pa_required=t.task_type==='reminder'?false:!!t.pa_required;t.title=text(t.title,180,true);t.details=optionalText(t.details,5000);
+ const t=validateReminder(raw);check(['operational','assigned','confidential','private'].includes(taskVisibility(t)),'Kies wie die taak mag sien.');t.task_type=t.task_type||taskType(t);check(['reminder','workflow','legacy'].includes(t.task_type),'Kies ’n taaksoort.');t.repeat=t.repeat||'none';check(['none','daily','weekly','monthly'].includes(t.repeat),'Kies ’n herhaling.');check(t.task_type==='reminder'||t.repeat==='none','Slegs herinneringe kan herhaal.');if(t.task_type==='reminder')check(!t.pa_task_id&&!t.parent_cycle_id&&t.kind==='general','Gekoppelde werk kan nie ’n gewone herinnering wees nie.');t.pa_required=t.task_type==='reminder'?false:!!t.pa_required;t.title=text(t.title,180,true);t.details=optionalText(t.details,5000);
  if(t.pa_does_work!==undefined)check(typeof t.pa_does_work==='boolean'&&(!t.pa_does_work||t.task_type==='reminder'),'Gebruik PA se werk vir ’n gewone taak.');
  check(taskUsers(env).includes(t.assigned_to),'Choose a current app user.');
  check(['general','stocktake','po_dispatch'].includes(t.kind),'Choose a task type.');
  check(['Critical','High','Normal','Low'].includes(t.priority),'Choose a priority.');
  t.due_date=t.due_date?dateKey(t.due_date):'';t.review_date=t.review_date?dateKey(t.review_date):'';
- check(t.due_date||t.review_date,'Set a due date or a review date.');
+ check(t.due_date||t.review_date||t.task_type==='workflow','Set a due date or a review date.');
  t.document_url=safeURL(t.document_url);t.evidence_url=safeURL(t.evidence_url);t.source_url=safeURL(t.source_url);
  t.pa_task_id=optionalText(t.pa_task_id,40);t.parent_cycle_id=optionalText(t.parent_cycle_id,40);
  check(!t.pa_task_id||PA_ID.test(t.pa_task_id),'Invalid PA task link.');check(!t.parent_cycle_id||PA_ID.test(t.parent_cycle_id),'Invalid parent cycle.');
@@ -155,14 +155,16 @@ export async function saveTask(env,user,b){
   check(manager,'Slegs taakbestuurders kan sigbaarheid kies.',403);
   if(!admin)check(b.data.visibility!=='confidential'&&(!old||b.data.visibility===taskVisibility(old)),'Net administrateurs kan hierdie taak se sigbaarheid verander.',403);
  }
+ check(!old||taskVisibility(old)!=='private'||!b.data?.visibility||b.data.visibility==='private','Private PA-take bly privaat.',403);
+ if(b.data?.visibility==='private')check(user.username==='alex','Slegs Alex kan private take bestuur.',403);
  let task=old?structuredClone(old):null,files=[];
  const appendFiles=['attach','update','note','respond','pa_request','pa_resume'].includes(action);
  check(b.files===undefined||appendFiles||['create','pa_result','step_add','step_update','step_note'].includes(action),'Files cannot be added with this task action.');
  if(action==='create'){
   check(!old,'This task already exists.',409);
-  check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||['area','steps','require_final_approval'].includes(k)),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat','Personal PA matters cannot be imported into FenMeat.');
+  check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||['area','steps','require_final_approval'].includes(k)),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat'||b.data.visibility==='private'&&user.username==='alex','Personal PA matters cannot be imported into FenMeat.');
   if(!admin){check(manager||!b.data.assigned_to||b.data.assigned_to===user.username,'You can only create tasks for yourself.',403);check(Object.keys(b.data).every(k=>selfEditable.includes(k)||['area','steps','require_final_approval'].includes(k)||(manager&&k==='visibility'))&&['general','stocktake'].includes(b.data.kind??'general'),'Only admins can create linked PA or PO tasks.',403);}
-  task=validateTask({...(manager&&!admin&&b.data.assigned_to&&b.data.assigned_to!==user.username?{visibility:'assigned'}:{}),kind:'general',priority:'Normal',assigned_to:user.username,...b.data,id:b.task_id,area:'Fen Meat',status:'Pending',created_by:user.username,created_at:at,completion:null,waiting_reason:''},env);
+  task=validateTask({...(manager&&!admin&&b.data.assigned_to&&b.data.assigned_to!==user.username?{visibility:'assigned'}:{}),kind:'general',priority:'Normal',assigned_to:user.username,...b.data,id:b.task_id,area:b.data.visibility==='private'?'Private PA':'Fen Meat',status:'Pending',created_by:user.username,created_at:at,completion:null,waiting_reason:''},env);
   const supplierPlan=user.via==='pa'&&task.kind==='po_dispatch'&&!b.data.steps;
   if(supplierPlan){task.task_type='workflow';task.dispatch_step_id='dispatch';}
   check(!b.data.steps||task.task_type==='workflow','Kies Taak met stappe.');
@@ -232,7 +234,7 @@ export async function saveTask(env,user,b){
    task.last_reason=text(b.note,2000,true);
   }else if(action==='set_visibility'){
    check(admin,'Slegs administrateurs kan taaktoegang verander.',403);
-   check(['operational','assigned','confidential'].includes(b.data?.visibility),'Kies wie die taak mag sien.');
+   check(['operational','assigned','confidential','private'].includes(b.data?.visibility),'Kies wie die taak mag sien.');
    task.visibility=b.data.visibility;task.last_reason=text(b.note,2000,true);
   }else if(action==='restore_task_revision'){
    check(admin,'Only admins can restore task history.',403);check(Number.isSafeInteger(b.restore_revision)&&b.restore_revision>0&&b.restore_revision<old.revision,'Choose an earlier saved revision.');text(b.note,2000,true);
@@ -374,6 +376,7 @@ export async function saveTask(env,user,b){
  }
  if(action==='set_visibility')task.last_edit={by:user.username,at,reason:task.last_reason,previous_revision:old.revision,changes:taskChanges(old,task)};
  if(taskVisibility(task)==='confidential')check(isAdmin(task.assigned_to)&&(task.steps||[]).every(s=>s.assigned_to==='pa'||isAdmin(s.assigned_to)),'Delegeer vertroulike werk net aan Alex of Alinda.');
+ if(taskVisibility(task)==='private')check(user.username==='alex'&&task.assigned_to==='alex'&&(task.steps||[]).every(s=>['alex','pa'].includes(s.assigned_to)),'Private PA-werk bly net by Alex en PA.',403);
  const revision=b.revision+1;
  const statements=[env.DB.prepare('INSERT INTO v2_task_events(request_id,fingerprint,task_id,revision,action,payload,actor,saved_at) VALUES(?,?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,task.id,revision,action,JSON.stringify(task),user.username,at)];
  statements.push(...files.flatMap(file=>fileStatements(env.DB,task.id,user.username,at,file)));
@@ -410,7 +413,7 @@ export async function saveTask(env,user,b){
 }
 export async function acknowledgeTask(env,user,b){
  check(isAdmin(user.username),'Only admins can synchronise PA.',403);
- const t=await getTask(env.DB,b.task_id);check(t&&syncRequired(t),'Hierdie herinnering bly net in die app.');check(t&&b.revision===t.revision,'Read the current task before confirming its PA update.',409);
+ const t=await getTask(env.DB,b.task_id);check(t&&fullTaskAccess(user,t),'Task not found.',404);check(t&&syncRequired(t),'Hierdie herinnering bly net in die app.');check(t&&b.revision===t.revision,'Read the current task before confirming its PA update.',409);
  check(PA_ID.test(b.pa_task_id??''),'Provide the existing PA task ID.');const source=safeURL(b.source_url);check(source.startsWith('https://docs.google.com/spreadsheets/'),'Provide the verified PA register row.');
  check(!t.pa_task_id||t.pa_task_id===b.pa_task_id,'Do not replace an existing PA task identity.');
  check(!t.parent_cycle_id||t.parent_cycle_id===b.pa_task_id,'A PO step must remain linked to its existing cycle.');
@@ -482,7 +485,7 @@ function openTask(task){return ['Pending','Scheduled','Waiting'].includes(task.s
 export async function readTasksForPa(env,user,query={}){
  await ensureTaskSchema(env.DB);check(isAdmin(user.username),'Only admins can read PA task integration.',403);
  if(query.resource==='email_requests'||query.resource==='report_contacts')return readTaskMail(env,user,query);
- if(query.task_id){const task=await getTask(env.DB,query.task_id);check(task,'Task not found.',404);const history=await env.DB.prepare('SELECT revision,action,actor,saved_at FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 50').bind(task.id).all();return {task,history:history.results,history_has_more:task.revision>50,save_contract:taskSaveContract};}
+ if(query.task_id){const task=await getTask(env.DB,query.task_id);check(task&&fullTaskAccess(user,task),'Task not found.',404);const history=await env.DB.prepare('SELECT revision,action,actor,saved_at FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 50').bind(task.id).all();return {task,history:history.results,history_has_more:task.revision>50,save_contract:taskSaveContract};}
  return {...await listTasks(env,user,{pending_sync:query.resource==='pending_sync',offset:query.offset??0}),save_contract:taskSaveContract};
 }
 
@@ -493,7 +496,7 @@ function canonicalTaskRequest(value){
 }
 const taskSaveContract={
  create:'save_task({task:{action:"create",revision:0,request_id,data:{title,details,assigned_to,due_date,review_date,priority,reminder_mode,reminder_at}}}). task_id is optional ONLY for create; omitted IDs are derived from owner + request_id. Search all get_tasks pages before creating; reuse an existing task for the same obligation.',
- visibility:'For new ordinary business work set data.visibility to operational. assigned limits sharing to administrators and task participants. confidential is for Alex and Alinda. Older unclassified tasks keep assignment-based access.',
+ visibility:'For new ordinary business work set data.visibility to operational. assigned limits sharing to administrators and task participants. confidential is for Alex and Alinda. private is Alex-only, including all admin connectors. Personal cases use the daily_report private_task bridge with an existing private TSK; never copy their content to the shared workbook. Older unclassified tasks keep assignment-based access.',
  update:'Read the current task first. save_task({task:{action:"update",task_id:task.id,revision:task.revision,request_id,data:{only_changed_fields},note}}). Use existing usernames from users. Use details for the description.',
  identifiers:'task_id and save_task request_id: 8–90 ASCII letters, digits or hyphens. UUIDs are safe. save_app_data request_id: 16–80. Reuse the SAME request_id and identical content for a retry; a changed request needs a new request_id. Never use a task id as the request id.',
  standardize:'Admin only. standardize_task preserves a single native reminder or stocktake. For a researched existing cycle pass steps with sourced confirmations, latest revision and a reason in note. Read back the same id. step_waive requires a reason.',
