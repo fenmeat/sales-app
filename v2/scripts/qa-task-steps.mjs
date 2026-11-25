@@ -105,14 +105,21 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  await page.locator('#pa-new').click();await page.locator('[name=title]').fill('Synthetic workflow '+name);await page.locator('[name=assigned_to]').selectOption('alinda');await page.locator('[name=task_type]').selectOption('workflow');
  await page.locator('[name=require_final_approval]').check();
  for(let i=1;i<5;i++)await page.locator('[data-add-draft]').click();
- const rows=page.locator('.draft-step');assert.equal(await rows.count(),5);assert.deepEqual(errors,[]);
+ const rows=page.locator('.draft-step');assert.equal(await rows.count(),5);assert.equal(await rows.first().locator('[data-field=assigned_to] option[value=pa]').textContent(),'PA');assert.deepEqual(errors,[]);
  for(let i=0;i<5;i++){await rows.nth(i).locator('[data-field=description]').fill('Synthetic step '+(i+1));await rows.nth(i).locator('[data-field=assigned_to]').selectOption(['alex','alinda','xavier','xavier','alex'][i]);assert.equal(await rows.nth(i).locator('[data-scan]').count(),1);}
  await rows.nth(3).locator('input[id$="-attachment"]').setInputFiles({name:'synthetic.pdf',mimeType:'application/pdf',buffer:Buffer.from('%PDF-1.4\nSynthetic\n%%EOF')});
  await page.locator('#dialog').getByRole('button',{name:'Stoor',exact:true}).click();await page.waitForSelector('#add-step');
  let list=(await api('/api/tasks')).data.tasks,task=list.find(t=>t.title==='Synthetic workflow '+name);assert.equal(task.steps.length,5);assert.equal(task.steps[3].attachments.length,1);
  const refresh=async()=>{task=(await api('/api/tasks?id='+task.id)).data.task;};
  const open=async()=>{await page.goto(origin+'/tasks?task='+task.id);await page.waitForSelector('#add-step');};
- await page.locator('[data-step-delegate="'+task.steps[1].id+'"]').click();await page.locator('[name=assigned_to]').selectOption('xavier');await page.locator('[name=due_date]').fill('2099-11-23');assert.equal(await page.locator('[data-scan]').count(),1);await page.getByRole('button',{name:'Stoor stap',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});await refresh();assert.equal(task.steps[1].assigned_to,'xavier');
+ await page.locator('[data-step-delegate="'+task.steps[1].id+'"]').click();
+ await page.locator('[name=assigned_to]').selectOption('pa');
+ await page.getByRole('button',{name:'Stoor stap',exact:true}).click();
+ await page.waitForSelector('dialog:not([open])',{state:'attached'});await refresh();
+ assert.equal(task.steps[1].assigned_to,'pa');await open();
+ await page.locator('[data-step-delegate="'+task.steps[1].id+'"]').click();
+ assert.equal(await page.locator('[name=assigned_to]').inputValue(),'pa');
+ await page.locator('[name=assigned_to]').selectOption('xavier');await page.locator('[name=due_date]').fill('2099-11-23');assert.equal(await page.locator('[data-scan]').count(),1);await page.getByRole('button',{name:'Stoor stap',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});await refresh();assert.equal(task.steps[1].assigned_to,'xavier');
  for(let i=0;i<5;i++){await open();await page.locator('[data-step-complete="'+task.steps[i].id+'"]').click();await page.getByRole('button',{name:'Stoor voltooiing',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});await refresh();if(i===2)assert.equal(task.progress.percent,60);}
  assert.equal(task.status,'Pending');assert.equal(task.ready_for_approval,true);await open();assert.match(await page.locator('#dialog').textContent(),/Wag vir goedkeuring/);
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));assert.ok(await page.locator('dialog').evaluate(e=>e.scrollWidth<=e.clientWidth+1));assert.ok(await page.locator('.step .actions button').evaluateAll(buttons=>buttons.every(b=>b.getBoundingClientRect().width>=120)),'Step buttons must stay readable on narrow screens');await page.screenshot({path:folder+'/'+name+'.png'});
