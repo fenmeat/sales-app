@@ -115,6 +115,25 @@ test('both admins keep Everyone, assignments and reminders while staff manage th
 });
 
 const reportTask=(overrides={})=>({id:'synthetic-report-task',revision:2,title:'Example task',details:'Some detail',assigned_to:'xavier',created_by:'alex',status:'Pending',kind:'general',priority:'Normal',due_date:'2099-11-02',review_date:'',pa_sync:{status:'synced'},...overrides});
+
+test('opening a task keeps all five summary fields even when their values coincide',async()=>{
+ const longText='Lees die bestelling en bevestig ontvangs. '.repeat(10);
+ for(const details of ['',longText]){
+  const task=reportTask({details});
+  const {document,dialog,posts}=await screen('xavier',[task]);
+  document.querySelector('[data-task]').onclick();
+  const fields=[...dialog.querySelectorAll('.task-detail-summary > div')].map(row=>[
+   row.querySelector('dt').textContent,row.querySelector('dd').textContent
+  ]);
+  const description=details||task.title;
+  assert.deepEqual(fields.slice(0,5),[
+   ['Wat gaan aan?',description],['Status','Doen nou'],['Wat moet ek doen?',description],
+   ['Wat is reeds gedoen?','Geen vordering is nog aangeteken nie.'],['Wat gebeur volgende?',description]
+  ]);
+  assert.deepEqual(posts,[]);
+ }
+});
+
 test('report UI shows three contextual actions, asks without a second task and supports direct email review',async()=>{
  const {document,dialog,posts}=await screen('alex',[reportTask()],'?view=report');
  assert.equal(document.querySelector('h1').textContent,'Daily Report');assert.match(document.querySelector('#report-owner').textContent,/Everyone/);
