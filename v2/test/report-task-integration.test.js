@@ -11,6 +11,8 @@ test('private workflow, report navigation, one conversation, search, reminders a
  const publish=(operation,data,revision=0,request_id=crypto.randomUUID())=>savePaReport(env,actor,{operation,data,revision,request_id,reason:'Authorised synthetic integration test'});
  const row={id,scope:'private',area:'Personal',title:'Tandartsstaat — Voorbaai Dental Studio',assigned_to:'alex',status:'Pending',priority:'Normal',next_action:'Kontroleer die staat.',review_group:'Tandarts',source_url:source,app_task_id:'private-'+id};
  await publish('register',{source_at:new Date().toISOString(),source_url:source,rows:[row]});
+ const beforeCreate={date:new Date().toISOString().slice(0,10),source_at:new Date().toISOString(),source_url:source,register_revision:1,sections:['emails','activity','tasks','tomorrow','rabbi'].map((section,n)=>({id:section,title:section,items:[{id:'before-'+n,title:'Before native save',text:'Pending task creation',requires_action:n===0,pa_task_ids:n===0?[id]:[]}]}))};
+ await assert.rejects(publish('report',beforeCreate),/nie gestoor/);
  const create={pa_task_id:id,action:'create',data:{title:row.title,task_type:'workflow',require_final_approval:true,details:'Persoonlike staat',reminder_mode:'off',steps:[{id:'check',description:'Kontroleer die staat',assigned_to:'pa',status:'Pending'},{id:'confirm',description:'Bevestig afhandeling',assigned_to:'alex',status:'Pending',dependencies:['check']}]}};
  const req=crypto.randomUUID(),created=await publish('private_task',create,0,req);assert.equal(created.task.visibility,'private');assert.equal((await publish('private_task',create,0,req)).replayed,true);
  const taskId=created.task.id;
