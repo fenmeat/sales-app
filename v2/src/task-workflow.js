@@ -109,7 +109,7 @@ export function taskBrief(task, username) {
   const closed = ['Complete','Cancelled','Archived','Klaar gemeld'].includes(task.status);
   const job=(task.pa_work||[]).find(w=>['blocked','approval'].includes(w.status));
   const result=job?.results?.at(-1);
-  const next = task.native_review?.description || task.work_next_action || (result&&task.pa_does_work?result.next_action:'') || (task.part_pending ? 'PA moet die bevestiging nagaan en vasstel wat nog oorbly.' :
+  const next = task.native_review?.description || task.work_next_action || (result&&task.pa_does_work?result.next_action:'') || (task.part_pending ? 'PA teken jou bevestiging by die betrokke stap aan.' :
     task.next_action || task.details || task.title);
   const current = task.next_assigned_to || task.email || task.app_edit_pending;
   const single = current ? next : task.responsibility?.action || next;
