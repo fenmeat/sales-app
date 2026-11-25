@@ -31,10 +31,12 @@ test('private workflow, report navigation, one conversation, search, reminders a
  let current=(await f.call('alex','/api/pa-report')).data;
  assert.equal(current.report.sections[0].items[0].linked_tasks[0].app_task_id,taskId);
  const link=current.report.sections[0].items[0],subject=current.rows[0];
+ const workspace=await readTaskWorkspace(env,{username:'alex'},{scope:'private',status:'all'});assert.equal(workspace.pa.rows[0].subject_hash,subject.subject_hash);
+ assert.equal((await f.call('alex','/api/pa-report/feedback',{subject_key:id,subject_hash:workspace.pa.rows[0].subject_hash,action:'respond',note:'Same task from workspace',request_id:crypto.randomUUID()})).status,200);
  assert.equal((await f.call('alex','/api/pa-report/feedback',{subject_key:link.subject_key,subject_hash:link.subject_hash,action:'respond',note:'Parallel thread must be rejected',request_id:crypto.randomUUID()})).status,400);
  const feedback={subject_key:id,subject_hash:subject.subject_hash,action:'respond',note:'Wat is die volgende stap?',request_id:crypto.randomUUID()};
  assert.equal((await f.call('alex','/api/pa-report/feedback',feedback)).status,200);
- assert.equal((await f.call('alex','/api/pa-report/conversation?subject_key='+id)).data.feedback[0].note,feedback.note);
+ assert.equal((await f.call('alex','/api/pa-report/conversation?subject_key='+id)).data.feedback.at(-1).note,feedback.note);
  const reminder={...feedback,request_id:crypto.randomUUID(),action:'remind',note:'',remind_at:new Date(Date.now()+3600000).toISOString()};
  assert.equal((await f.call('alex','/api/pa-report/feedback',reminder)).status,200);
  assert.equal((await f.call('alex','/api/pa-report')).data.reminders[0].subject_key,id);
