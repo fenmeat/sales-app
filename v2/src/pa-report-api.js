@@ -357,7 +357,8 @@ export async function savePaReport(env,user,b){
   payload=validateReport(input,register,{legacy:b.operation==='report_links'});
   if(b.operation==='report_links'){payload.task_summary=old.task_summary;payload.linked_at=new Date().toISOString();}
   await ensureTaskSchema(env.DB);
-  const ids=[...new Set(payload.sections.flatMap(s=>s.items.flatMap(i=>i.app_task_ids)))];
+  const canonical=new Map(register.rows.map(r=>[r.id,r]));
+  const ids=[...new Set(payload.sections.flatMap(s=>s.items.flatMap(i=>[...i.app_task_ids,...i.pa_task_ids.map(id=>canonical.get(id)?.app_task_id).filter(Boolean)])))];
   if(ids.length){const found=await env.DB.prepare('SELECT e.task_id FROM '+taskHeadJoin+' WHERE e.task_id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(ids)).all();check(found.results.length===ids.length,'Een van die gekoppelde take is nie gestoor nie.');}
 
   if(!payload.historical){
