@@ -5,7 +5,7 @@ import {isTaskManager,taskReadScope,taskView} from './task-access.js';
 import {hash,isAdmin} from './auth.js';
 import {isInvoiceRep} from './invoice-auth.js';
 import {taskUsers,latestSQL,decode,currentTaskNotification,ensureTaskSchema,getTask} from './tasks-api.js';
-import {visiblePaRows,paUsers,ensurePaReportSchema,readPaReport} from './pa-report-api.js';
+import {workflowState,visiblePaRows,paUsers,ensurePaReportSchema,readPaReport} from './pa-report-api.js';
 import {unifiedWork,selectWork,workCounts} from '../public/pa-report-model.js';
 
 const statuses=new Set(['open','scheduled','waiting','closed','complete','cancelled','submitted','all']);
@@ -28,7 +28,7 @@ export async function readTaskWorkspace(env,user,query={}){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
  const admin=isAdmin(user.username),rep=isInvoiceRep(user.username),status=query.status||'open',scope=query.scope||'mine',search=String(query.search||'').trim().slice(0,200),offset=Number(query.offset||0),size=25;
  check(statuses.has(status)&&['mine','pa','others','fenmeat','private','all'].includes(scope),'Choose a task list.');
- check(admin||scope==='mine'||isTaskManager(user.username)&&['pa','others','fenmeat'].includes(scope),'Only admins can view other task lists.',403);check(scope!=='private'||user.username==='alex','Private tasks are for Alex only.',403);
+ check(admin||['mine','all'].includes(scope)||isTaskManager(user.username)&&['pa','others','fenmeat'].includes(scope),'Only admins can view other task lists.',403);check(scope!=='private'||user.username==='alex','Private tasks are for Alex only.',403);
  check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  const access=taskReadScope(user);
  const statements=[env.DB.prepare(latestSQL+' WHERE '+access.sql).bind(...access.params)];
@@ -40,7 +40,8 @@ export async function readTaskWorkspace(env,user,query={}){
  const result=await env.DB.batch(statements),tasks=result[0].results.map(row=>taskView(user,decode(row))).filter(Boolean),raw=result[1]?.results[0];
  const register=raw?JSON.parse(raw.payload):null,visibleRows=await visiblePaRows(env,user,register?.rows||[]);
  const mails=user.username==='alex'?await mailSummaries(env.DB):new Map();
- const canonical=visibleRows.map(r=>projectMail(r,mails.get(r.id),today())),known=new Set(canonical.map(r=>r.id));
+ const nativeById=new Map(tasks.map(t=>[t.id,t]));
+ const canonical=visibleRows.map(r=>workflowState(projectMail(r,mails.get(r.id),today()),nativeById.get(r.app_task_id))),known=new Set(canonical.map(r=>r.id));
  const feedback=(result[2]?.results||[]).filter(f=>known.has(f.subject_key)).map(f=>({...f,status:f.answered?'answered':f.action==='respond'||f.question?'pending':f.acknowledged_at?'processed':'pending'}));
  const app={username:user.username,admin,task_manager:isTaskManager(user.username),invoice_rep:rep,today:today(),users:isTaskManager(user.username)?taskUsers(env):[user.username],suppliers:[],tasks:tasks.map(t=>{const key='app-'+t.id,m=mails.get(key);return m?{...t,email:projectMail(t,m).email,mail_key:key}:t;}),notifications:[],next_offset:null};
  const pa={username:user.username,admin,users:isTaskManager(user.username)?paUsers(env):[user.username],today:app.today,private_report:user.username==='alex',rabbi_access:!rep&&['alex','alinda','xalinda','xavier'].includes(user.username),register_revision:raw?.revision||0,source_at:register?.source_at||null,source_url:admin?register?.source_url||null:null,rows:canonical,feedback};

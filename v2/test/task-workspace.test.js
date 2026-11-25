@@ -20,7 +20,7 @@ test('workspace pages only the requested list, authenticates conditional reads a
  const closed=(await call('alex','/api/tasks/workspace?scope=all&status=closed')).data;assert.equal(closed.pa.workspace.total,140);assert.equal(closed.pa.workspace.rows.length,25);
  const staff=await call('xavier','/api/tasks/workspace');assert.equal(staff.data.pa.workspace.total,1);assert.doesNotMatch(JSON.stringify(staff.data),/PRIVATE ONLY ALEX/);
  const alinda=await call('alinda','/api/tasks/workspace?scope=all&status=all',undefined,{'If-None-Match':r.data.etag});assert.equal(alinda.status,200);assert.doesNotMatch(JSON.stringify(alinda.data),/PRIVATE ONLY ALEX/);
- assert.equal((await call('xavier','/api/tasks/workspace?scope=all')).status,403);assert.equal((await call('alinda','/api/tasks/workspace?scope=private')).status,403);
+ const allStaff=await call('xavier','/api/tasks/workspace?scope=all');assert.equal(allStaff.status,200);assert.doesNotMatch(JSON.stringify(allStaff.data),/PRIVATE ONLY ALEX/);assert.equal((await call('alinda','/api/tasks/workspace?scope=private')).status,403);
  assert.equal(rows.length,222);
 });
 test('app edits override older PA data, cursor resets after changes and details/audit are fetched separately',async t=>{
