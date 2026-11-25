@@ -47,9 +47,9 @@ try{
     await page.locator('textarea[name=note]').fill('Report reply '+name+' '+i);
     await page.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});
     await page.goto(origin+'/tasks?task='+id+'&scope=fenmeat&status=closed');await page.locator('#pa-task-conversation').click();
-    await page.getByText('Report reply '+name+' '+i,{exact:true}).waitFor();
+    await page.locator('#pa-conversation').getByText('Report reply '+name+' '+i,{exact:true}).waitFor();
     await page.locator('textarea[name=note]').fill('Tasks reply '+name+' '+i);await page.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});
-    await page.goto(origin+'/tasks?view=report');await page.locator('[data-open-case="'+id+'"]').click();await page.locator('#pa-task-conversation').click();await page.getByText('Tasks reply '+name+' '+i,{exact:true}).waitFor();
+    await page.goto(origin+'/tasks?view=report');await page.locator('[data-open-case="'+id+'"]').click();await page.locator('#pa-task-conversation').click();await page.locator('#pa-conversation').getByText('Tasks reply '+name+' '+i,{exact:true}).waitFor();
     await page.locator('[data-close]').last().click();
    }
    await page.goto(origin+'/tasks?scope=private&status=all');await page.locator('#pa-search').fill('Voorbaai');await page.locator('[data-case="TSK-00991"]').waitFor();
