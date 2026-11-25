@@ -39,6 +39,9 @@ on:
       - 'v2/public/invoicing/input-selection.js'
       - 'v2/scripts/qa-text-editing.mjs'
       - '.github/workflows/text-editing.yml'
+concurrency:
+  group: task-browser-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
