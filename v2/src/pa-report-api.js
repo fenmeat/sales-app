@@ -1,4 +1,4 @@
-import {taskOwner} from './task-workflow.js';
+import {standardSteps,stepProgress,taskOwner} from './task-workflow.js';
 import {originalFileBytes} from './task-files.js';
 import {check,UserError,dateKey,today} from './domain.js';
 import {workPage} from './task-pa-work.js';
@@ -7,12 +7,21 @@ import {EMAIL_SCHEMA,changeMail,readMail,mailReview,mailActions,mailSummaries,ma
 import {isTaskManager,fullTaskAccess,taskVisibility} from './task-access.js';
 import {hash,isAdmin,keys} from './auth.js';
 
-// Bounded, current workflow summaries for the existing PA report. No new tasks
+// Bounded, current task and reminder summaries for the existing PA report. No new tasks
 // or mirror rows: retain one parent identity and expose outstanding child work.
 async function stepReportPage(db,offset=0){
  offset=Number(offset);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
- const rows=(await db.prepare(latestSQL+" WHERE json_extract(e.payload,'$.task_type')='workflow' ORDER BY e.saved_at DESC,e.task_id LIMIT 26 OFFSET ?").bind(offset).all()).results;
- return {items:rows.slice(0,25).map(decode).map(t=>({task_id:t.id,pa_task_id:t.pa_task_id,revision:t.revision,title:t.title,status:t.status,assigned_to:t.assigned_to,updated_at:t.updated_at,progress:t.progress,ready_for_approval:!!t.ready_for_approval,next_action:t.next_action,next_assigned_to:t.next_assigned_to,next_action_date:t.next_action_date,url:'/tasks?task='+t.id,steps:(t.steps||[]).filter(s=>!['Complete','Waived'].includes(s.status)).map(s=>({id:s.id,description:s.description,assigned_to:s.assigned_to,due_date:s.due_date,status:s.status,overdue:s.overdue,blocked:s.blocked}))})),next_offset:rows.length>25?offset+25:null};
+ const rows=(await db.prepare(latestSQL+' ORDER BY e.saved_at DESC,e.task_id LIMIT 26 OFFSET ?').bind(offset).all()).results;
+ const items=rows.slice(0,25).map(decode).map(t=>{
+  const steps=standardSteps(t),open=steps.filter(s=>!['Complete','Waived','Cancelled','Archived'].includes(s.status));
+  const next=open.find(s=>!s.blocked&&(s.effective_status||s.status)!=='Scheduled')||open[0];
+  return {task_id:t.id,pa_task_id:t.pa_task_id,revision:t.revision,title:t.title,status:t.status,task_type:t.task_type,
+   assigned_to:t.assigned_to,updated_at:t.updated_at,progress:t.progress||stepProgress(steps),ready_for_approval:!!t.ready_for_approval,
+   next_action:t.native_review?.description||t.next_action||next?.description||'',next_assigned_to:taskOwner(t),
+   next_action_date:t.native_review?.due_date||t.next_action_date||next?.due_date||'',url:'/tasks?task='+t.id,
+   steps:open.map(s=>({id:s.id,description:s.description,assigned_to:s.assigned_to,due_date:s.due_date,status:s.status,effective_status:s.effective_status||s.status,overdue:!!s.overdue,blocked:!!s.blocked}))};
+ });
+ return {items,next_offset:rows.length>25?offset+25:null};
 }
 
 // A versioned read model of the existing PA register, never a second master.

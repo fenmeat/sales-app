@@ -22,6 +22,7 @@ on:
       - 'v2/src/task-files.js'
       - 'v2/scripts/qa-task-scans.mjs'
       - 'v2/src/task-workspace.js'
+      - 'v2/src/pa-report-api.js'
       - 'v2/public/task-workspace-cache.js'
       - 'v2/public/task-search-render.js'
       - 'v2/scripts/qa-task-speed.mjs'

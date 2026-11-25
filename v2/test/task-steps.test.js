@@ -62,5 +62,10 @@ test('PA day report reads current workflow progress and approval without an extr
  const context=await readPaReport(env(db),{username:'alex'},{resource:'summary',id:'report-context'});
  assert.equal(context.task_steps.items[0].task_id,r.data.task.id);assert.equal(context.task_steps.items[0].steps.length,5);assert.equal(context.task_steps.items[0].progress.remaining,5);
  const page=await readPaReport(env(db),{username:'alex'},{resource:'summary',id:'task-steps',offset:0});assert.deepEqual(page,context.task_steps);
+ const reminder=await call('alex','/api/tasks',task({title:'Collect labels',task_type:'reminder',repeat:'weekly',assigned_to:'alinda',due_date:'2099-11-23'}));
+ const updated=await readPaReport(env(db),{username:'alex'},{resource:'summary',id:'task-steps'});
+ const native=updated.items.find(item=>item.task_id===reminder.data.task.id);
+ assert.equal(native.progress.total,1);assert.equal(native.next_assigned_to,'alinda');assert.equal(native.next_action_date,'2099-11-23');
+ assert.equal(native.steps[0].effective_status,'Scheduled');
  await assert.rejects(()=>readPaReport(env(db),{username:'alinda'},{resource:'summary',id:'task-steps'}));
 });
