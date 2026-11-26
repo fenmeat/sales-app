@@ -35,13 +35,14 @@ try{for(const [name,engine,options] of [['chromium-phone',chromium,devices['Pixe
  const note=page.getByLabel('Jou antwoord',{exact:true});await note.fill('Skryf vir my die opvolg-e-pos.');
  await context.setOffline(true);await page.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await page.waitForFunction(()=>document.querySelector('dialog .error').textContent.length>0);
  assert.equal(await note.inputValue(),'Skryf vir my die opvolg-e-pos.');await context.setOffline(false);await page.getByRole('button',{name:'Kanselleer',exact:true}).click();
- await page.reload();await page.locator('[data-pa-action="respond"]').click();assert.equal(await note.inputValue(),'Skryf vir my die opvolg-e-pos.');
+ await page.locator('[data-pa-action="respond"]').click();assert.equal(await note.inputValue(),'Skryf vir my die opvolg-e-pos.');
+ await page.getByRole('button',{name:'Kanselleer',exact:true}).click();await page.reload();await page.locator('[data-pa-action="respond"]').click();assert.equal(await note.inputValue(),'');await note.fill('Skryf vir my die opvolg-e-pos.');
  loseResponse=true;await page.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await page.waitForFunction(()=>document.querySelector('dialog .error').textContent.length>0);
- assert.equal(stored.size,1);const original=posts[0];await page.getByRole('button',{name:'Kanselleer',exact:true}).click();await page.reload();await page.locator('[data-pa-action="respond"]').click();
+ assert.equal(stored.size,1);const original=posts[0];await page.getByRole('button',{name:'Kanselleer',exact:true}).click();await page.locator('[data-pa-action="respond"]').click();
  loseResponse=false;await page.getByRole('button',{name:'Stoor antwoord',exact:true}).click();await page.waitForSelector('dialog:not([open])',{state:'attached'});assert.equal(stored.size,1);assert.deepEqual(posts.at(-1),original);assert.equal(original.reply_to,'fixture-question-3');
  assert.ok((await page.locator('#app').textContent()).includes('PA se antwoord is nog uitstaande'));
  await page.locator('[data-pa-action="respond"]').click();assert.equal(await note.inputValue(),'');
  await page.screenshot({path:folder+'/'+name+'.png',fullPage:true});assert.deepEqual(errors,[]);
- console.log('PASS '+name+': full conversation, offline draft, reload, lost response, same-ID retry, follow-up linkage and no duplicate question');
+ console.log('PASS '+name+': full conversation, offline draft, private reload clearing, lost response, same-ID retry, follow-up linkage and no duplicate question');
  }finally{await browser.close();}
 }}finally{await new Promise(r=>server.close(r));}

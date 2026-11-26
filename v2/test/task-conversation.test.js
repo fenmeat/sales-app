@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fixture} from './helpers/report-fixture.js';
 import {saveTask,getTask} from '../src/tasks-api.js';
-import {ensurePaReportSchema} from '../src/pa-report-api.js';
+import {savePaReport,ensurePaReportSchema} from '../src/pa-report-api.js';
 import {readTaskConversation,messageStatement} from '../src/task-conversation.js';
 import {messageMarkdown,messageHTML} from '../public/task-conversation-ui.js';
 const owner={username:'alex',via:'pa'};
@@ -62,4 +62,13 @@ test('a user document belongs to its message and retries do not duplicate it',as
  assert.equal((await call('alex','/api/tasks',request)).status,200);await call('alex','/api/tasks',request);
  const page=(await call('alex','/api/tasks/conversation?id='+b.task_id)).data;
  assert.equal(page.messages.length,1);assert.equal(page.messages[0].files[0].name,'proof.txt');assert.equal(page.messages[0].files[0].id,request.files[0].id);
+});
+
+test('private task bridge edits only requested task and step fields',async t=>{
+ const {env,db}=await fixture(t);await ensurePaReportSchema(db);
+ await db.prepare('INSERT INTO v2_pa_report_versions VALUES(?,?,?,?,?,?,?)').bind('register',1,'private-fixture-register','test',JSON.stringify({rows:[{id:'TSK-99998',scope:'private'}]}),'alex',new Date().toISOString()).run();
+ const change=(revision,data)=>savePaReport(env,owner,{operation:'private_task',revision,request_id:crypto.randomUUID(),reason:'Verify private conversation plan update',data:{pa_task_id:'TSK-99998',...data}});
+ await change(0,{action:'create',data:{title:'Private plan',task_type:'workflow',steps:[{id:'next',description:'Next action',assigned_to:'alex',status:'Pending'}]}});
+ let r=await change(1,{action:'update',data:{title:'Current private plan'},note:'Confirmed current facts'});assert.equal(r.task.title,'Current private plan');assert.equal(r.task.visibility,'private');
+ r=await change(2,{action:'step_update',step_id:'next',data:{description:'Verify the source',assigned_to:'pa'}});assert.equal(r.task.steps[0].assigned_to,'pa');assert.equal(r.task.visibility,'private');
 });

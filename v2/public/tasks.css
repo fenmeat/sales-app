@@ -82,3 +82,5 @@
 .message-meta time{font-size:.8rem}.message-body p{margin:.4rem 0;white-space:pre-wrap}.message-body h4{margin:.7rem 0 .3rem;font-size:1.05rem}.message-body ul,.message-body ol{padding-left:1.5rem}.message-space{height:.35rem}.task-message a{color:#07569b;text-decoration:underline}.message-review{font-weight:600}
 .conversation-compose{margin-top:.75rem;display:grid;gap:.5rem;min-width:0}.conversation-compose textarea{box-sizing:border-box;width:100%;min-height:5rem;resize:vertical;user-select:text;-webkit-user-select:text}.conversation-compose button{justify-self:end;min-width:6rem;min-height:44px}.conversation-compose .help{margin:0}
 @media(max-width:480px){.task-conversation{padding:.4rem}.task-message{max-width:95%;padding:.7rem}.conversation-messages{padding:.2rem}.message-meta{display:block}.message-meta time{display:block}}
+
+.pa-feedback:has(.task-message){display:flex;flex-direction:column;gap:1rem;background:transparent;padding:0}.pa-feedback .task-message{margin:0}

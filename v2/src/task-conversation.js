@@ -91,6 +91,6 @@ export async function readTaskConversation(env,user,task,{before='',limit=30,off
 // Responses and stored drafts never include the old transcript before the conversation opens.
 export function withoutTranscript(task){
  if(!task)return task;
- const {last_edit,...rest}=task;
+ const {last_edit,last_reason,...rest}=task;
  return {...rest,pa_work:(task.pa_work||[]).map(({instruction,followups,results,...job})=>job)};
 }

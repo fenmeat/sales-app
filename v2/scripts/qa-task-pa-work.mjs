@@ -58,8 +58,8 @@ try{
  await page.goto(origin+'/tasks?task='+id);
  await page.locator('#ask-pa').click();
  await page.locator('textarea[name=note]').fill('Bereken hoeveel rolle ons nodig het.');
- await page.getByRole('button',{name:'Stuur aan PA',exact:true}).click();
- await page.waitForFunction(()=>!document.querySelector('dialog').open);
+ await page.getByRole('button',{name:'Stuur',exact:true}).click();
+ await page.locator('[data-conversation-status]').getByText('Boodskap gestoor. PA sal antwoord ná verwerking.',{exact:true}).waitFor();
  const actor={username:'alex',via:'pa'};
  const queue=await readPaReport(env,actor,{resource:'summary',id:'task-work'});
  assert.equal(queue.items.length,1);
@@ -76,7 +76,7 @@ try{
  let releaseInbox;
  const inboxGate=new Promise(r=>{releaseInbox=r;});
  await page.route('**/api/tasks/inbox',async route=>{await inboxGate;await route.continue();});
- await page.reload();
+ await page.reload();await page.locator('#ask-pa').click();
  await page.locator('dialog[open]').getByText('Ons het twee rolle nodig.',{exact:true}).waitFor();
  assert.equal(await page.getByRole('link',{name:'Proefverslag'}).getAttribute('href'),'https://example.com/report.pdf');
  const inboxReply=page.waitForResponse(r=>r.url().endsWith('/api/tasks/inbox'));
@@ -85,7 +85,7 @@ try{
  assert.equal(payload.notifications.find(n=>n.kind==='pa_result')?.task_id,id);
  await page.locator('dialog [data-close]').last().click();
  await page.locator('.notifications summary').click();
- await page.getByRole('button',{name:/Plaaslike proef.*PA se antwoord is gereed/}).click();
+ await page.getByRole('button',{name:/Plaaslike proef.*PA se antwoord is gereed/}).click();await page.locator('#ask-pa').click();
  await page.locator('dialog[open]').getByText('Ons het twee rolle nodig.',{exact:true}).waitFor();
  console.log('Task instruction, original answer, document and delayed inbox verified.');
 }finally{

@@ -142,10 +142,10 @@ function feedbackRow(r){const payload=JSON.parse(r.payload),answer=r.answer_payl
  acknowledged_at:r.acknowledged_at,outcome:r.outcome,source_url:r.source_url,answer,answered_at:r.answered_at||null,processing_error:answer?null:r.processing_error||null};}
 async function feedbackById(db,id){return db.prepare(feedbackSelect+' WHERE f.id=?').bind(id).first();}
 export {users as paUsers};
-export async function readConversation(env,user,key,offset=0){
+export async function readConversation(env,user,key,offset=0,recent=false){
  const current=await subject(env,user,key);offset=Number(offset);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
  // Private report comments are included in their linked task only for Alex.
- const list=await env.DB.prepare(feedbackSelect+` WHERE f.subject_key=? OR (?='alex' AND (EXISTS (SELECT 1 FROM json_each(f.payload,'$.source_task_ids') WHERE value=?) OR EXISTS (SELECT 1 FROM v2_pa_report_task_links l WHERE l.subject_key=f.subject_key AND l.task_key=?))) ORDER BY f.created_at,f.id LIMIT 51 OFFSET ?`).bind(key,user.username,key,key,offset).all();
+ const list=await env.DB.prepare(feedbackSelect+` WHERE f.subject_key=? OR (?='alex' AND (EXISTS (SELECT 1 FROM json_each(f.payload,'$.source_task_ids') WHERE value=?) OR EXISTS (SELECT 1 FROM v2_pa_report_task_links l WHERE l.subject_key=f.subject_key AND l.task_key=?))) ORDER BY ${recent?"coalesce(a.created_at,f.created_at) DESC,f.id DESC":"f.created_at,f.id"} LIMIT 51 OFFSET ?`).bind(key,user.username,key,key,offset).all();
  return {subject:current,feedback:list.results.slice(0,50).map(feedbackRow),next_offset:list.results.length>50?offset+50:null};
 }
 export async function readPaReport(env,user,query={}){
@@ -306,8 +306,9 @@ export async function savePaReport(env,user,b){
   check(row.scope==='private','Kies die bestaande private PA-taak.');
   await ensureTaskSchema(env.DB);
   const task_id=row.app_task_id||'private-'+row.id;
+  if(b.data?.action!=='create')check(taskVisibility(await getTask(env.DB,task_id)||{})==='private','Kies die bestaande private app-taak.');
   return saveTask(env,user,{...b.data,task_id,revision:b.revision,request_id:b.request_id,
-   data:{...b.data?.data,visibility:'private',area:'Private PA',pa_task_id:row.id,assigned_to:'alex'}});
+   data:b.data?.action==='create'?{...b.data?.data,visibility:'private',area:'Private PA',pa_task_id:row.id,assigned_to:'alex'}:b.data?.data});
  }
  if(b.operation==='email_attachment'){
   const row=await mailSubject(env,user,b.subject_key),m=await readMail(env.DB,row.id);
@@ -502,7 +503,7 @@ export async function paReportApi({request,url,env,user,bodyOf}){
   check(request.method==='POST','Gebruik die e-posvoorstel.',405);
   const b=await bodyOf(request);return writeMail(env,user,b);
  }
- if(request.method==='GET'&&url.pathname==='/api/pa-report/conversation')return readConversation(env,user,url.searchParams.get('subject_key'),url.searchParams.get('offset')||0);
+ if(request.method==='GET'&&url.pathname==='/api/pa-report/conversation')return readConversation(env,user,url.searchParams.get('subject_key'),url.searchParams.get('offset')||0,url.searchParams.get('recent')==='1');
  if(request.method==='GET'&&url.pathname==='/api/pa-report')return readPaReport(env,user,{date:url.searchParams.get('date')||undefined,view:url.searchParams.get('view')||undefined});
  if(request.method==='GET'&&url.pathname==='/api/pa-report/file'){const f=await file(env,user,url.searchParams.get('id'));return new Response(new Uint8Array(f.bytes),{headers:{'Content-Type':f.mime_type,'Content-Disposition':'inline; filename="'+f.filename+'"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});}
  check(request.method==='POST','Method not allowed.',405);const b=await bodyOf(request);
