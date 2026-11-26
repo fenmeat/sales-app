@@ -1,3 +1,4 @@
+import {CONVERSATION_SCHEMA,newWorkStatements,migrationPlan,readTaskConversation,withoutTranscript} from './task-conversation.js';
 import {attachmentData,fileStatements,fileChunksSchema,originalFileBytes,downloadOnly} from './task-files.js';
 import {check,UserError,dateKey,today} from './domain.js';
 import {isAdmin,keys,hash} from './auth.js';
@@ -14,7 +15,7 @@ const paEvent = "action NOT IN ('reminder','followup_reminder','set_visibility')
 export const taskHeadJoin = 'v2_task_heads h CROSS JOIN v2_task_events e ON e.task_id=h.task_id AND e.revision=h.revision';
 
 export const TASK_SCHEMA=[
- ...MAIL_SCHEMA,fileChunksSchema,
+ ...MAIL_SCHEMA,...CONVERSATION_SCHEMA,fileChunksSchema,
  `CREATE TABLE IF NOT EXISTS v2_task_events (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(task_id,revision))`,
  `CREATE INDEX IF NOT EXISTS v2_tasks_latest ON v2_task_events(task_id,revision DESC)`,
  // D1 batches this bootstrap with trigger installation. LIMIT 0 skips the
@@ -158,7 +159,7 @@ export async function saveTask(env,user,b){
  }
  check(!old||taskVisibility(old)!=='private'||!b.data?.visibility||b.data.visibility==='private','Private PA-take bly privaat.',403);
  if(b.data?.visibility==='private')check(user.username==='alex','Slegs Alex kan private take bestuur.',403);
- let task=old?structuredClone(old):null,files=[];
+ let task=old?structuredClone(old):null,files=[],conversationStatements=[];
  const appendFiles=['attach','update','note','respond','pa_request','pa_resume'].includes(action);
  check(b.files===undefined||appendFiles||['create','pa_result','step_add','step_update','step_note'].includes(action),'Files cannot be added with this task action.');
  if(action==='create'){
@@ -204,9 +205,29 @@ export async function saveTask(env,user,b){
   task.attachments=references;
  }else{
   check(old,'Task not found.',404);
-  if(['pa_request','pa_claim','pa_result','pa_resume','pa_recover'].includes(action)){
+  if(action==='conversation_migrate'){
+   check(user.username==='alex'&&user.via==='pa','Net Alex se PA-koppeling kan die gesprek omskakel.',403);
+   check(typeof b.backup_reference==='string'&&b.backup_reference.trim(),'Bewaar eers die rugsteun.');
+   if(!task.conversation_version){const plan=await migrationPlan(env.DB,task,at);task=plan.task;conversationStatements=plan.statements;}
+  }else if(['pa_request','pa_claim','pa_result','pa_resume','pa_recover'].includes(action)){
    if(action==='pa_result'&&b.files){check(Array.isArray(b.files)&&b.files.length<=4,'Kies hoogstens vier verslaglêers.');for(const input of b.files)files.push(await attachmentData(input));}
    await changePaWork(task,b,user,env.DB,at,files,safeURL);
+   if(action==='pa_result'&&b.task_updates){
+    check(user.via==='pa'&&user.username==='alex'&&Array.isArray(b.task_updates)&&b.task_updates.length<=20,'Ongeldige taakbywerking.');
+    for(let update of b.task_updates){
+     check(update&&['summary','step_add','step_update','step_complete'].includes(update.action),'Gebruik ’n veilige taakbywerking.');
+     if(update.action==='summary'){
+      check(update.data&&Object.keys(update.data).every(k=>['title','details'].includes(k)),'Werk net die taakopsomming hier by.');
+      task=validateTask({...task,...update.data},env);
+     }else{
+      const previous=task.steps?.find(s=>s.id===update.step_id);
+      check(!previous||previous.status!=='Complete','Behou die reeds voltooide stap.');
+      if(previous&&update.data){check(!(previous.requires_evidence&&update.data.requires_evidence===false)&&!(previous.required!==false&&update.data.required===false)&&(!update.data.dependencies||(previous.dependencies||[]).every(id=>update.data.dependencies.includes(id))),'Behou die bestaande bewys- en stapvereistes.');}
+      if(update.action==='step_complete'){check(update.confirmation?.trim()&&update.note?.trim(),'Gee die bevestigde afhandeling en bron.');update={...update,note:update.note+' — Bevestiging: '+update.confirmation};}
+      task=await workflowAction({task,b:update,user,admin,manage,users:taskUsers(env),at,db:env.DB});
+     }
+    }
+   }
   }else if(action==='standardize_task'){
    check(admin,'Net administrateurs kan bestaande take omskakel.',403);
    check(!task.step_format&&taskType(task)!=='workflow','Hierdie taak gebruik reeds die stapformaat.',409);
@@ -382,6 +403,7 @@ export async function saveTask(env,user,b){
  if(taskVisibility(task)==='private')check(user.username==='alex'&&task.assigned_to==='alex'&&(task.steps||[]).every(s=>['alex','pa'].includes(s.assigned_to)),'Private PA-werk bly net by Alex en PA.',403);
  const revision=b.revision+1;
  const statements=[env.DB.prepare('INSERT INTO v2_task_events(request_id,fingerprint,task_id,revision,action,payload,actor,saved_at) VALUES(?,?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,task.id,revision,action,JSON.stringify(task),user.username,at)];
+ statements.push(...conversationStatements,...newWorkStatements(env.DB,old,task,files));
  statements.push(...files.flatMap(file=>fileStatements(env.DB,task.id,user.username,at,file)));
  if(action==='create'&&task.kind==='po_dispatch')statements.push(env.DB.prepare('INSERT INTO v2_task_po_links VALUES(?,?)').bind(task.parent_cycle_id,task.id));
  if(action==='create'||old?.assigned_to!==task.assigned_to)statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'assigned',at));
@@ -448,7 +470,8 @@ export async function tasksApi({request,url,env,user,bodyOf}){
   return {saved:!!row&&row.task_id===url.searchParams.get('task_id')&&canSeeTask(user,await getTask(env.DB,row.task_id))};
  }
  if(path==='/api/tasks/emails'&&request.method==='GET')return readTaskMail(env,user);
- if(path==='/api/tasks'&&request.method==='GET'&&url.searchParams.has('id'))return {task:visible(user,await getTask(env.DB,url.searchParams.get('id')))};
+ if(path==='/api/tasks/conversation'&&request.method==='GET')return readTaskConversation(env,user,await getTask(env.DB,url.searchParams.get('id')),Object.fromEntries(url.searchParams));
+ if(path==='/api/tasks'&&request.method==='GET'&&url.searchParams.has('id')){const task=visible(user,await getTask(env.DB,url.searchParams.get('id')));return {task:url.searchParams.get('brief')==='1'?withoutTranscript(task):task};}
  if(path==='/api/tasks'&&request.method==='GET')return listTasks(env,user,{offset:url.searchParams.get('offset')??0,mine:url.searchParams.get('mine')==='1'});
  if(path==='/api/tasks/file'&&request.method==='GET'){
   const id=url.searchParams.get('id');check(ID.test(id??''),'Invalid attachment.');

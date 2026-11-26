@@ -9,7 +9,7 @@ import {workflowState,visiblePaRows,paUsers,ensurePaReportSchema,readPaReport} f
 import {unifiedWork,selectWork,workCounts} from '../public/pa-report-model.js';
 
 const statuses=new Set(['open','scheduled','waiting','closed','complete','cancelled','submitted','all']);
-const sourceFields=['id','title','kind','task_type','status','revision','pa_task_id','parent_cycle_id','assigned_to','created_by','due_date','review_date','next_action_date','requires_evidence','document_url','pa_sync','step_only','visibility','priority','can_manage'];
+const sourceFields=['conversation_version','id','title','kind','task_type','status','revision','pa_task_id','parent_cycle_id','assigned_to','created_by','due_date','review_date','next_action_date','requires_evidence','document_url','pa_sync','step_only','visibility','priority','can_manage'];
 const workStatus=t=>{
  const job=t.pa_work?.find(j=>j.status!=='answered')||t.pa_work?.at(-1);
  return job?.status==='working'&&job.lease_until&&Date.parse(job.lease_until)<=Date.now()?'queued':job?.status;
@@ -77,6 +77,7 @@ export async function readTaskWorkspace(env,user,query={}){
   const original=items.find(r=>r.id===row.id);
   const results=(original.stages||[original]).flatMap(t=>(t.pa_work||[]).flatMap(j=>j.results||[]));
   const latest=results.sort((a,b)=>b.at.localeCompare(a.at))[0];
+  if(original.conversation_version||original.stages?.some(t=>t.conversation_version)){delete row.latest_answer;delete row.latest_work_answer;row.has_conversation=true;continue;}
   if(latest){row.latest_work_answer=latest.answer;if(!row.latest_answer||Date.parse(latest.at)>Date.parse(row.latest_answer_at))row.latest_answer=latest.answer;}
  }
  const pageTasks=new Map();for(const r of items){for(const t of r.stages||[])pageTasks.set(t.id,brief(t));if(!r.is_pa)pageTasks.set(r.id,brief(r));}

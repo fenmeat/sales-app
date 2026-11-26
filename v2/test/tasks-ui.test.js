@@ -1,3 +1,4 @@
+import {conversationShell,mountConversation} from '../public/task-conversation-ui.js';
 import {mountProposal} from '../public/task-mail-proposal.js';
 import {createWorkspaceCache,createTaskDraftStorage} from '../public/task-workspace-cache.js';
 import {taskType,projectTask,statusLabel,localDate,taskBrief} from '../src/task-workflow.js';
@@ -43,13 +44,13 @@ async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={
   }
   if(path==='/api/tasks'&&expired)return {ok:false,status:401,json:async()=>({error:'Enter your PIN again.'})};
   if(path==='/api/invoicing/access/status')return {ok:true,json:async()=>({registered:true,name:username==='tapiz'?'Tapiz':'Musa'})};
-  if(path.startsWith('/api/tasks?id='))return {ok:true,json:async()=>({task:structuredClone(state.tasks.find(t=>t.id===decodeURIComponent(path.split('=')[1])))})};
+  if(path.startsWith('/api/tasks?id='))return {ok:true,json:async()=>({task:structuredClone(state.tasks.find(t=>t.id===new URL(path,'https://test.example').searchParams.get('id')))})};
   if(path.startsWith('/api/tasks/emails'))return {ok:true,json:async()=>mailPages?structuredClone(mailPages[path]):({requests:[],contacts:{from_address:'alex@example.com',recipients:{xavier:'xavier@example.com',xalinda:'xalinda@example.com'}}})};
   return {ok:true,json:async()=>structuredClone(state)};
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','REPORT_FILE_ACCEPT','fileData','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','mountProposal','createWorkspaceCache','createTaskDraftStorage','workHTML','noticeLabel','workLabel','taskBrief',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,REPORT_FILE_ACCEPT,fileData,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,mountProposal,createWorkspaceCache,createTaskDraftStorage,workHTML,noticeLabel,workLabel,taskBrief);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','REPORT_FILE_ACCEPT','fileData','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','mountProposal','createWorkspaceCache','createTaskDraftStorage','workHTML','noticeLabel','workLabel','taskBrief','conversationShell','mountConversation',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,REPORT_FILE_ACCEPT,fileData,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,mountProposal,createWorkspaceCache,createTaskDraftStorage,workHTML,noticeLabel,workLabel,taskBrief,conversationShell,mountConversation);
  return {document,dialog,posts,postPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 

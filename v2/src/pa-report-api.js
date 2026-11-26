@@ -1,3 +1,4 @@
+import {readTaskConversation,reportMessageStatements} from './task-conversation.js';
 import {standardSteps,stepProgress,taskOwner} from './task-workflow.js';
 import {originalFileBytes} from './task-files.js';
 import {check,UserError,dateKey,today} from './domain.js';
@@ -79,7 +80,7 @@ function rabbiReading(report,owner=false){
  return section?{date:report.date,title:section.title,items:section.items.filter(i=>owner||!i.requires_action&&!i.pa_task_ids?.length&&!i.app_task_ids?.length).map(({id,title,text})=>({id,title,text}))}:null;
 }
 async function latest(db,key){const r=await db.prepare('SELECT * FROM v2_pa_report_versions WHERE resource_key=? ORDER BY revision DESC LIMIT 1').bind(key).first();return r?{...JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at}:null;}
-export const workflowState=(row,task)=>task?.task_type==='workflow'?{...row,status:task.status,workflow_revision:task.revision,...(row.scope==='private'&&task.visibility==='private'?{title:task.title,next_action:task.next_action||row.next_action,responsibility:{owner:taskOwner(task),action:task.next_action||'Maak die taak oop vir die volgende stap.',situation:task.details,version:row.responsibility?.version||1}}:{})}:row;
+export const workflowState=(row,task)=>task?.task_type==='workflow'?{...row,status:task.status,workflow_revision:task.revision,...({title:task.title,next_action:task.next_action||row.next_action,responsibility:{owner:taskOwner(task),action:task.next_action||'Maak die taak oop vir die volgende stap.',situation:task.details,version:row.responsibility?.version||1}})}:row;
 async function subject(env,user,key){
  const register=await latest(env.DB,'register');
  if(TSK.test(key)){const r=register?.rows.find(r=>r.id===key);check(r&&(await visiblePaRows(env,user,[r])).length,'Report item not found.',404);const mail=user.username==='alex'?await env.DB.prepare('SELECT summary FROM v2_pa_followup_mail WHERE subject_key=? ORDER BY revision DESC LIMIT 1').bind(key).first():null;if(r.app_task_id)await ensureTaskSchema(env.DB);const current=workflowState(projectMail(r,mail&&JSON.parse(mail.summary)),r.app_task_id?await getTask(env.DB,r.app_task_id):null);return {...current,subject_key:r.id,subject_hash:await hash(JSON.stringify(current)),register_revision:register.revision};}
@@ -148,6 +149,7 @@ export async function readConversation(env,user,key,offset=0){
  return {subject:current,feedback:list.results.slice(0,50).map(feedbackRow),next_offset:list.results.length>50?offset+50:null};
 }
 export async function readPaReport(env,user,query={}){
+ if(query.resource==='summary'&&query.id?.startsWith('conversation-')){await ensureTaskSchema(env.DB);return readTaskConversation(env,user,await getTask(env.DB,query.id.slice(13)),{offset:query.offset||0});}
  if(query.resource==='summary'&&query.id==='task-access')return (await import('./task-workspace.js')).taskAccessSummary(env,user);
  if(query.resource==='summary'&&/^tasks-workspace(?:-(open|scheduled|closed))?$/.test(query.id||''))return (await import('./task-workspace.js')).workspaceDiagnostic(env,user,{status:query.id.split('-')[2]||'open'});
  if(query.resource==='summary'&&query.id==='tasks-performance')return (await import('./task-performance.js')).taskPerformance(env,user);
@@ -393,6 +395,7 @@ export async function savePaReport(env,user,b){
 }
 const genericAnswer=/^(?:pa het dit nagegaan|pa review pending|processed|sync completed)[.!\s]*$/i;
 async function saveAnswer(env,user,b){
+ await ensureTaskSchema(env.DB);
  const r=await feedbackById(env.DB,b.feedback_id??'');check(r,'Vraag nie gevind nie.',404);
  check(b.subject_hash===r.subject_hash,'Lees die oorspronklike vraag weer.',409);
  const current=await subject(env,user,r.subject_key),fingerprint=await hash(JSON.stringify({...b,actor:user.username}));
@@ -417,12 +420,14 @@ async function saveAnswer(env,user,b){
  const answer={kind:a.kind,text,recommendation,next_action,responsible,follow_up_date,task_status:txt(a.task_status||'Inligting',50,true),source_url:link(b.source_url),source_subject_hash:current.subject_hash,register_revision:register.revision};
  check(answer.source_url,'Gee die nagegane bron.');
  const at=new Date().toISOString();
+ const messageWrites=await reportMessageStatements(env.DB,r,{...answer,at});
  // D1 batch is atomic; a concurrent register publication prevents the insert.
  // The unique feedback key means two workers can never append two answers.
  try{await env.DB.batch([
   env.DB.prepare(`INSERT INTO v2_pa_report_answers SELECT ?,?,?,?,? WHERE (SELECT MAX(revision) FROM v2_pa_report_versions WHERE resource_key='register')=?`).bind(r.id,b.request_id,fingerprint,JSON.stringify(answer),at,register.revision),
   env.DB.prepare('UPDATE v2_pa_report_feedback SET acknowledged_at=COALESCE(acknowledged_at,?) WHERE id=? AND EXISTS (SELECT 1 FROM v2_pa_report_answers WHERE feedback_id=? AND fingerprint=?)').bind(at,r.id,r.id,fingerprint),
   env.DB.prepare("INSERT OR IGNORE INTO v2_pa_report_alerts(id,username,subject_key,kind,created_at) SELECT ?,?,?, 'pa_answer',? WHERE EXISTS (SELECT 1 FROM v2_pa_report_answers WHERE feedback_id=? AND fingerprint=?)").bind('answer-'+r.id,r.actor,r.subject_key,at,r.id,fingerprint)
+ ,...messageWrites
  ]);}catch{const saved=await env.DB.prepare('SELECT fingerprint FROM v2_pa_report_answers WHERE feedback_id=?').bind(r.id).first();check(saved?.fingerprint===fingerprint,'Die antwoord het verander. Lees die gesprek weer voor jy probeer.',409);}
  const saved=await feedbackById(env.DB,r.id);check(saved.answer_payload,'Die taak het tydens stoor verander. Lees dit weer.',409);
  return {saved:true,feedback:feedbackRow(saved)};
@@ -450,6 +455,7 @@ async function storeReportFile(env,user,b){
  await env.DB.prepare('INSERT INTO v2_pa_report_files VALUES(?,?,?,?,?,?,?,?)').bind(b.id,b.subject_key,user.username,fingerprint,b.mime_type,filename,bytes,new Date().toISOString()).run();return {id:b.id};
 }
 async function respond(env,user,b){
+ await ensureTaskSchema(env.DB);
  check(ID.test(b.request_id??''),'Use a unique response ID.');
  const fingerprint=await hash(JSON.stringify({...b,actor:user.username})),prior=await env.DB.prepare('SELECT * FROM v2_pa_report_feedback WHERE id=?').bind(b.request_id).first();
  if(prior){check(prior.fingerprint===fingerprint,'This response ID belongs to a different answer.',409);await subject(env,user,prior.subject_key);return {saved:true,replayed:true,feedback:feedbackRow(prior)};}
@@ -474,6 +480,7 @@ async function respond(env,user,b){
  if(b.action==='remind')statements.push(env.DB.prepare('INSERT INTO v2_pa_report_reminders VALUES(?,?,?,?) ON CONFLICT(username,subject_key) DO UPDATE SET remind_at=excluded.remind_at,request_id=excluded.request_id').bind(user.username,s.subject_key,payload.remind_at,b.request_id));
  const recipient=b.action==='request_update'?s.assigned_to:user.username==='alex'?null:'alex';
  if(recipient)statements.push(env.DB.prepare('INSERT INTO v2_pa_report_alerts(id,username,subject_key,kind,created_at) VALUES(?,?,?,?,?)').bind(b.request_id+'-'+recipient,recipient,s.subject_key,b.action==='request_update'?'request_update':'response',at));
+ statements.push(...await reportMessageStatements(env.DB,{id:b.request_id,subject_key:s.subject_key,payload:JSON.stringify(payload),actor:user.username,created_at:at}));
  try{await env.DB.batch(statements);}catch{throw new UserError('Your answer could not be confirmed. Retry the same response.',409);}
  return {saved:true,feedback:{...payload,id:b.request_id,subject_key:s.subject_key,actor:user.username,created_at:at,status:'pending'}};
 }

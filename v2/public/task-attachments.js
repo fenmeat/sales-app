@@ -183,6 +183,7 @@ export function attachmentPicker(form,{taskId,api,prepareFile,report=false}){
       }
       status.textContent=entries.length?'Stoor taak…':'';return entries.map(e=>e.id);
     },
+    clear(){for(const entry of entries)if(entry.preview)URL.revokeObjectURL(entry.preview);entries.length=0;render();},
     dispose(){closeScanner?.();for(const entry of entries)if(entry.preview)URL.revokeObjectURL(entry.preview);}
   };
 }

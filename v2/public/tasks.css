@@ -68,3 +68,17 @@
 @media(max-width:630px){.task-brief div{grid-template-columns:1fr;gap:.1rem}}
 
 .workflow progress { accent-color: #25763d; }
+
+/* The task plan and its conversation have separate reading surfaces. */
+.task-conversation{margin:1rem 0;border:1px solid #c5d2cd;border-radius:12px;padding:.75rem;min-width:0}
+.task-conversation>summary{font-size:1.1rem;font-weight:700;cursor:pointer;padding:.4rem}
+.conversation-toolbar{display:flex;flex-wrap:wrap;gap:.5rem;margin:.75rem 0}
+.conversation-messages{display:flex;flex-direction:column;gap:1rem;max-height:60dvh;min-height:5rem;overflow-y:auto;overscroll-behavior:contain;padding:.5rem;background:#fff;user-select:text;-webkit-user-select:text}
+.task-message{box-sizing:border-box;max-width:88%;min-width:0;border-radius:12px;padding:.8rem 1rem;overflow-wrap:anywhere;word-break:normal;color:#14251f;font-size:1rem;line-height:1.55;flex-shrink:0}
+.task-message.from-user{align-self:flex-end;background:#d9f3df;border:1px solid #acd9b6}
+.task-message.from-pa{align-self:flex-start;background:#f0f2f3;border:1px solid #dce1e3}
+.task-message.from-history{align-self:stretch;max-width:100%;background:#fff8e5;border:1px solid #dfce99}
+.message-meta{display:flex;flex-wrap:wrap;gap:.4rem .8rem;align-items:baseline;font-size:.85rem;color:#374b42}
+.message-meta time{font-size:.8rem}.message-body p{margin:.4rem 0;white-space:pre-wrap}.message-body h4{margin:.7rem 0 .3rem;font-size:1.05rem}.message-body ul,.message-body ol{padding-left:1.5rem}.message-space{height:.35rem}.task-message a{color:#07569b;text-decoration:underline}.message-review{font-weight:600}
+.conversation-compose{margin-top:.75rem;display:grid;gap:.5rem;min-width:0}.conversation-compose textarea{box-sizing:border-box;width:100%;min-height:5rem;resize:vertical;user-select:text;-webkit-user-select:text}.conversation-compose button{justify-self:end;min-width:6rem;min-height:44px}.conversation-compose .help{margin:0}
+@media(max-width:480px){.task-conversation{padding:.4rem}.task-message{max-width:95%;padding:.7rem}.conversation-messages{padding:.2rem}.message-meta{display:block}.message-meta time{display:block}}
