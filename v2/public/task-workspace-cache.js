@@ -1,3 +1,16 @@
+// Private PA drafts must not survive in same-origin browser storage. Retain old
+// Alex drafts in memory for this page only; authentication still gates their use.
+export function createTaskDraftStorage(storage){
+ const privatePrefix='fenmeat-pa-draft:alex:',memory=new Map();
+ try{for(let i=storage.length-1;i>=0;i--){const key=storage.key(i);if(key?.startsWith(privatePrefix)){memory.set(key,storage.getItem(key));storage.removeItem(key);}}}catch{}
+ return {
+  getItem:key=>key.startsWith(privatePrefix)?memory.get(key):storage?.getItem(key),
+  setItem:(key,value)=>key.startsWith(privatePrefix)?memory.set(key,value):storage?.setItem(key,value),
+  removeItem:key=>key.startsWith(privatePrefix)?memory.delete(key):storage?.removeItem(key),
+  clearPrivate:()=>memory.clear()
+ };
+}
+
 // Memory only: no private report or task body is persisted on shared devices.
 export function createWorkspaceCache(fetcher){
  const cache=new Map(),pending=new Map();let epoch=0,username=null;

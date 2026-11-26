@@ -2,7 +2,7 @@ import {taskOwner} from './task-workflow.js';
 import {check,today} from './domain.js';
 import {mailSummaries,projectMail} from './pa-email.js';
 import {isTaskManager,taskReadScope,taskView} from './task-access.js';
-import {hash,isAdmin} from './auth.js';
+import {hash,isAdmin,keys} from './auth.js';
 import {isInvoiceRep} from './invoice-auth.js';
 import {taskUsers,latestSQL,decode,currentTaskNotification,ensureTaskSchema,getTask} from './tasks-api.js';
 import {workflowState,visiblePaRows,paUsers,ensurePaReportSchema,readPaReport} from './pa-report-api.js';
@@ -112,14 +112,17 @@ export async function taskAccessSummary(env,user){
  await ensureTaskSchema(env.DB);
  const all=(await env.DB.prepare(latestSQL).all()).results.map(decode);
  const summaries=[];
- for(const username of ['alex','alinda','xalinda','xavier','tapiz','mosa']){
+ const register=await env.DB.prepare("SELECT payload FROM v2_pa_report_versions WHERE resource_key='register' ORDER BY revision DESC LIMIT 1").first();
+ const paRows=register?JSON.parse(register.payload).rows:[];
+ for(const username of [...new Set([...Object.keys(keys(env)),...taskUsers(env),'musa'])].sort()){
   const registered=taskUsers(env).includes(username),actor={username},scope=taskReadScope(actor);
   const found=(await env.DB.prepare(latestSQL+' WHERE '+scope.sql).bind(...scope.params).all()).results;
   const actual=new Set(found.map(row=>row.task_id)),visible=all.map(t=>taskView(actor,t)).filter(Boolean);
   const matches=visible.length===actual.size&&visible.every(t=>actual.has(t.id));
-  summaries.push({username,registered,task_manager:isTaskManager(username),admin:isAdmin(username),matches,
+  const pa=await visiblePaRows(env,actor,paRows);
+  summaries.push({username,registered,canonical_username:username==='musa'?'mosa':username,private_tasks:visible.filter(t=>t.visibility==='private').length,private_pa_rows:pa.filter(r=>r.scope==='private').length,task_manager:isTaskManager(username),admin:isAdmin(username),matches,
    ordinary:visible.filter(t=>t.visibility==='operational').length,
    confidential:visible.filter(t=>t.visibility==='confidential').length,step_only:visible.filter(t=>t.step_only).length});
  }
- return {tasks:all.length,operational:all.filter(t=>taskView(user,t).visibility==='operational').length,users:summaries};
+ return {verification:'server_policy_evaluation_not_user_login',private_tasks:all.filter(t=>t.visibility==='private').length,private_pa_rows:paRows.filter(r=>r.scope==='private').length,tasks:all.length,operational:all.filter(t=>taskView(user,t).visibility==='operational').length,users:summaries};
 }

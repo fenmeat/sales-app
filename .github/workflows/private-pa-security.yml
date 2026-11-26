@@ -1,0 +1,27 @@
+name: Private PA security
+on:
+  push:
+    branches: [build/sales-v2-cloudflare]
+    paths: ['v2/**', '.github/workflows/private-pa-security.yml']
+  pull_request:
+    branches: [build/sales-v2-cloudflare]
+    paths: ['v2/**', '.github/workflows/private-pa-security.yml']
+permissions:
+  contents: read
+jobs:
+  privacy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: v2/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: node --test test/private-pa-security.test.js test/report-task-integration.test.js test/task-access.test.js test/task-workspace.test.js test/pa-report-runtime.test.js test/pa-access-runtime.test.js test/invoice-auth.test.js

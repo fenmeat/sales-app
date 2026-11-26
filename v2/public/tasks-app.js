@@ -1,5 +1,5 @@
 import {taskOwner,taskBrief} from './task-workflow.js';
-import {createWorkspaceCache} from './task-workspace-cache.js';
+import {createWorkspaceCache,createTaskDraftStorage} from './task-workspace-cache.js';
 import {taskType,projectTask,statusLabel,localDate} from './task-workflow.js';
 import {stepsHTML,workflowForms} from './task-workflow-ui.js';
 import './input-selection.js';
@@ -16,6 +16,7 @@ const requestedReport=new URL(location.href).searchParams;
 let pa=null,paError='',paScope='mine',reportDate=/^\d{4}-\d{2}-\d{2}$/.test(requestedReport.get('date')||'')?requestedReport.get('date'):(/^report-(\d{4}-\d{2}-\d{2}):/.exec(requestedReport.get('case')||'')?.[1]||''),paRetry=null;
 let data,filter=new URL(location.href).searchParams.get('status')||'open',owner='mine',search='',busy=false,retry=null,dialogCleanup=()=>{};
 const workspaceCache=createWorkspaceCache((...args)=>fetch(...args));
+const draftStorage=createTaskDraftStorage(typeof sessionStorage==='undefined'?null:sessionStorage);
 let mutationGeneration=0,legacyMode=false,loadSequence=0,inboxAt=0,inboxFlight=null,inboxRenderPending=false,reportFlight=null,reportCache=null,searchTimer,detailSequence=0;
 const mark=name=>{if(typeof performance!=='undefined'&&performance.mark)performance.mark(name);};
 mark('tasks-module-ready');
@@ -56,7 +57,7 @@ function workspaceURL(offset=0){
  return '/api/tasks/workspace?'+q;
 }
 function applyWorkspace(value,append=false){
- if(data&&data.username!==value.app.username){reportCache=null;pa=null;mail={requests:[]};data=null;}
+ if(data&&data.username!==value.app.username){draftStorage.clearPrivate();dialogCleanup();if(dialog.open)dialog.close();dialog.innerHTML='';reportCache=null;pa=null;mail={requests:[]};data=null;}
  const old=pa,oldTasks=data?.tasks||[],oldNotifications=data?.notifications||[],extra=reportCache?.username===value.app.username?reportCache.data:null;
  const next=structuredClone(value);data={...next.app,notifications:oldNotifications,workspace_source:true,options_loaded:data?.options_loaded||false,suppliers:data?.suppliers||[]};
  pa={...next.pa,...(extra?{report:extra.report,history:extra.history,rabbi:extra.rabbi,rabbi_history:extra.rabbi_history,feedback:extra.feedback,context_rows:extra.rows}:{}),alerts:old?.alerts||[],reminders:old?.reminders||[]};
@@ -67,12 +68,11 @@ function applyWorkspace(value,append=false){
 async function load(options={}){
  if(legacyMode)return legacyLoad();
  const offset=options.offset||0,key=workspaceURL(offset),sequence=++loadSequence,cached=workspaceCache.peek(key),hadData=!!data;
- if(cached)applyWorkspace(cached,!!offset);
- else if(data){const same=Object.entries(taskFilters).every(([key,value])=>(pa.workspace?.[key]||'')===value)&&pa.workspace?.scope===paScope&&pa.workspace?.status===filter&&pa.workspace?.search===search;pa.workspace={...pa.workspace,...(same||offset?{}:{rows:[],total:0}),loading:true};render();}
+ if(data){const same=Object.entries(taskFilters).every(([key,value])=>(pa.workspace?.[key]||'')===value)&&pa.workspace?.scope===paScope&&pa.workspace?.status===filter&&pa.workspace?.search===search;pa.workspace={...pa.workspace,...(same||offset?{}:{rows:[],total:0}),loading:true};render();}
  try{
   const result=await workspaceCache.read(key);if(sequence!==loadSequence||result.obsolete)return;
   if(result.unsupported){legacyMode=true;return legacyLoad();}
-  if(!result.unchanged||!cached)applyWorkspace(result.value,!!offset);
+  applyWorkspace(result.value,!!offset);
   if(!hadData&&reportMode&&data.admin&&paScope==='mine'){paScope=data.username==='alex'?'all':'fenmeat';await load();return;}
   loadInbox();
   if(reportMode||rabbiMode)await loadReport();
@@ -120,6 +120,8 @@ async function legacyLoad(){
  }catch(e){if(e.status===401||e.status===403)await login(e);else{$('#app').innerHTML='<main class="shell"><h1>Tasks</h1><p>'+esc(e.message)+'</p><button id="retry-load">Probeer weer</button></main>';$('#retry-load').onclick=load;}}
 }
 async function login(error){
+ draftStorage.clearPrivate();workspaceCache.clear();reportCache=null;data=null;pa=null;mail={requests:[]};
+ dialogCleanup();if(dialog.open)dialog.close();dialog.innerHTML='';
  let phone;try{phone=await api('/api/invoicing/access/status');}catch{}
  if(phone?.registered){
   $('#app').innerHTML=`<main class="login"><h1>FenMeat Tasks</h1><p>Welcome, ${esc(phone.name)}. Enter your road phone PIN.</p><form id="task-pin"><label>Your 6-digit PIN<input name="pin" type="password" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" autocomplete="current-password" required></label><p class="error" role="alert"></p><button class="primary">Sign in</button></form><p><a href="/invoicing/">Open Invoices / reset PIN</a></p></main>`;
@@ -371,10 +373,9 @@ function paFeedback(item,action){
  const more=form.querySelector('#pa-more');
  async function historyPage(){try{const page=await api('/api/pa-report/conversation?subject_key='+encodeURIComponent(item.subject_key)+'&offset='+conversationOffset);if(!page.feedback)return;conversation=conversationOffset?[...conversation,...page.feedback]:page.feedback;historyBox.innerHTML=conversationHTML(conversation);conversationOffset=page.next_offset;more.hidden=conversationOffset===null;}catch{more.hidden=false;more.textContent='Probeer gesprek weer laai';}}
  more.onclick=historyPage;form.querySelector('#pa-conversation-refresh').onclick=()=>{conversationOffset=0;proposalPanels.forEach(panel=>panel.refresh());return historyPage();};historyPage();
- // Drafts and uncertain submissions survive a reload in this tab, scoped to the signed-in user.
- // Never cache the private report or attachment bytes on a shared phone.
+ // Shared drafts survive a reload; Alex's private drafts live in memory only.
  const draftKey='fenmeat-pa-draft:'+data.username+':'+item.subject_key+':'+action;
- const storage=typeof sessionStorage==='undefined'?null:sessionStorage;
+ const storage=draftStorage;
  let draft;try{draft=JSON.parse(storage?.getItem(draftKey)||'null');}catch{}
  if(draft?.note)form.elements.note.value=draft.note;
  const saveDraft=extra=>{try{storage?.setItem(draftKey,JSON.stringify({note:form.elements.note.value,proof_url:form.elements.proof_url.value,...extra}));}catch{}};

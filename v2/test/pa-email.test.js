@@ -119,7 +119,7 @@ test('original app task keeps private attachments, edits, cancellation, one Gmai
  assert.equal(first.email.envelope.attachments[0].size,atob(base64).length);assert.equal(first.email.envelope.attachments[0].sha256.length,64);
  const readFileUrl='/api/pa-report/file?id='+fileId;
  assert.equal((await readPaReport(env,pa,{resource:'file',id:fileId})).base64,base64);
- assert.equal((await call('alinda',readFileUrl)).status,403);
+ assert.equal((await call('alinda',readFileUrl)).status,404); // indistinguishable from a missing file
  assert.equal((await call('alinda',path+'?subject_key='+key)).status,403);
  assert.equal((await human('approve',2,{envelope_hash:first.email.envelope_hash})).status,200);
  await save('gmail_unavailable',3);

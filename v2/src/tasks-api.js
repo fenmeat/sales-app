@@ -143,6 +143,7 @@ export async function saveTask(env,user,b){
  if(prior){check([fingerprint,legacyFingerprint].includes(prior.fingerprint),'Hierdie request_id is reeds vir ander inhoud gebruik. Lees die taak terug; gebruik ’n nuwe request_id slegs vir ’n nuwe wysiging.',409);return {task:visible(user,await getTask(env.DB,prior.task_id)),replayed:true};}
  const old=await getTask(env.DB,b.task_id),admin=isAdmin(user.username),at=new Date().toISOString();
  if(old)visible(user,old);
+ else check((b.action??'create')==='create','Task not found.',404);
  check((old?.revision??0)===b.revision,'This task changed. Reload before saving.',409);
  check(env.TASK_WORKFLOWS_READ_ONLY!=='true'||!old||taskType(old)!=='workflow'||b.action==='restore_task_revision','Stapwysigings is tydelik gesluit vir onderhoud.',503);
  const manager=isTaskManager(user.username),manage=old&&canManageTask(user,old);
@@ -375,6 +376,8 @@ export async function saveTask(env,user,b){
   task.last_reason=reason;
  }
  if(action==='set_visibility')task.last_edit={by:user.username,at,reason:task.last_reason,previous_revision:old.revision,changes:taskChanges(old,task)};
+ // Validate the resulting state too: a historical restore has no data.visibility.
+ check(!old||taskVisibility(old)!=='private'||taskVisibility(task)==='private','Private PA-take bly privaat.',403);
  if(taskVisibility(task)==='confidential')check(isAdmin(task.assigned_to)&&(task.steps||[]).every(s=>s.assigned_to==='pa'||isAdmin(s.assigned_to)),'Delegeer vertroulike werk net aan Alex of Alinda.');
  if(taskVisibility(task)==='private')check(user.username==='alex'&&task.assigned_to==='alex'&&(task.steps||[]).every(s=>['alex','pa'].includes(s.assigned_to)),'Private PA-werk bly net by Alex en PA.',403);
  const revision=b.revision+1;
@@ -442,14 +445,14 @@ export async function tasksApi({request,url,env,user,bodyOf}){
  if(path==='/api/tasks/receipt'&&request.method==='GET'){
   const id=url.searchParams.get('request_id');check(ID.test(id??''),'Invalid save identifier.');
   const row=await env.DB.prepare('SELECT task_id FROM v2_task_events WHERE request_id=? AND actor=?').bind(id,user.username).first();
-  return {saved:!!row&&row.task_id===url.searchParams.get('task_id')};
+  return {saved:!!row&&row.task_id===url.searchParams.get('task_id')&&canSeeTask(user,await getTask(env.DB,row.task_id))};
  }
  if(path==='/api/tasks/emails'&&request.method==='GET')return readTaskMail(env,user);
  if(path==='/api/tasks'&&request.method==='GET'&&url.searchParams.has('id'))return {task:visible(user,await getTask(env.DB,url.searchParams.get('id')))};
  if(path==='/api/tasks'&&request.method==='GET')return listTasks(env,user,{offset:url.searchParams.get('offset')??0,mine:url.searchParams.get('mine')==='1'});
  if(path==='/api/tasks/file'&&request.method==='GET'){
   const id=url.searchParams.get('id');check(ID.test(id??''),'Invalid attachment.');
-  const file=await env.DB.prepare('SELECT id,task_id,mime_type,filename,hex(bytes) encoded FROM v2_task_attachments WHERE id=?').bind(id).first();check(file,'Attachment not found.',404);const task=visible(user,await getTask(env.DB,file.task_id));check(!task.step_only||stepFileAccess(user,task,id),'Attachment not found.',404);
+  const file=await env.DB.prepare('SELECT id,task_id,mime_type,filename,hex(bytes) encoded FROM v2_task_attachments WHERE id=?').bind(id).first();check(file,'Attachment not found.',404);const task=taskView(user,await getTask(env.DB,file.task_id));check(task&&(!task.step_only||stepFileAccess(user,task,id)),'Attachment not found.',404);
   return new Response(await originalFileBytes(env.DB,file),{headers:{'Content-Type':file.mime_type,'Content-Disposition':(downloadOnly(file.mime_type)?'attachment':'inline')+'; filename="'+file.filename+'"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
  }
  if(path==='/api/tasks/audit'&&request.method==='GET'){

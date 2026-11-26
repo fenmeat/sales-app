@@ -89,9 +89,10 @@ test('canonical counts join stages once, include unpublished app work, and keep 
 test('named Rabbi readers receive only the reading, including history, without private replies or write access',async t=>{
  const {call,env,publish}=await setup(t),current=reportData(),older={...reportData(),date:'2026-10-01'};
  older.sections[4].items[0].text='Earlier shared lesson';
- // Even sensitive metadata inside a Rabbi item must not enter its shared projection.
+ // A task-linked item stays private; an independent reading remains shareable.
  current.sections[4].items[0].pa_task_ids=['TSK-00003'];
  current.sections[4].items[0].question='PRIVATE QUESTION';
+ current.sections[4].items.push({id:'standalone-reading',title:'SHARED SCRIPTURE',text:'Shared Scripture reading\nPractical example',requires_action:false});
  current.sections[4].items[0].links=[{label:'PRIVATE SOURCE',url:'https://mail.google.com/mail/#sent/private'}];
  await publish('report',older);await publish('report',current);
  const before=await call('alex','/api/pa-report'),item=before.data.report.sections[4].items[0];
@@ -101,7 +102,7 @@ test('named Rabbi readers receive only the reading, including history, without p
  assert.equal((await call('alex','/api/pa-report/file',upload)).status,200);
  for(const username of ['alinda','xalinda','xavier']){
   const r=await call(username,'/api/pa-report');assert.equal(r.status,200);assert.equal(r.data.rabbi_access,true);assert.equal(r.data.private_report,false);
-  assert.deepEqual(r.data.rabbi,{date:current.date,title:'rabbi',items:[{id:'item-4',title:'SHARED SCRIPTURE',text:'Shared Scripture reading\nPractical example'}]});
+  assert.deepEqual(r.data.rabbi,{date:current.date,title:'rabbi',items:[{id:'standalone-reading',title:'SHARED SCRIPTURE',text:'Shared Scripture reading\nPractical example'}]});
   assert.deepEqual(r.data.rabbi_history,[{date:current.date},{date:older.date}]);
   assert.equal(r.data.report,null);assert.deepEqual(r.data.history,[]);assert.deepEqual(r.data.feedback,[]);
   assert.doesNotMatch(JSON.stringify(r.data),/PRIVATE|Private report narrative|mail.google.com|Synthetic source coverage/);

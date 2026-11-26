@@ -55,7 +55,7 @@ function link(v){if(!v)return '';let u;try{u=new URL(v);}catch{throw new UserErr
 const canSee=(u,r)=>r.scope==='private'?u.username==='alex':isAdmin(u.username)||r.assigned_to===u.username;
 // Require access to every app task contributing to a shared PA conversation.
 export async function visiblePaRows(env,user,rows){
- if(!rows.length||isAdmin(user.username))return rows.filter(r=>canSee(user,r));
+ if(!rows.length||user.username==='alex')return rows.filter(r=>canSee(user,r));
  await ensureTaskSchema(env.DB);
  const sources=(await env.DB.prepare(`SELECT e.task_id AS id,coalesce(nullif(s.pa_task_id,''),json_extract(e.payload,'$.pa_task_id')) pa_task_id,
   json_extract(e.payload,'$.parent_cycle_id') parent_cycle_id,json_extract(e.payload,'$.kind') kind,
@@ -64,6 +64,9 @@ export async function visiblePaRows(env,user,rows){
  return rows.filter(r=>{
   if(r.scope!=='fenmeat')return false;
   const linked=sources.filter(t=>t.id===r.app_task_id||t.pa_task_id===r.id||t.parent_cycle_id===r.id);
+  // A stale mirror must never override the native task's owner-only boundary.
+  if(linked.some(t=>taskVisibility(t)==='private'))return false;
+  if(isAdmin(user.username))return true;
   if(!linked.length)return r.assigned_to===user.username||r.responsibility?.owner===user.username;
   return linked.every(t=>fullTaskAccess(user,t))&&(r.assigned_to===user.username||r.responsibility?.owner===user.username||
    linked.every(t=>isTaskManager(user.username)&&taskVisibility(t)==='operational'));
@@ -71,9 +74,9 @@ export async function visiblePaRows(env,user,rows){
 }
 const canReadRabbi=user=>['alex','alinda','xalinda','xavier'].includes(user.username);
 // Share the reading itself, never the surrounding private report, links or replies.
-function rabbiReading(report){
+function rabbiReading(report,owner=false){
  const section=report?.sections.find(s=>s.id==='rabbi');
- return section?{date:report.date,title:section.title,items:section.items.map(({id,title,text})=>({id,title,text}))}:null;
+ return section?{date:report.date,title:section.title,items:section.items.filter(i=>owner||!i.requires_action&&!i.pa_task_ids?.length&&!i.app_task_ids?.length).map(({id,title,text})=>({id,title,text}))}:null;
 }
 async function latest(db,key){const r=await db.prepare('SELECT * FROM v2_pa_report_versions WHERE resource_key=? ORDER BY revision DESC LIMIT 1').bind(key).first();return r?{...JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at}:null;}
 export const workflowState=(row,task)=>task?.task_type==='workflow'?{...row,status:task.status,workflow_revision:task.revision,...(row.scope==='private'&&task.visibility==='private'?{title:task.title,next_action:task.next_action||row.next_action,responsibility:{owner:taskOwner(task),action:task.next_action||'Maak die taak oop vir die volgende stap.',situation:task.details,version:row.responsibility?.version||1}}:{})}:row;
@@ -235,7 +238,7 @@ export async function readPaReport(env,user,query={}){
   if(a.kind==='remind'){const r=byReminder.get(a.subject_key);return !!r&&a.id==='remind-'+r.request_id&&Date.parse(r.remind_at)<=Date.now();}return true;
  });
  const selected=date?reports.get('report-'+date)||null:null;
- const report=user.username==='alex'?selected:null,history=user.username==='alex'?dates:[],rabbi=rabbi_access?rabbiReading(selected):null,rabbi_history=rabbi_access?dates.map(({date})=>({date})):[];
+ const report=user.username==='alex'?selected:null,history=user.username==='alex'?dates:[],rabbi=rabbi_access?rabbiReading(selected,user.username==='alex'):null,rabbi_history=rabbi_access?dates.map(({date})=>({date})):[];
  if(query.view==='inbox')return {alerts:currentAlerts,reminders:reminders.map(({request_id,...r})=>r)};
  for(const r of rows){const fingerprint=await hash(JSON.stringify(r));r.subject_key=r.id;r.subject_hash=fingerprint;}
  if(report){
@@ -337,6 +340,7 @@ export async function savePaReport(env,user,b){
  const priorRows=new Map((old?.rows||[]).map(row=>[row.id,row]));
   for(const row of payload.rows){
    const previous=priorRows.get(row.id);
+   check(previous?.scope!=='private'||row.scope==='private','Private PA-identiteite bly privaat.',403);
    if(!previous?.responsibility)continue;
    const version=row.responsibility?.version||0;
    check(version>=previous.responsibility.version,'Lees die bygewerkte taakbeskrywing voordat jy publiseer.',409);
@@ -423,7 +427,16 @@ async function saveAnswer(env,user,b){
  const saved=await feedbackById(env.DB,r.id);check(saved.answer_payload,'Die taak het tydens stoor verander. Lees dit weer.',409);
  return {saved:true,feedback:feedbackRow(saved)};
 }
-async function file(env,user,id){check(ID.test(id??''),'Invalid evidence ID.');const r=await env.DB.prepare('SELECT * FROM v2_pa_report_files WHERE id=?').bind(id).first();check(r,'Evidence not found.',404);if(r.subject_key.startsWith('private-mail:'))await mailSubject(env,user,r.subject_key.slice(13));else if(r.subject_key.startsWith('app-'))await mailSubject(env,user,r.subject_key);else await subject(env,user,r.subject_key);return r;}
+async function file(env,user,id){
+ check(ID.test(id??''),'Invalid evidence ID.');
+ const r=await env.DB.prepare('SELECT * FROM v2_pa_report_files WHERE id=?').bind(id).first();check(r,'Evidence not found.',404);
+ try{
+  if(r.subject_key.startsWith('private-mail:'))await mailSubject(env,user,r.subject_key.slice(13));
+  else if(r.subject_key.startsWith('app-'))await mailSubject(env,user,r.subject_key);
+  else await subject(env,user,r.subject_key);
+ }catch(e){if(e instanceof UserError&&[403,404].includes(e.status))throw new UserError('Evidence not found.',404);throw e;}
+ return r;
+}
 async function upload(env,user,b){
  const s=await subject(env,user,b.subject_key);check(s.subject_hash===b.subject_hash,'This item changed. Refresh before adding evidence.',409);
  return storeReportFile(env,user,b);
