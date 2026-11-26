@@ -72,3 +72,10 @@ test('private task bridge edits only requested task and step fields',async t=>{
  let r=await change(1,{action:'update',data:{title:'Current private plan'},note:'Confirmed current facts'});assert.equal(r.task.title,'Current private plan');assert.equal(r.task.visibility,'private');
  r=await change(2,{action:'step_update',step_id:'next',data:{description:'Verify the source',assigned_to:'pa'}});assert.equal(r.task.steps[0].assigned_to,'pa');assert.equal(r.task.visibility,'private');
 });
+
+test('older empty feedback retains its action and explicit PA source labels',async t=>{
+ const {env,db,call,task}=await fixture(t);await ensurePaReportSchema(db);const b=task({assigned_to:'alex'});await call('alex','/api/tasks',b);
+ await db.prepare('INSERT INTO v2_pa_report_feedback(id,fingerprint,subject_key,subject_hash,payload,actor,created_at) VALUES(?,?,?,?,?,?,?)').bind('old-confirmation','test','TSK-99997','test',JSON.stringify({action:'complete',completion_scope:'part'}),'alex','2026-11-26T08:00:00Z').run();
+ await db.batch([messageStatement(db,b.task_id,{id:'feedback-old-confirmation',role:'user',actor:'alex',text:''}),messageStatement(db,b.task_id,{id:'legacy-source',role:'user',actor:'alex',text:'PA se bronkontrole: die bron is nagegaan.'})]);
+ const page=await readTaskConversation(env,owner,await getTask(db,b.task_id));assert.match(page.messages.find(m=>m.id==='feedback-old-confirmation').text,/My aandeel/);assert.equal(page.messages.find(m=>m.id==='legacy-source').actor,'pa');
+});

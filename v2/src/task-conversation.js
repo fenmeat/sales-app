@@ -21,11 +21,18 @@ export function newWorkStatements(db,before,after,files=[]){
  const known=new Set(workMessages(before||{}).map(m=>m.id));
  return workMessages(after).filter(m=>!known.has(m.id)).map(m=>messageStatement(db,after.id,m.role==='user'?{...m,files:files.map(f=>({id:f.id,name:f.filename}))}:m));
 }
+export function feedbackText(p){
+ if(p.note?.trim())return p.note;
+ if(p.action==='complete')return p.completion_scope==='part'?'My aandeel is as klaar aangemeld.':'Die hele taak is as klaar aangemeld; PA moet die bevestiging nagaan.';
+ if(p.action==='remind')return 'Herinnering gestel'+(p.remind_at?' vir '+p.remind_at:'')+'.';
+ if(p.action==='assign')return 'Toewysing versoek'+(p.assigned_to?' aan '+p.assigned_to:'')+'.';
+ return 'Terugvoer versoek.';
+}
 export async function reportMessageStatements(db,f,answer){
  const payload=JSON.parse(f.payload),ids=[f.subject_key,...(payload.source_task_ids||[])];
  const rows=(await db.prepare(`SELECT e.task_id,json_extract(e.payload,'$.pa_task_id') pa_task_id FROM v2_task_heads h JOIN v2_task_events e ON e.task_id=h.task_id AND e.revision=h.revision WHERE json_extract(e.payload,'$.pa_task_id') IN (SELECT value FROM json_each(?)) OR e.task_id IN (SELECT task_key FROM v2_pa_report_task_links WHERE subject_key=?)`).bind(JSON.stringify(ids),f.subject_key).all()).results;
  return rows.flatMap(r=>{
-  const m={source_key:f.subject_key,id:'feedback-'+f.id,role:'user',actor:f.actor,at:f.created_at,text:payload.note||'',files:(payload.attachments||[]).map(id=>({id,name:'Bewysstuk',report:true})),links:payload.proof_url?[{label:'Bewys',url:payload.proof_url}]:[],owner_only:f.subject_key!==r.pa_task_id};
+  const m={source_key:f.subject_key,id:'feedback-'+f.id,role:'user',actor:f.actor,at:f.created_at,text:feedbackText(payload),files:(payload.attachments||[]).map(id=>({id,name:'Bewysstuk',report:true})),links:payload.proof_url?[{label:'Bewys',url:payload.proof_url}]:[],owner_only:f.subject_key!==r.pa_task_id};
   const statements=[messageStatement(db,r.task_id,m)];
   if(answer){const a={source_key:f.subject_key,id:'answer-'+f.id,role:'pa',actor:'pa',at:answer.at,text:answer.text,next_action:answer.next_action,owner_only:m.owner_only};
    statements.push(db.prepare(`INSERT OR IGNORE INTO v2_task_messages SELECT ?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM v2_pa_report_answers WHERE feedback_id=?)`).bind(r.task_id,a.id,a.role,a.actor,a.at,a.at,JSON.stringify(a),a.owner_only?1:0,f.id));}
@@ -47,7 +54,7 @@ export async function migrationPlan(db,task,at){
   for(const e of events){const value=read(JSON.parse(e.payload),field.path);if(value===previous)continue;
    if(!value.startsWith(previous)){reliable=false;parts=[];}
    const added=value.startsWith(previous)?value.slice(previous.length).replace(/^\n/,''):value;
-   if(added)parts.push({id:'legacy-'+e.request_id+'-'+field.path.replaceAll('.','-'),role:/^PA se antwoord\b/i.test(added)?'pa':'user',actor:/^PA se antwoord\b/i.test(added)?'pa':e.actor,at:e.saved_at,text:added,source:field.path});
+   if(added)parts.push({id:'legacy-'+e.request_id+'-'+field.path.replaceAll('.','-'),role:/^PA se (?:antwoord|bronkontrole)\b/i.test(added)?'pa':'user',actor:/^PA se (?:antwoord|bronkontrole)\b/i.test(added)?'pa':e.actor,at:e.saved_at,text:added,source:field.path});
    previous=value;
   }
   // A single old snapshot containing multiple voices has no trustworthy attribution.
@@ -62,7 +69,7 @@ export async function migrationPlan(db,task,at){
  cleaned.conversation_review_required=messages.some(m=>m.review_required);
  const reportTables=await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='v2_pa_report_feedback'").first();
  const feedback=reportTables&&task.pa_task_id?(await db.prepare(`SELECT f.*,a.payload answer_payload,a.created_at answered_at FROM v2_pa_report_feedback f LEFT JOIN v2_pa_report_answers a ON a.feedback_id=f.id WHERE f.subject_key=? OR EXISTS(SELECT 1 FROM json_each(f.payload,'$.source_task_ids') WHERE value=?) OR EXISTS(SELECT 1 FROM v2_pa_report_task_links WHERE subject_key=f.subject_key AND task_key IN (?,?))`).bind(task.pa_task_id,task.pa_task_id,task.id,task.pa_task_id).all()).results:[];
- for(const f of feedback){const p=JSON.parse(f.payload),owner_only=f.subject_key!==task.pa_task_id;messages.push({source_key:f.subject_key,id:'feedback-'+f.id,role:'user',actor:f.actor,at:f.created_at,text:p.note||'',owner_only,files:(p.attachments||[]).map(id=>({id,name:'Bewysstuk',report:true})),links:p.proof_url?[{label:'Bewys',url:p.proof_url}]:[]});if(f.answer_payload){const a=JSON.parse(f.answer_payload);messages.push({source_key:f.subject_key,id:'answer-'+f.id,role:'pa',actor:'pa',at:f.answered_at,text:a.text,next_action:a.next_action,owner_only});}}
+ for(const f of feedback){const p=JSON.parse(f.payload),owner_only=f.subject_key!==task.pa_task_id;messages.push({source_key:f.subject_key,id:'feedback-'+f.id,role:'user',actor:f.actor,at:f.created_at,text:feedbackText(p),owner_only,files:(p.attachments||[]).map(id=>({id,name:'Bewysstuk',report:true})),links:p.proof_url?[{label:'Bewys',url:p.proof_url}]:[]});if(f.answer_payload){const a=JSON.parse(f.answer_payload);messages.push({source_key:f.subject_key,id:'answer-'+f.id,role:'pa',actor:'pa',at:f.answered_at,text:a.text,next_action:a.next_action,owner_only});}}
  return {task:cleaned,messages,fields:fields.map(f=>f.path),statements:[db.prepare('INSERT OR IGNORE INTO v2_task_conversation_backups VALUES(?,?,?,?)').bind(task.id,task.revision,JSON.stringify(task),at),...messages.map(m=>messageStatement(db,task.id,m))]};
 }
 
@@ -74,6 +81,14 @@ export async function readTaskConversation(env,user,task,{before='',limit=30,off
   .bind(task.id,user.username,...(cursor||[]),limit+1,offset).all();
  const page=rows.results.slice(0,limit),last=page.at(-1);
  const parsed=page.reverse().map(r=>JSON.parse(r.payload)),denied=new Set();
+ const empty=parsed.filter(m=>m.id.startsWith('feedback-')&&!m.text?.trim());
+ if(empty.length){
+  const feedback=(await env.DB.prepare('SELECT id,payload FROM v2_pa_report_feedback WHERE id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(empty.map(m=>m.id.slice(9)))).all()).results;
+  for(const m of empty){const f=feedback.find(f=>'feedback-'+f.id===m.id);if(f)m.text=feedbackText(JSON.parse(f.payload));}
+ }
+ // Explicit historical speaker labels take precedence over the PA connection's owner identity.
+ for(const m of parsed)if(m.role!=='history'&&m.id.startsWith('legacy-')&&/^PA se (?:antwoord|bronkontrole)\b/i.test(m.text)){m.role='pa';m.actor='pa';}
+
  if(user.username!=='alex'){
   const sources=[...new Set(parsed.map(m=>m.source_key).filter(Boolean))];
   if(sources.length){
