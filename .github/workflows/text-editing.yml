@@ -7,6 +7,9 @@ on:
     branches: [perf/d1-november-2026, fix/task-responsibility, feature/task-access-0480, feature/task-steps,perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
     paths:
       - 'v2/src/tasks-api.js'
+      - 'v2/src/task-conversation.js'
+      - 'v2/public/task-conversation-ui.js'
+      - 'v2/test/task-conversation.test.js'
       - 'v2/scripts/qa-task-responsibility.mjs'
       - 'v2/src/task-workflow.js'
       - 'v2/public/pa-report-model.js'
