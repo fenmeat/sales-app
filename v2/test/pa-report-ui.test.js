@@ -261,10 +261,11 @@ test('later PA conversation opens the actual scanner, creates a readable PDF and
 
 test('Daily Report keeps migrated task conversations in their own dialog, including empty legacy feedback',async()=>{
  for(const feedback of [[],[{id:'old',subject_key:'TSK-00001',action:'respond',actor:'alex',note:'Historical question only',created_at:'2026-11-05T10:00:00Z',answer:{text:'Historical answer only'},answered_at:'2026-11-05T11:00:00Z'}]]){
-  const p=paState();p.rows=[{...p.rows[0],workflow_id:'native-chat',has_conversation:true,status:'Pending',assigned_to:'alex'}];p.feedback=feedback;
+  const p=paState();p.rows=[{...p.rows[0],workflow_id:'native-chat',has_conversation:true,status:'Pending',assigned_to:'alex'}];p.feedback=feedback;p.report.sections[0].items[0].pa_task_ids=['TSK-00001'];
   const ui=await screen('alex',[],'?view=report',null,p);
   const row=ui.document.querySelector('.pa-work-row');assert.ok(row);
   assert.doesNotMatch(row.textContent,/Nog geen gesprek hier nie|Historical question only|Historical answer only/);
   assert.ok(row.querySelector('[data-pa-action="respond"]'));assert.match(row.textContent,/Wat gaan aan/);
+  const item=ui.document.querySelector('#report-item-0');assert.ok(item.querySelector('[data-open-case]'));assert.doesNotMatch(item.textContent,/Nog geen gesprek hier nie|Historical question only|Historical answer only/);
  }
 });
