@@ -257,3 +257,14 @@ test('later PA conversation opens the actual scanner, creates a readable PDF and
  scanner.querySelector('[data-save]').onclick();assert.equal(ui.document.querySelector('.scan-dialog'),null);assert.equal(form.querySelectorAll('.attachment-row').length,1);
  await form.onsubmit({preventDefault(){}});assert.equal(ui.posts.length,2);const bytes=Buffer.from(ui.posts[0].base64,'base64');assert.ok(bytes.length<=500000);assert.equal((await PDFDocument.load(bytes)).getPageCount(),1);assert.deepEqual(ui.posts[1].attachments,[ui.posts[0].id]);
 });
+
+
+test('Daily Report keeps migrated task conversations in their own dialog, including empty legacy feedback',async()=>{
+ for(const feedback of [[],[{id:'old',subject_key:'TSK-00001',action:'respond',actor:'alex',note:'Historical question only',created_at:'2026-11-05T10:00:00Z',answer:{text:'Historical answer only'},answered_at:'2026-11-05T11:00:00Z'}]]){
+  const p=paState();p.rows=[{...p.rows[0],workflow_id:'native-chat',has_conversation:true,status:'Pending',assigned_to:'alex'}];p.feedback=feedback;
+  const ui=await screen('alex',[],'?view=report',null,p);
+  const row=ui.document.querySelector('.pa-work-row');assert.ok(row);
+  assert.doesNotMatch(row.textContent,/Nog geen gesprek hier nie|Historical question only|Historical answer only/);
+  assert.ok(row.querySelector('[data-pa-action="respond"]'));assert.match(row.textContent,/Wat gaan aan/);
+ }
+});
