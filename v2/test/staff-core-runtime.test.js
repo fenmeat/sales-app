@@ -34,7 +34,7 @@ test('native Staff: real D1 permissions, device isolation, PINs, idempotency, co
  assert.equal((await call('/api/staff',{cookie:admin})).status,401,'enrolment invalidates management session on that phone');admin=await login('alex',key);
  assert.equal((await call('/api/staff-clock/enrol',{body:{code}})).status,401,'one-time code cannot be reused');
  assert.equal((await call('/api/staff',{cookie:clock})).status,401);assert.equal((await call('/api/bootstrap',{cookie:clock})).status,401);
- const roster=(await call('/api/staff-clock/state',{cookie:clock})).data;assert.deepEqual(Object.keys(roster.people[0]).sort(),['id','name','state']);assert.doesNotMatch(JSON.stringify(roster),/balance|rate|leave|pin|schedule|team|birth/);
+ const roster=(await call('/api/staff-clock/state',{cookie:clock})).data;assert.deepEqual(Object.keys(roster.people[0]).sort(),['attendance_state','attendance_warning','id','last_clock_at','name','state']);assert.doesNotMatch(JSON.stringify(roster),/balance|rate|leave|pin|schedule|team|birth/);
  const verify=()=>call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:employee,pin}});assert.equal((await verify()).data.revision,0);
  for(const invalid of ['615','06150','726481','abcd',615])assert.equal((await call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:employee,pin:invalid}})).status,401,'PIN must remain exactly four digit characters');
  for(const invalid of ['1988-02-30','2099-06-15'])assert.equal((await save('/api/staff',{action:'birth_date',employee_id:employee,birth_date:invalid})).status,400);

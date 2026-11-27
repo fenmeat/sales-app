@@ -63,7 +63,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
   if(edit?.pending_kind==='sick_pending')missing(day.date,'Reported sick. Confirm paid sick leave or unpaid sick leave.');
   if(day.needs_workplace||day.needs_adjustment_review)missing(day.date,'Check the workplace or previous hours correction.');
   for(const issue of day.issues){
-   if(issue==='Missing attendance record'||issue==='Schedule not verified')continue;
+   if(issue==='Missing attendance record'||issue==='Schedule not verified'||issue==='Short attendance record')continue;
    missing(day.date,issue);
   }
   if(!useWeek && day.scheduled_minutes>0 && day.date<=today() && !day.first_in && !day.leave_days &&

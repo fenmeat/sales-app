@@ -57,6 +57,17 @@ async function operation(db,actor,path,b,env){
 const registerInsert=(db,current,state,action,actor,detail,stamp)=>db.prepare('INSERT INTO v2_staff_register VALUES(?,?,?,?,?,?)').bind(current.revision+1,JSON.stringify(state),action,actor,stamp,JSON.stringify(detail));
 export const latestCondition='NOT EXISTS (SELECT 1 FROM v2_staff_time newer WHERE newer.shift_id=t.shift_id AND newer.revision>t.revision)';
 export async function shiftsBetween(db,from,to,employeeId=null){const rows=await db.prepare(`SELECT t.* FROM v2_staff_time t WHERE ${latestCondition} ${employeeId?'AND employee_id=?':''} AND start_at<? AND (end_at IS NULL OR end_at>?) ORDER BY start_at LIMIT 7001`).bind(...(employeeId?[employeeId]:[]),new Date(dayStart(to)+86400000).toISOString(),new Date(dayStart(from)).toISOString()).all();check(rows.results.length<=7000,'Too many shifts. Review a shorter period.',409);return rows.results.map(r=>({...JSON.parse(r.payload),revision:r.revision}));}
+export async function attendanceStatus(db,date=today()){
+ const rows=(await db.prepare(`SELECT t.employee_id,t.state,t.start_at,t.end_at,t.saved_at,t.payload,t.revision FROM v2_staff_time t WHERE ${latestCondition} AND (t.start_at>=? OR t.state!='out') ORDER BY t.start_at DESC`).bind(new Date(dayStart(date)).toISOString()).all()).results;
+ const status=new Map();
+ for(const r of rows){
+  const shift=JSON.parse(r.payload);if(shift.exclusion||status.has(r.employee_id))continue;
+  const s=shiftSummary(shift),short=s.state==='out'&&s.worked_seconds<60;
+  status.set(r.employee_id,{state:r.state,attendance_state:short?'review':r.state,last_clock_at:shift.punches.at(-1).at,clock_revision:r.revision,attendance_warning:short?'Die skof is korter as ’n minuut. Kontroleer die volle werkdag.':null});
+ }
+ return status;
+}
+const noAttendance={state:'out',attendance_state:'missing',last_clock_at:null,attendance_warning:'Geen klokrekord vir vandag nie. Die werkdag is nog onbevestig.'};
 async function protectPayWeek(db,op,employeeId,dates) {
  const version=(await db.prepare('SELECT COALESCE(MAX(revision),0) AS revision FROM v2_staff_payroll').first()).revision;
  for(const friday of new Set(dates.map(nextFriday))){
@@ -73,6 +84,34 @@ async function timeRevision(db,id){return (await db.prepare('SELECT MAX(revision
 export function timeInsert(db,op,shift,rev,action,actor,stamp){const s=shiftSummary(shift);return db.prepare('INSERT INTO v2_staff_time VALUES(?,?,?,?,?,?,?,?,?,?,?)').bind(op.id,shift.employee_id,shift.id,rev,s.start_at,s.end_at,s.state,JSON.stringify(shift),action,actor,stamp);}
 async function deviceSession(request,db){const token=request.headers.get('Cookie')?.match(/(?:^|;\s*)__Secure-fm_clock=([a-f0-9]{64})(?:;|$)/)?.[1];check(token,'Register this clock device with a code from Alex or Alinda.',401);const device=await db.prepare('SELECT * FROM v2_staff_devices WHERE token_hash=? AND revoked=0 AND expires>?').bind(await hash(token),Date.now()).first();check(device,'This clock device has expired or was revoked. Ask Alex or Alinda to register it again.',401);return device;}
 
+// Each offline ticket authorises one employee revision on this registered device.
+// PINs are never sent back or persisted by the clock browser. A changed PIN or
+// revoked device invalidates unused tickets; confirmed requests remain replayable.
+async function clockSignature(value,env){
+ const key=await crypto.subtle.importKey('raw',encoder.encode(env.STAFF_PIN_PEPPER),{name:'HMAC',hash:'SHA-256'},false,['sign']);
+ return Array.from(new Uint8Array(await crypto.subtle.sign('HMAC',key,encoder.encode(value))),b=>b.toString(16).padStart(2,'0')).join('');
+}
+async function offlineTickets(person,device,revision,env){
+ const issued=Date.now(),expires=issued+16*3600000;
+ const identity=await clockSignature(person.id+'|'+clockPin(person),env);
+ const tickets=[];
+ for(let n=0;n<16;n++){
+  const payload=JSON.stringify({employee_id:person.id,device_id:device.id,revision:revision+n,issued,expires,identity});
+  tickets.push({revision:revision+n,token:btoa(payload)+'.'+await clockSignature(payload,env)});
+ }
+ return {issued,expires,tickets};
+}
+async function validateOffline(person,device,b,env){
+ check(typeof b.ticket==='string'&&b.ticket.length<2000,'Offline clock ticket is missing.',401);
+ let payload,signature,claim;try{const parts=b.ticket.split('.');check(parts.length===2,'Invalid offline ticket.',401);payload=atob(parts[0]);signature=parts[1];claim=JSON.parse(payload);}catch{check(false,'Invalid offline ticket.',401);}
+ const expected=await clockSignature(payload,env);let diff=expected.length^signature.length;
+ for(let n=0;n<expected.length;n++)diff|=expected.charCodeAt(n)^(signature.charCodeAt(n)||0);
+ check(!diff&&claim.employee_id===person.id&&claim.device_id===device.id&&claim.revision===b.revision,'Offline clock authorisation does not match this action.',401);
+ check(claim.identity===await clockSignature(person.id+'|'+clockPin(person),env),'The employee PIN changed. Ask management to recover the saved clock action.',409);
+ const captured=Date.parse(b.captured_at);
+ check(Number.isFinite(captured)&&new Date(captured).toISOString()===b.captured_at&&captured>=claim.issued-5000&&captured<=claim.expires&&captured<=Date.now()+5000&&Date.now()-captured<7*86400000,'The saved clock time needs management review. Keep this device’s recovery records.',409);
+ return b.captured_at;
+}
 // A completely separate credential. Neither an app login nor a stocktake account
 // authorises kiosk operations; a kiosk credential never authenticates app APIs.
 export async function staffClockApi({request,url,env,bodyOf}){
@@ -89,29 +128,31 @@ export async function staffClockApi({request,url,env,bodyOf}){
  }
  const device=await deviceSession(request,db),current=await staffState(db);
  if(path==='/api/staff-clock/state'&&request.method==='GET'){
-  const rows=await db.prepare(`SELECT t.employee_id,t.state,t.start_at FROM v2_staff_time t WHERE t.state!='out' AND ${latestCondition}`).all();
-  const people=current.state.people.filter(p=>p.active).map(p=>({id:p.id,name:p.name,state:rows.results.find(r=>r.employee_id===p.id)?.state??'out'}));
+  const statuses=await attendanceStatus(db);
+  const people=current.state.people.filter(p=>p.active).map(p=>({id:p.id,name:p.name,...(statuses.get(p.id)??noAttendance)}));
   return {data:{device:{id:device.id,name:device.name},server_time:new Date().toISOString(),people}};
  }
  if(path==='/api/staff-clock/punch'&&b){
   const p=staffPerson(current.state,b.employee_id);check(p.active,'Employee is inactive.',403);
-  await verifyPin(db,p,b.pin,device,env);const op=await operation(db,device.id,path,b,env);if(op.old)return {data:op.old};
-  const last=await latestShift(db,p.id),rev=await timeRevision(db,p.id),stamp=new Date().toISOString();
+  const op=await operation(db,device.id,path,b,env);
+  if(b.ticket){if(op.old)return {data:op.old};await validateOffline(p,device,b,env);}else await verifyPin(db,p,b.pin,device,env);
+  if(op.old)return {data:op.old};
+  const last=await latestShift(db,p.id),rev=await timeRevision(db,p.id),received=new Date().toISOString(),stamp=b.ticket?b.captured_at:received;
   check(p.start_date&&p.employment_verified!==false,'Confirm the employment start date before clocking.');check(p.start_date<=dayAt(stamp),'Employment has not started.');
   check(Number.isInteger(b.revision)&&b.revision===rev,'Clock status changed. Check your last action before retrying.',409);
   const old=last?JSON.parse(last.payload):null,active=last&&last.state!=='out';
   let shift=active?old:{id:crypto.randomUUID(),employee_id:p.id,punches:[]};
   if(!active){check(b.kind==='in','Clock in before recording this action.',409);check(!last||stamp>last.end_at,'A clock entry already exists at this time.',409);}
-  shift=appendPunch(shift,b.kind,stamp);const s=shiftSummary(shift);
+  shift=appendPunch(shift,b.kind,stamp);if(b.ticket)shift.clock_capture={device_id:device.id,received_at:received,source:'device_outbox'};const s=shiftSummary(shift);
   // Recheck register and device inside the transaction; racing deactivation or
   // revocation must fail instead of accepting a stale read.
   const guard=db.prepare(`INSERT INTO v2_staff_requests(id,request_hash,result) SELECT ?, '', '' WHERE NOT EXISTS (SELECT 1 FROM v2_staff_register WHERE revision=?) OR EXISTS (SELECT 1 FROM v2_staff_register WHERE revision>?) OR NOT EXISTS (SELECT 1 FROM v2_staff_devices WHERE id=? AND revoked=0 AND token_hash=? AND expires>?)`).bind(op.id,current.revision,current.revision,device.id,device.token_hash,Date.now());
   const result={ok:true,employee_id:p.id,kind:b.kind,at:stamp,state:s.state,revision:rev+1,issues:s.issues};
-  return {data:await op.commit([guard,timeInsert(db,op,shift,rev+1,'punch',device.id,stamp)],result)};
+  return {data:await op.commit([guard,await protectPayWeek(db,op,p.id,[dayAt(stamp)]),timeInsert(db,op,shift,rev+1,'punch',device.id,received)],result)};
  }
  if(path==='/api/staff-clock/verify'&&b){
   const p=staffPerson(current.state,b.employee_id);check(p.active,'Employee is inactive.',403);await verifyPin(db,p,b.pin,device,env);
-  const last=await latestShift(db,p.id);return {data:{employee_id:p.id,state:last?.state??'out',revision:await timeRevision(db,p.id),last_at:last?JSON.parse(last.payload).punches.at(-1).at:null,server_time:new Date().toISOString()}};
+  const last=await latestShift(db,p.id),revision=await timeRevision(db,p.id);return {data:{employee_id:p.id,state:last?.state??'out',revision,last_at:last?JSON.parse(last.payload).punches.at(-1).at:null,server_time:new Date().toISOString(),offline:await offlineTickets(p,device,revision,env)}};
  }
  throw new UserError('Not found.',404);
 }
@@ -123,8 +164,8 @@ export async function staffApi({request,url,env,user,bodyOf}){
  if(path==='/api/staff/imports'||path.startsWith('/api/staff/imports/'))return staffImportApi({request,url,db,user,bodyOf,current});
  if(path==='/api/staff'&&request.method==='GET'){
   const devices=(await db.prepare('SELECT id,name,code_expires,expires,revoked,created_by,created_at,token_hash IS NOT NULL AS enrolled FROM v2_staff_devices ORDER BY created_at DESC').all()).results;
-  const open=(await db.prepare(`SELECT t.employee_id,t.state,t.start_at FROM v2_staff_time t WHERE t.state!='out' AND ${latestCondition}`).all()).results;
-  return {...current,username:user.username,pin_secret_configured:hasPepper(env),people:current.state.people.map(p=>({...p,pin_ready:hasPepper(env)&&!!clockPin(p),casual_pin:casualPin(p),state:open.find(r=>r.employee_id===p.id)?.state??'out',balances:Object.fromEntries(LEAVE_TYPES.filter(t=>t!=='Unpaid').map(t=>[t,balance(current.state,p.id,t,today())]))})),devices,can_exclude_shifts:isAdmin(user.username),payroll_enabled:true,payroll_ready:false};
+  const statuses=await attendanceStatus(db);
+  return {...current,username:user.username,pin_secret_configured:hasPepper(env),people:current.state.people.map(p=>({...p,pin_ready:hasPepper(env)&&!!clockPin(p),casual_pin:casualPin(p),...(statuses.get(p.id)??noAttendance),balances:Object.fromEntries(LEAVE_TYPES.filter(t=>t!=='Unpaid').map(t=>[t,balance(current.state,p.id,t,today())]))})),devices,can_exclude_shifts:isAdmin(user.username),payroll_enabled:true,payroll_ready:false};
  }
  if(path==='/api/staff/hours'&&request.method==='GET'){
   const from=dateKey(url.searchParams.get('from')??addDays(today(),-6)),to=dateKey(url.searchParams.get('to')??today());check(from<=to&&dayStart(to)-dayStart(from)<31*86400000,'Review up to 31 days at a time.');
@@ -146,6 +187,19 @@ export async function staffApi({request,url,env,user,bodyOf}){
   return result;
  }
  if(path==='/api/staff/audit'&&request.method==='GET'){
+  const from=url.searchParams.get('from'),to=url.searchParams.get('to');
+  const offset=Number(url.searchParams.get('offset')??0);
+  check(Number.isSafeInteger(offset)&&offset>=0&&offset<=40000,'Invalid audit offset.');
+  if(from||to){
+   dateKey(from);dateKey(to);check(from<=to&&dayStart(to)-dayStart(from)<31*86400000,'Review up to 31 audit days.');
+   const start=new Date(dayStart(from)).toISOString(),end=new Date(dayStart(to)+86400000).toISOString();
+   const filter='(saved_at>=? AND saved_at<?) OR (start_at<? AND (end_at IS NULL OR end_at>?))';
+   const params=[start,end,end,start];
+   const rows=(await db.prepare(`SELECT rowid AS event_id,request_id,employee_id,shift_id,revision,start_at,end_at,state,action,actor,saved_at,payload FROM v2_staff_time WHERE ${filter} ORDER BY rowid LIMIT 501 OFFSET ?`).bind(...params,offset).all()).results;
+   const totals=await db.prepare('SELECT COUNT(*) count,MAX(rowid) time_version,MAX(saved_at) latest_saved_at FROM v2_staff_time').first();
+   const integrity=(await db.prepare('SELECT employee_id,MIN(revision) first_revision,MAX(revision) last_revision,COUNT(*) revisions FROM v2_staff_time GROUP BY employee_id').all()).results;
+   return {from,to,offset,clock:rows.slice(0,500),next_offset:rows.length>500?offset+500:null,totals,integrity,generated_at:stamp};
+  }
   return {register:(await db.prepare('SELECT revision,action,actor,saved_at,detail FROM v2_staff_register ORDER BY revision DESC LIMIT 100').all()).results,clock:(await db.prepare('SELECT request_id,employee_id,shift_id,revision,action,actor,saved_at,payload FROM v2_staff_time ORDER BY saved_at DESC LIMIT 100').all()).results};
  }
  check(request.method==='POST','Not found.',404);const b=await bodyOf(request),op=await operation(db,user.username,path,b,env);if(op.old)return op.old;

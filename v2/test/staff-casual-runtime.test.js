@@ -27,7 +27,7 @@ test('casual PIN allocation, reuse, races, inactive denial and independent histo
  const verify=(id,pin)=>call('/api/staff-clock/verify',{cookie:clock,body:{employee_id:id,pin}});
  assert.equal((await verify(first.id,'0001')).status,200);assert.equal((await verify(second.id,'0002')).status,200);
  for(const pin of ['1',1,'00001'])assert.equal((await verify(first.id,pin)).status,401);
- const roster=(await call('/api/staff-clock/state',{cookie:clock})).data;assert.deepEqual(Object.keys(roster.people[0]).sort(),['id','name','state']);assert.doesNotMatch(JSON.stringify(roster),/"(?:casual_pin|casual_pin_slot|birth_date|employment_type)"/);
+ const roster=(await call('/api/staff-clock/state',{cookie:clock})).data;assert.deepEqual(Object.keys(roster.people[0]).sort(),['attendance_state','attendance_warning','id','last_clock_at','name','state']);assert.doesNotMatch(JSON.stringify(roster),/"(?:casual_pin|casual_pin_slot|birth_date|employment_type)"/);
  assert.equal((await call('/api/staff',{cookie:clock})).status,401);
  const staff=await login('xavier',key+'x');assert.equal((await call('/api/staff',{cookie:staff,body:{action:'status',employee_id:first.id,active:false,revision:rev,request_id:crypto.randomUUID()}})).status,403);
  const inBody={employee_id:first.id,pin:'0001',kind:'in',revision:0,request_id:crypto.randomUUID()};

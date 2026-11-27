@@ -18,7 +18,7 @@ async function savedState(db,view=null){
   FROM names WHERE k IS NOT NULL
  ), ids(revision) AS (SELECT (SELECT revision FROM v2_staff_payroll WHERE entity_key=k ORDER BY revision DESC LIMIT 1) FROM names WHERE k IS NOT NULL)`;
  const range=view ? "CASE WHEN entity_key LIKE 'run:%' AND substr(entity_key,5,7) NOT IN (?,?) AND entity_key!=? THEN json_object('key',entity_key,'pay_date',substr(entity_key,5),'status',json_extract(payload,'$.status'),'totals',json_extract(payload,'$.totals')) ELSE payload END" : 'payload';
- const sql=view?latest+` SELECT p.revision,p.actor,p.saved_at,${range} AS payload FROM v2_staff_payroll p JOIN ids USING(revision) ORDER BY p.revision`
+ const sql=view?`SELECT * FROM (${latest} SELECT p.revision,p.actor,p.saved_at,${range} AS payload FROM v2_staff_payroll p JOIN ids USING(revision) ORDER BY p.revision)`
   : 'SELECT p.revision,p.actor,p.saved_at,p.payload FROM v2_staff_payroll p JOIN (SELECT MAX(revision) revision FROM v2_staff_payroll GROUP BY entity_key) latest ON p.revision=latest.revision ORDER BY p.revision';
  const query=db.prepare(sql);
  const all=(await (view?query.bind(view.date.slice(0,7),view.month,'run:'+addDays(view.date,-7)):query).all()).results;
