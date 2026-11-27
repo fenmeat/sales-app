@@ -37,6 +37,8 @@ on:
       - 'v2/scripts/qa-task-editing.mjs'
       - 'v2/scripts/qa-task-pa-work.mjs'
       - 'v2/src/task-pa-work.js'
+      - 'v2/src/pa-due-work.js'
+      - 'v2/test/pa-due-work.test.js'
       - 'v2/public/task-pa-work-ui.js'
       - 'v2/public/input-selection.js'
       - 'v2/public/invoicing/input-selection.js'
