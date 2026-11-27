@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {suggestRows,monthlyReport} from '../src/payroll-domain.js';
-import {rebuildWages,postedRun} from '../src/pay-wages.js';
+import {rebuildWages,postedRun,weekEvidence} from '../src/pay-wages.js';
 
 function week(durations,options={}) {
  const from=options.from??'2026-11-16',dates=durations.map((_,i)=>new Date(Date.parse(from+'T12:00Z')+i*86400000).toISOString().slice(0,10));
@@ -24,6 +24,13 @@ test('missing clock affects one worker while a long day still follows weekly ove
  assert.equal(week([8,8,8,8,9/3600]).net_cents,null);
  const unresolved=week([10,8,7,7,7],{profile:{hours_agreement:null}});assert.equal(unresolved.ready,true);assert.equal(unresolved.overtime_seconds,0);
  const directed=week([8,8,8,8,8],{profile:{tax_treatment:'Directive',directive_from:'2026-11-16',directive_to:'2027-01-01',directive_bps:1200}});assert.equal(directed.paye_cents,15360);
+});
+test('an unchanged missing day aging past midnight preserves confirmed weekly hours; new punches still invalidate them',()=>{
+ const absent=[null,null,null,null,null],evidence=JSON.parse(weekEvidence(week(absent)));
+ evidence.at(-1)[8]=[];
+ const fields={wage_facts:{worked_week:{minutes:2700,evidence:JSON.stringify(evidence),reason:'Manager confirmed 45 worked hours'}}};
+ const confirmed=week(absent,{fields});assert.equal(confirmed.ordinary_seconds,162000);assert.equal(confirmed.gross_cents,144000);assert.equal(confirmed.ready,true);
+ const changed=week([8,null,null,null,null],{fields});assert.equal(changed.net_cents,null);assert.ok(changed.issues.some(x=>x.includes('dagure het sedert')));
 });
 test('approved and paid people enter the monthly report independently of other unapproved wages',()=>{
  const ready=week([8,8,8,8,8]);const frozen={...ready,wage_state:'Paid'};

@@ -132,6 +132,13 @@ export async function staffClockApi({request,url,env,bodyOf}){
   const people=current.state.people.filter(p=>p.active).map(p=>({id:p.id,name:p.name,...(statuses.get(p.id)??noAttendance)}));
   return {data:{device:{id:device.id,name:device.name},server_time:new Date().toISOString(),people}};
  }
+ if(path==='/api/staff-clock/receipt'&&b){
+  const p=staffPerson(current.state,b.employee_id);check(p.active,'Employee is inactive.',403);await verifyPin(db,p,b.pin,device,env);
+  const row=await db.prepare('SELECT r.result,t.actor FROM v2_staff_requests r JOIN v2_staff_time t ON t.request_id=r.id WHERE r.id=? AND t.employee_id=? AND t.actor=?').bind(uuid(b.request_id),p.id,device.id).first();
+  if(!row)return {data:{confirmed:false}};
+  const receipt=JSON.parse(row.result);check(receipt.employee_id===p.id&&receipt.kind===b.kind&&receipt.revision===b.revision+1,'The old confirmation does not match the saved action. Keep it for management review.',409);
+  return {data:{confirmed:true,...receipt}};
+ }
  if(path==='/api/staff-clock/punch'&&b){
   const p=staffPerson(current.state,b.employee_id);check(p.active,'Employee is inactive.',403);
   const op=await operation(db,device.id,path,b,env);
@@ -148,7 +155,7 @@ export async function staffClockApi({request,url,env,bodyOf}){
   // revocation must fail instead of accepting a stale read.
   const guard=db.prepare(`INSERT INTO v2_staff_requests(id,request_hash,result) SELECT ?, '', '' WHERE NOT EXISTS (SELECT 1 FROM v2_staff_register WHERE revision=?) OR EXISTS (SELECT 1 FROM v2_staff_register WHERE revision>?) OR NOT EXISTS (SELECT 1 FROM v2_staff_devices WHERE id=? AND revoked=0 AND token_hash=? AND expires>?)`).bind(op.id,current.revision,current.revision,device.id,device.token_hash,Date.now());
   const result={ok:true,employee_id:p.id,kind:b.kind,at:stamp,state:s.state,revision:rev+1,issues:s.issues};
-  return {data:await op.commit([guard,await protectPayWeek(db,op,p.id,[dayAt(stamp)]),timeInsert(db,op,shift,rev+1,'punch',device.id,received)],result)};
+  return {data:await op.commit([guard,await protectPayWeek(db,op,p.id,[dayAt(s.start_at),dayAt(stamp)]),timeInsert(db,op,shift,rev+1,'punch',device.id,received)],result)};
  }
  if(path==='/api/staff-clock/verify'&&b){
   const p=staffPerson(current.state,b.employee_id);check(p.active,'Employee is inactive.',403);await verifyPin(db,p,b.pin,device,env);

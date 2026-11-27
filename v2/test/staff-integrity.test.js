@@ -35,6 +35,9 @@ test('device capture uses original timestamp once, rejects forged or conflicting
  assert.equal((await call('/api/staff-clock/punch',{...e,employee_id:other.id},cookie)).status,401);assert.equal((await call('/api/staff-clock/punch',{...e,ticket:e.ticket.slice(0,-1)+'x'},cookie)).status,401);
  const results=await Promise.all([call('/api/staff-clock/punch',e,cookie),call('/api/staff-clock/punch',e,cookie)]);assert.deepEqual(results.map(r=>r.status),[200,200]);assert.equal(results[0].data.at,at);assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_staff_time').first()).n,1);
  assert.equal((await call('/api/staff-clock/punch',{...e,request_id:crypto.randomUUID()},cookie)).status,409);
+ const receipt=await call('/api/staff-clock/receipt',{employee_id:id,pin:'0001',request_id:e.request_id,kind:'in',revision:0},cookie);assert.equal(receipt.status,200);assert.equal(receipt.data.at,at);assert.equal(receipt.data.confirmed,true);
+ assert.equal((await call('/api/staff-clock/receipt',{employee_id:id,pin:'0001',request_id:crypto.randomUUID(),kind:'in',revision:0},cookie)).data.confirmed,false);
+ assert.equal((await call('/api/staff-clock/receipt',{employee_id:other.id,pin:'0002',request_id:e.request_id,kind:'in',revision:0},cookie)).data.confirmed,false);
  for(const [n,kind] of ['break_start','break_end','out'].entries()){
   const action={...e,request_id:crypto.randomUUID(),revision:n+1,kind,captured_at:new Date(auth.offline.issued+n+2).toISOString(),ticket:auth.offline.tickets[n+1].token},r=await call('/api/staff-clock/punch',action,cookie);assert.equal(r.status,200,JSON.stringify(r.data));assert.equal(r.data.at,action.captured_at);
  }
