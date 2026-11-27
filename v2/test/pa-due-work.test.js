@@ -42,6 +42,17 @@ test('temporary failure retains the overdue work and becomes eligible at the nex
  assert.ok(paCandidates(r.task,new Date(Date.now()+3601000))[0].due_at<=new Date(Date.now()+3601000).toISOString());
  assert.equal(paFollowupLabel(r.task),'PA kon nie die werk uitvoer nie');
 });
+test('follow-up delegation notifies every new step owner once while retaining private access rules',async t=>{
+ const f=await setup(t,'operational'),c=await claim(f),b=result(f,c,'blocked',{next_owner:'alinda',reason:'Two independent source confirmations are needed.',needed:'Alinda checks price and Xavier checks yield.'});
+ b.task_updates=[{action:'step_add',step_id:'price',data:{description:'Confirm price',assigned_to:'alinda',status:'Pending'}},{action:'step_add',step_id:'yield',data:{description:'Confirm yield',assigned_to:'xavier',status:'Pending'}}];
+ await saveTask(f.env,pa,b);await saveTask(f.env,pa,b);
+ const rows=(await f.db.prepare("SELECT username,kind FROM v2_task_notifications WHERE task_id=? AND kind='step_assigned' AND username IN ('alinda','xavier') ORDER BY username").bind(f.task_id).all()).results;
+ assert.deepEqual(rows,[{username:'alinda',kind:'step_assigned'},{username:'xavier',kind:'step_assigned'}]);
+ const p=await setup(t),pc=await claim(p),pb=result(p,pc);
+ pb.task_updates=[{action:'step_add',step_id:'leak',data:{description:'Private source',assigned_to:'xavier',status:'Pending'}}];
+ await assert.rejects(()=>saveTask(p.env,pa,pb));
+ assert.equal((await p.db.prepare("SELECT COUNT(*) n FROM v2_task_notifications WHERE username='xavier'").first()).n,0);
+});
 test('claims enforce ownership, revision, one active worker, evidence and privacy',async t=>{
  const f=await setup(t),item=(await due(f)).items[0],b={task_id:f.task_id,revision:item.revision,request_id:uuid(),action:'pa_followup_claim',step_id:'check',source_key:item.source_key};
  await assert.rejects(()=>saveTask(f.env,{username:'alex'},b));

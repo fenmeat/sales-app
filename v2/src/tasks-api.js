@@ -422,7 +422,7 @@ export async function saveTask(env,user,b){
  else if(['update','reopen','cancel','undo_complete'].includes(action))statements.push(notification(env.DB,b.request_id,task.assigned_to,task,action,at));
  const stepNotices=new Map(),beforeStep=old?.steps?.find(s=>s.id===b.step_id),afterStep=task.steps?.find(s=>s.id===b.step_id);
  if(action==='create'&&task.task_type==='workflow')for(const step of task.steps)if(step.assigned_to!==task.assigned_to)stepNotices.set(step.assigned_to,'step_assigned');
- if(['step_add','step_update','start_workflow'].includes(action))for(const step of task.steps||[])if(!old?.steps?.some(s=>s.id===step.id&&s.assigned_to===step.assigned_to))stepNotices.set(step.assigned_to,'step_assigned');
+ if(['step_add','step_update','start_workflow','pa_result','pa_followup_result'].includes(action))for(const step of task.steps||[])if(!old?.steps?.some(s=>s.id===step.id&&s.assigned_to===step.assigned_to))stepNotices.set(step.assigned_to,'step_assigned');
  if(action.startsWith('step_')){
   stepNotices.set(task.assigned_to,action==='step_complete'?'step_completed':'step_update');
   if(afterStep&&action!=='step_complete'&&afterStep.assigned_to!==beforeStep?.assigned_to)stepNotices.set(afterStep.assigned_to,'step_assigned');
