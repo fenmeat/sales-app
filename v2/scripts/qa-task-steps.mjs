@@ -22,6 +22,10 @@ const server=createServer(async(req,res)=>{
 await new Promise(r=>server.listen(0,'127.0.0.1',r));port=server.address().port;const origin='http://127.0.0.1:'+port;
 // Exercise the actual registered-phone sessions with each mobile layout.
 const repSessions=new Map();
+// Let background inbox reads settle before synthetic full-page navigation.
+// WebKit otherwise reports an aborted same-origin read as an access-control
+// page error. Keep all real page-error assertions; do not filter them out.
+const go=async(page,url)=>{await page.waitForLoadState('networkidle');await page.goto(url);};
 async function checkRepSteps(page,deviceName){
  const adminSession=await api('/api/login',{username:'alex',key:keys.alex});
  const adminCookie=adminSession.headers.get('set-cookie').split(';')[0];
@@ -44,7 +48,7 @@ async function checkRepSteps(page,deviceName){
    ]
   }});
   cookie=repSessions.get(username);
-  await page.goto(origin+'/tasks?task='+id);
+  await go(page,origin+'/tasks?task='+id);
   await page.locator('[data-step-note=delivery]').waitFor();
   assert.equal(await page.locator('[data-step-delegate]').count(),0);
   assert.equal(await page.locator('#edit').count(),0);
@@ -66,7 +70,7 @@ async function checkRepSteps(page,deviceName){
   let saved=(await api('/api/tasks?id='+id)).data.task;
   assert.equal(saved.steps.length,1);
   assert.equal(saved.steps[0].attachments.length,1);
-  await page.goto(origin+'/tasks?task='+id);
+  await go(page,origin+'/tasks?task='+id);
   await page.locator('[data-step-complete=delivery]').click();
   await page.getByRole('button',{name:'Stoor voltooiing',exact:true}).click();
   await page.waitForSelector('dialog:not([open])',{state:'attached'});
@@ -90,7 +94,7 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  const browser=await engine.launch({headless:true,...(engine===chromium&&process.env.TASKS_BROWSER_EXECUTABLE?{executablePath:process.env.TASKS_BROWSER_EXECUTABLE}:{})});try{
  const {defaultBrowserType,...device}=options,context=await browser.newContext({...device,timezoneId:'Africa/Johannesburg'});await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
  const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(origin+'/tasks');await page.locator('#pa-new').click();
+ await go(page,origin+'/tasks');await page.locator('#pa-new').click();
  await page.locator('dialog[open] select[name=task_type]').waitFor();
  assert.deepEqual(await page.locator('[name=task_type] option').allTextContents(),['Gewone taak','Taak met stappe']);assert.equal(await page.locator('[name=supplier]').isVisible(),false);
  await page.screenshot({path:folder+'/'+name+'-new-task.png'});
@@ -111,7 +115,7 @@ try{for(const [name,engine,options] of [['chromium-desktop',chromium,{viewport:{
  await page.locator('#dialog').getByRole('button',{name:'Stoor',exact:true}).click();await page.waitForSelector('#add-step');
  let list=(await api('/api/tasks')).data.tasks,task=list.find(t=>t.title==='Synthetic workflow '+name);assert.equal(task.steps.length,5);assert.equal(task.steps[3].attachments.length,1);
  const refresh=async()=>{task=(await api('/api/tasks?id='+task.id)).data.task;};
- const open=async()=>{await page.goto(origin+'/tasks?task='+task.id);await page.waitForSelector('#add-step');};
+ const open=async()=>{await go(page,origin+'/tasks?task='+task.id);await page.waitForSelector('#add-step');};
  await page.locator('[data-step-delegate="'+task.steps[1].id+'"]').click();
  await page.locator('[name=assigned_to]').selectOption('pa');
  await page.getByRole('button',{name:'Stoor stap',exact:true}).click();
