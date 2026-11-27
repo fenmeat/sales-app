@@ -1,7 +1,7 @@
 name: Payroll browser acceptance
 on:
   push:
-    branches: [perf/d1-november-2026, payroll/fresh-start-20261116, fix/payroll-hourly-review, fix/staff-clock-history, fix/payroll-monday-breaks, fix/pay-wages-20261120, fix/payroll-afrikaans-20261120]
+    branches: [perf/d1-november-2026, payroll/fresh-start-20261116, fix/payroll-hourly-review, fix/staff-clock-history, fix/payroll-monday-breaks, fix/pay-wages-20261120, fix/payroll-afrikaans-20261120, fix/staff-attendance-integrity-20261127]
     paths:
       - 'v2/**'
       - '.github/workflows/payroll-acceptance.yml'
@@ -35,3 +35,23 @@ jobs:
         run: STAFF_QA_DEVICE="iPhone 13" STAFF_QA_WEBKIT=1 STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-payroll.mjs
       - name: Check Staff history on iPhone, iPad, Android and desktop browser profiles
         run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-staff-history.mjs
+
+  clock-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: v2/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm install --prefix "$RUNNER_TEMP/payroll-browser" playwright@1.62.1 --no-audit --no-fund
+      - run: node "$RUNNER_TEMP/payroll-browser/node_modules/playwright/cli.js" install --with-deps chromium webkit
+      - name: Test clock recovery and offline sync on desktop, Android, iPhone and iPad
+        run: STAFF_PLAYWRIGHT_MODULE="$RUNNER_TEMP/payroll-browser/node_modules/playwright/index.mjs" node scripts/qa-staff-integrity.mjs

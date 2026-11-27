@@ -210,10 +210,11 @@ export function periodHours(people,shifts,leave,from,to,now=Date.now()){
     const z=begin>=day && last<=day+86400000?summary:shiftSummary(s,{from:day,to:day+86400000});
     const unresolved=z.issues.filter(x=>x==='Open shift'||!s.reviewed);unresolved.forEach(x=>issues.add(x));if(z.state==='out'&&!unresolved.length)seconds+=z.worked_seconds;else reviewSeconds+=z.worked_seconds;breakSeconds+=z.break_seconds;
    }
+   if(seconds>0&&seconds<60&&!reviewSeconds)issues.add('Short attendance record');
    const approved=leave.filter(r=>r.employee_id===p.id&&r.date===date&&r.status==='Approved');const paid=approved.reduce((n,r)=>n+r.paid_minutes,0);
    if(approved.length&&(seconds+reviewSeconds)>0)issues.add('Work and leave on the same day');
    const scheduled=scheduledMinutes(p,date);if(scheduled===null&&date>=p.start_date)issues.add('Schedule not verified');
-   if(scheduled>0&&date<dayAt(now)&&!own.some(s=>s.start<day+86400000&&s.last>=day)&&approved.reduce((n,r)=>n+r.units,0)<1)issues.add('Missing attendance record');
+   if(p.active&&date>=p.start_date&&scheduled>0&&date<=dayAt(now)&&!own.some(s=>s.start<day+86400000&&s.last>=day)&&approved.reduce((n,r)=>n+r.units,0)<1)issues.add('Missing attendance record');
    days.push({date,completed_seconds:seconds,review_seconds:reviewSeconds,break_seconds:breakSeconds,paid_leave_minutes:paid,leave_days:approved.reduce((n,r)=>n+r.units,0),scheduled_minutes:scheduled,issues:[...issues]});
   }
   return {employee_id:p.id,days,completed_seconds:days.reduce((n,d)=>n+d.completed_seconds,0),review_seconds:days.reduce((n,d)=>n+d.review_seconds,0),paid_leave_minutes:days.reduce((n,d)=>n+d.paid_leave_minutes,0),issues:[...new Set(days.flatMap(d=>d.issues))],payroll_ready:false};

@@ -9,6 +9,12 @@ import {ageIndependentEstimate,weeklyPaye} from './weekly-paye.js';
 export function weekEvidence(row) {
  return JSON.stringify(row.source.days.map(d => [d.date,d.first_in,d.last_out,d.payable_seconds,d.review_seconds,d.leave_days,d.paid_leave_minutes,d.scheduled_minutes,d.issues,row.day_edits?.[d.date]??null]));
 }
+function sameWeekEvidence(saved,current){
+ // Midnight adds a missing-attendance warning to an unchanged empty day. This
+ // must not erase a manager's already recorded weekly-hours confirmation.
+ const stable=value=>JSON.stringify(JSON.parse(value).map(day=>{if(!Array.isArray(day)||day.length!==10||!Array.isArray(day[8]))throw Error('Invalid evidence');return day.map((v,i)=>i===8?v.filter(issue=>issue!=='Missing attendance record'):v);}));
+ try{return stable(saved)===stable(current);}catch{return false;}
+}
 
 export const posted = row => ['Approved','Paid'].includes(row.wage_state);
 export function postedRun(run) {
@@ -48,7 +54,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
  const missing=(date,msg)=>{hoursKnown=false;stop(date+' · '+msg);};
  const ordinaryDays=(person.schedules??[]).filter(s=>s.from<=run.from).at(-1)?.minutes??[];
  const confirmedWeek=facts.worked_week;
- const useWeek=confirmedWeek && confirmedWeek.evidence===weekEvidence(row);
+ const useWeek=confirmedWeek && sameWeekEvidence(confirmedWeek.evidence,weekEvidence(row));
  if(confirmedWeek && !useWeek)stop('Die dagure het sedert die weekbevestiging verander. Vergelyk die nuwe ure en bevestig die week weer.');
  if(useWeek){
   const worked=confirmedWeek.minutes*60;
@@ -63,7 +69,7 @@ export function wagePreview(row,person,run,settings,runs,openings) {
   if(edit?.pending_kind==='sick_pending')missing(day.date,'Reported sick. Confirm paid sick leave or unpaid sick leave.');
   if(day.needs_workplace||day.needs_adjustment_review)missing(day.date,'Check the workplace or previous hours correction.');
   for(const issue of day.issues){
-   if(issue==='Missing attendance record'||issue==='Schedule not verified')continue;
+   if(issue==='Missing attendance record'||issue==='Schedule not verified'||issue==='Short attendance record')continue;
    missing(day.date,issue);
   }
   if(!useWeek && day.scheduled_minutes>0 && day.date<=today() && !day.first_in && !day.leave_days &&

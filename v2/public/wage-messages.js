@@ -1,5 +1,6 @@
 // Existing saved wage rows keep their original reasons and audit text.
 const messages = new Map([
+ ['Short attendance record','Die skof is korter as ’n minuut. Die volle werkdag moet bevestig word.'],
  ['Correct hours or mark absent.','Die klok wys geen werk of verlof nie. Die week se loon is onvolledig. Kies Verander hierdie dag of teken verlof aan.'],
  ['Confirm attendance or mark absent.','Daar is geen rooster of klokure nie. Bevestig die ure of afwesigheid vir hierdie dag.'],
  ['The clock entry is under one minute. Correct the hours.','Die skof is korter as ’n minuut. Die loon kan te laag wees. Maak die inklok- of uitkloktyd reg.'],
