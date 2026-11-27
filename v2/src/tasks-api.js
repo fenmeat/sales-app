@@ -1,4 +1,5 @@
-import {CONVERSATION_SCHEMA,newWorkStatements,migrationPlan,readTaskConversation,withoutTranscript} from './task-conversation.js';
+import {DUE_SCHEMA,dueIndexStatements,changePaFollowup,finishPaFollowup} from './pa-due-work.js';
+import {messageStatement,CONVERSATION_SCHEMA,newWorkStatements,migrationPlan,readTaskConversation,withoutTranscript} from './task-conversation.js';
 import {attachmentData,fileStatements,fileChunksSchema,originalFileBytes,downloadOnly} from './task-files.js';
 import {check,UserError,dateKey,today} from './domain.js';
 import {isAdmin,keys,hash} from './auth.js';
@@ -15,7 +16,7 @@ const paEvent = "action NOT IN ('reminder','followup_reminder','set_visibility')
 export const taskHeadJoin = 'v2_task_heads h CROSS JOIN v2_task_events e ON e.task_id=h.task_id AND e.revision=h.revision';
 
 export const TASK_SCHEMA=[
- ...MAIL_SCHEMA,...CONVERSATION_SCHEMA,fileChunksSchema,
+ ...MAIL_SCHEMA,...CONVERSATION_SCHEMA,...DUE_SCHEMA,fileChunksSchema,
  `CREATE TABLE IF NOT EXISTS v2_task_events (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(task_id,revision))`,
  `CREATE INDEX IF NOT EXISTS v2_tasks_latest ON v2_task_events(task_id,revision DESC)`,
  // D1 batches this bootstrap with trigger installation. LIMIT 0 skips the
@@ -209,10 +210,11 @@ export async function saveTask(env,user,b){
    check(user.username==='alex'&&user.via==='pa','Net Alex se PA-koppeling kan die gesprek omskakel.',403);
    check(typeof b.backup_reference==='string'&&b.backup_reference.trim(),'Bewaar eers die rugsteun.');
    if(!task.conversation_version){const plan=await migrationPlan(env.DB,task,at);task=plan.task;conversationStatements=plan.statements;}
-  }else if(['pa_request','pa_claim','pa_result','pa_resume','pa_recover'].includes(action)){
+  }else if(['pa_request','pa_claim','pa_result','pa_resume','pa_recover','pa_followup_claim','pa_followup_result'].includes(action)){
    if(action==='pa_result'&&b.files){check(Array.isArray(b.files)&&b.files.length<=4,'Kies hoogstens vier verslaglêers.');for(const input of b.files)files.push(await attachmentData(input));}
-   await changePaWork(task,b,user,env.DB,at,files,safeURL);
-   if(action==='pa_result'&&b.task_updates){
+   if(action.startsWith('pa_followup_'))changePaFollowup(task,b,user,at);
+   else await changePaWork(task,b,user,env.DB,at,files,safeURL);
+   if(['pa_result','pa_followup_result'].includes(action)&&b.task_updates){
     check(user.via==='pa'&&user.username==='alex'&&Array.isArray(b.task_updates)&&b.task_updates.length<=20,'Ongeldige taakbywerking.');
     for(let update of b.task_updates){
      check(update&&['summary','step_add','step_update','step_complete'].includes(update.action),'Gebruik ’n veilige taakbywerking.');
@@ -401,9 +403,17 @@ export async function saveTask(env,user,b){
  check(!old||taskVisibility(old)!=='private'||taskVisibility(task)==='private','Private PA-take bly privaat.',403);
  if(taskVisibility(task)==='confidential')check(isAdmin(task.assigned_to)&&(task.steps||[]).every(s=>s.assigned_to==='pa'||isAdmin(s.assigned_to)),'Delegeer vertroulike werk net aan Alex of Alinda.');
  if(taskVisibility(task)==='private')check(user.username==='alex'&&task.assigned_to==='alex'&&(task.steps||[]).every(s=>['alex','pa'].includes(s.assigned_to)),'Private PA-werk bly net by Alex en PA.',403);
+ if(action==='pa_followup_result')finishPaFollowup(task,b);
  const revision=b.revision+1;
  const statements=[env.DB.prepare('INSERT INTO v2_task_events(request_id,fingerprint,task_id,revision,action,payload,actor,saved_at) VALUES(?,?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,task.id,revision,action,JSON.stringify(task),user.username,at)];
  statements.push(...conversationStatements,...newWorkStatements(env.DB,old,task,files));
+ statements.push(...dueIndexStatements(env.DB,task,revision));
+ if(action==='pa_followup_result'){
+  const f=task.pa_followups[b.step_id];
+  statements.push(env.DB.prepare('INSERT INTO v2_pa_followup_events VALUES(?,?,?,?)').bind(b.request_id,task.id,at,JSON.stringify({...f,step_id:b.step_id})));
+  statements.push(messageStatement(env.DB,task.id,{id:'followup-'+b.request_id,role:'pa',actor:'pa',at,text:f.result,next_action:f.next_action,followup:{step_id:b.step_id,outcome:f.state,checked_at:f.checked_at,attempted:f.attempted,sources:f.sources,next_owner:f.next_owner,next_check_at:f.next_check_at,reason:f.reason,needed:f.needed}}));
+  if(['approval','blocked'].includes(f.state)&&f.next_owner!=='pa'&&canSeeTask({username:f.next_owner},task))statements.push(notification(env.DB,b.request_id,f.next_owner,task,'pa_action',at));
+ }
  statements.push(...files.flatMap(file=>fileStatements(env.DB,task.id,user.username,at,file)));
  if(action==='create'&&task.kind==='po_dispatch')statements.push(env.DB.prepare('INSERT INTO v2_task_po_links VALUES(?,?)').bind(task.parent_cycle_id,task.id));
  if(action==='create'||old?.assigned_to!==task.assigned_to)statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'assigned',at));

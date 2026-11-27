@@ -122,3 +122,20 @@ export function taskBrief(task, username) {
       step?.description || single : 'Niks op hierdie stadium nie',
     progress: task.completion_pending ? 'Jy het die taak klaar gemerk.' : completed?.length ? completed.join(' · ') : task.outcome || (task.part_pending ? 'Jou aandeel is as klaar aangemeld.' : progress), next: task.completion_pending ? 'PA werk die taakregister by.' : closed ? 'Geen verdere stap nie.' : single};
 }
+
+// Execution status is independent of the parent goal and is backed by saved evidence.
+export function paFollowupLabel(task,now=new Date()){
+ const entries=Object.values(task.pa_followups||{}),last=entries.sort((a,b)=>(b.started_at||'').localeCompare(a.started_at||''))[0];
+ if(['Complete','Cancelled','Archived'].includes(task.status))return last?'Die taak is afgehandel':'';
+ if(last?.state==='working'&&last.lease_until>now.toISOString())return 'PA is besig met die werk';
+ if(last?.state==='failed')return 'PA kon nie die werk uitvoer nie';
+ if(last?.state==='approval')return 'PA benodig jou goedkeuring';
+ if(last?.state==='blocked')return last.next_owner==='pa'?'PA kon nie die werk uitvoer nie':'PA benodig jou hulp';
+ const day=localDate(now),steps=(task.steps||[]).filter(s=>s.assigned_to==='pa'&&!stepClosed(s)&&!s.blocked);
+ const late=steps.some(s=>s.due_date&&s.due_date<day)||(!steps.length&&taskOwner(task)==='pa'&&(task.next_action_date||task.review_date||task.due_date||day)<day);
+ if(late)return 'PA se werk is agterstallig';
+ if(last?.next_owner==='pa'&&last.next_check_at<=now.toISOString()&&(taskOwner(task)==='pa'||steps.length))return 'PA moet weer opvolg';
+ if(last?.state==='waiting')return 'PA het opgevolg en wag op antwoord';
+ if(last?.state==='followed_up')return 'PA het die opvolg gedoen';
+ return taskOwner(task)==='pa'||steps.length?'PA moet nog die werk doen':'';
+}

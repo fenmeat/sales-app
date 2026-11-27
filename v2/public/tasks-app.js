@@ -1,3 +1,4 @@
+import {paFollowupLabel} from './task-workflow.js';
 import {conversationShell,mountConversation} from './task-conversation-ui.js';
 import {taskOwner,taskBrief} from './task-workflow.js';
 import {createWorkspaceCache,createTaskDraftStorage} from './task-workspace-cache.js';
@@ -253,7 +254,8 @@ function details(t){
  const brief=taskBrief(t.task_type==='workflow'?t:parent||t,data.username),follow=t.next_action_date||parent?.review_date||t.review_date||t.due_date;
  const fields=[
   ['Wat gaan aan?',t.details||t.responsibility?.situation||parent?.responsibility?.situation||brief.situation],
-  ['Status',statusLabel(t.status)],
+  ['Status',paFollowupLabel(t)||statusLabel(t.status)],
+  ...(Object.values(t.pa_followups||{}).length?[["PA se jongste opvolg",Object.values(t.pa_followups).sort((a,b)=>(b.started_at||'').localeCompare(a.started_at||''))[0].result||'Die kontrole is aan die gang.']]:[]),
   ['Wat moet ek doen?',brief.action],
   ['Wat is reeds gedoen?',brief.progress],
   ['Wat gebeur volgende?',brief.next],

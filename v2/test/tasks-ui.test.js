@@ -1,7 +1,7 @@
 import {conversationShell,mountConversation} from '../public/task-conversation-ui.js';
 import {mountProposal} from '../public/task-mail-proposal.js';
 import {createWorkspaceCache,createTaskDraftStorage} from '../public/task-workspace-cache.js';
-import {taskType,projectTask,statusLabel,localDate,taskBrief} from '../src/task-workflow.js';
+import {taskType,projectTask,statusLabel,localDate,paFollowupLabel,taskBrief} from '../src/task-workflow.js';
 import {stepsHTML,workflowForms} from '../public/task-workflow-ui.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -50,7 +50,7 @@ async function screen(username,tasks=[],view='',mailPages=null,{expired=false}={
  };
  const source=(await readFile(new URL('../public/tasks-app.js',import.meta.url),'utf8')).replace(/^import .*;\n/gm,'').replace(/load\(\);\s*$/,'await load();');
  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
- await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','REPORT_FILE_ACCEPT','fileData','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','mountProposal','createWorkspaceCache','createTaskDraftStorage','workHTML','noticeLabel','workLabel','taskBrief','conversationShell','mountConversation',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,REPORT_FILE_ACCEPT,fileData,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,mountProposal,createWorkspaceCache,createTaskDraftStorage,workHTML,noticeLabel,workLabel,taskBrief,conversationShell,mountConversation);
+ await new AsyncFunction('document','window','location','history','fetch','FormData','setTimeout','renderReport','reminderOptions','attachmentPicker','MAX_TASK_ATTACHMENTS','TASK_FILE_ACCEPT','REPORT_FILE_ACCEPT','fileData','taskType','projectTask','localDate','statusLabel','stepsHTML','workflowForms','mountProposal','createWorkspaceCache','createTaskDraftStorage','workHTML','noticeLabel','workLabel','taskBrief','conversationShell','mountConversation','paFollowupLabel',source)(document,{addEventListener(){}}, {href:'https://ui-test.example/tasks'+view,origin:'https://ui-test.example'},{replaceState(){}},fetch,FormData,()=>0,renderReport,reminderOptions,attachmentPicker,MAX_TASK_ATTACHMENTS,TASK_FILE_ACCEPT,REPORT_FILE_ACCEPT,fileData,taskType,projectTask,localDate,statusLabel,stepsHTML,workflowForms,mountProposal,createWorkspaceCache,createTaskDraftStorage,workHTML,noticeLabel,workLabel,taskBrief,conversationShell,mountConversation,paFollowupLabel);
  return {document,dialog,posts,postPaths,failNext:()=>failNext=true,failOnPost:n=>failAt=n};
 }
 

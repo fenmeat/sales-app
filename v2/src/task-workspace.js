@@ -9,7 +9,7 @@ import {workflowState,visiblePaRows,paUsers,ensurePaReportSchema,readPaReport} f
 import {unifiedWork,selectWork,workCounts} from '../public/pa-report-model.js';
 
 const statuses=new Set(['open','scheduled','waiting','closed','complete','cancelled','submitted','all']);
-const sourceFields=['conversation_version','id','title','kind','task_type','status','revision','pa_task_id','parent_cycle_id','assigned_to','created_by','due_date','review_date','next_action_date','requires_evidence','document_url','pa_sync','step_only','visibility','priority','can_manage'];
+const sourceFields=['pa_followups','conversation_version','id','title','kind','task_type','status','revision','pa_task_id','parent_cycle_id','assigned_to','created_by','due_date','review_date','next_action_date','requires_evidence','document_url','pa_sync','step_only','visibility','priority','can_manage'];
 const workStatus=t=>{
  const job=t.pa_work?.find(j=>j.status!=='answered')||t.pa_work?.at(-1);
  return job?.status==='working'&&job.lease_until&&Date.parse(job.lease_until)<=Date.now()?'queued':job?.status;

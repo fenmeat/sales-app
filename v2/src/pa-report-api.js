@@ -1,3 +1,4 @@
+import {dueWorkPage} from './pa-due-work.js';
 import {readTaskConversation,reportMessageStatements} from './task-conversation.js';
 import {standardSteps,stepProgress,taskOwner} from './task-workflow.js';
 import {originalFileBytes} from './task-files.js';
@@ -80,7 +81,7 @@ function rabbiReading(report,owner=false){
  return section?{date:report.date,title:section.title,items:section.items.filter(i=>owner||!i.requires_action&&!i.pa_task_ids?.length&&!i.app_task_ids?.length).map(({id,title,text})=>({id,title,text}))}:null;
 }
 async function latest(db,key){const r=await db.prepare('SELECT * FROM v2_pa_report_versions WHERE resource_key=? ORDER BY revision DESC LIMIT 1').bind(key).first();return r?{...JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at}:null;}
-export const workflowState=(row,task)=>task?.task_type==='workflow'?{...row,status:task.status,workflow_revision:task.revision,...({title:task.title,next_action:task.next_action||row.next_action,responsibility:{owner:taskOwner(task),action:task.next_action||'Maak die taak oop vir die volgende stap.',situation:task.details,version:row.responsibility?.version||1}})}:row;
+export const workflowState=(row,task)=>task?.task_type==='workflow'?{...row,status:task.status,workflow_revision:task.revision,pa_followups:task.pa_followups,review_date:task.next_action_date||'',next_action_date:task.next_action_date||'',...({title:task.title,next_action:task.next_action||row.next_action,responsibility:{owner:taskOwner(task),action:task.next_action||'Maak die taak oop vir die volgende stap.',situation:task.details,version:row.responsibility?.version||1}})}:row;
 async function subject(env,user,key){
  const register=await latest(env.DB,'register');
  if(TSK.test(key)){const r=register?.rows.find(r=>r.id===key);check(r&&(await visiblePaRows(env,user,[r])).length,'Report item not found.',404);const mail=user.username==='alex'?await env.DB.prepare('SELECT summary FROM v2_pa_followup_mail WHERE subject_key=? ORDER BY revision DESC LIMIT 1').bind(key).first():null;if(r.app_task_id)await ensureTaskSchema(env.DB);const current=workflowState(projectMail(r,mail&&JSON.parse(mail.summary)),r.app_task_id?await getTask(env.DB,r.app_task_id):null);return {...current,subject_key:r.id,subject_hash:await hash(JSON.stringify(current)),register_revision:register.revision};}
@@ -149,11 +150,26 @@ export async function readConversation(env,user,key,offset=0,recent=false){
  return {subject:current,feedback:list.results.slice(0,50).map(feedbackRow),next_offset:list.results.length>50?offset+50:null};
 }
 export async function readPaReport(env,user,query={}){
+ if(query.resource==='summary'&&query.id?.startsWith('taskfiles-')){
+  check(user.username==='alex','Slegs Alex se PA kan taakbewyse hier lees.',403);await ensureTaskSchema(env.DB);
+  const task=await getTask(env.DB,query.id.slice(10));check(task&&fullTaskAccess(user,task),'Taak nie gevind nie.',404);
+  const offset=Number(query.offset||0);check(Number.isSafeInteger(offset)&&offset>=0,'Ongeldige bladsy.');
+  const rows=(await env.DB.prepare('SELECT id,filename,mime_type,created_at FROM v2_task_attachments WHERE task_id=? ORDER BY id LIMIT 26 OFFSET ?').bind(task.id,offset).all()).results;
+  return {task_id:task.id,items:rows.slice(0,25),next_offset:rows.length>25?offset+25:null};
+ }
  if(query.resource==='summary'&&query.id?.startsWith('conversation-')){await ensureTaskSchema(env.DB);return readTaskConversation(env,user,await getTask(env.DB,query.id.slice(13)),{offset:query.offset||0});}
  if(query.resource==='summary'&&query.id==='task-access')return (await import('./task-workspace.js')).taskAccessSummary(env,user);
  if(query.resource==='summary'&&/^tasks-workspace(?:-(open|scheduled|closed))?$/.test(query.id||''))return (await import('./task-workspace.js')).workspaceDiagnostic(env,user,{status:query.id.split('-')[2]||'open'});
  if(query.resource==='summary'&&query.id==='tasks-performance')return (await import('./task-performance.js')).taskPerformance(env,user);
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
+ if(query.resource==='summary'&&['pa-due-work','pa-work-audit'].includes(query.id)){await ensureTaskSchema(env.DB);return dueWorkPage(env.DB,user,{offset:query.offset||0,audit:query.id==='pa-work-audit'});}
+ if(query.resource==='summary'&&query.id==='pa-followup-report'){
+  check(user.username==='alex','Net Alex kan PA se volledige opvolgverslag lees.',403);await ensureTaskSchema(env.DB);
+  const day=dateKey(query.date||today()),offset=Number(query.offset||0);check(Number.isSafeInteger(offset)&&offset>=0,'Ongeldige bladsy.');
+  const start=new Date(day+'T00:00:00+02:00').toISOString(),end=new Date(Date.parse(start)+86400000).toISOString();
+  const rows=(await env.DB.prepare("SELECT e.task_id,e.revision,json_extract(e.payload,'$.pa_task_id') pa_task_id,json_extract(e.payload,'$.title') title,json_extract(e.payload,'$.visibility') visibility,f.payload execution FROM v2_pa_followup_events f JOIN v2_task_heads h ON h.task_id=f.task_id JOIN v2_task_events e ON e.task_id=h.task_id AND e.revision=h.revision WHERE f.recorded_at>=? AND f.recorded_at<? ORDER BY f.recorded_at,f.id LIMIT 26 OFFSET ?").bind(start,end,offset).all()).results;
+  return {items:rows.slice(0,25).map(({execution,...r})=>({...r,execution:JSON.parse(execution)})),next_offset:rows.length>25?offset+25:null};
+ }
  if(query.resource==='summary'&&query.id==='task-steps'){
   check(user.username==='alex','Net Alex kan die volledige stapverslag lees.',403);await ensureTaskSchema(env.DB);return stepReportPage(env.DB,query.offset);
  }
@@ -197,6 +213,13 @@ export async function readPaReport(env,user,query={}){
   return {feedback,next_offset:list.results.length>50?offset+50:null};
  }
  if(query.resource==='file'){
+  if(query.id?.startsWith('taskfile-')){
+   check(user.username==='alex','Slegs Alex se PA kan taakbewyse hier lees.',403);await ensureTaskSchema(env.DB);
+   const id=query.id.slice(9),f=await env.DB.prepare('SELECT * FROM v2_task_attachments WHERE id=?').bind(id).first();
+   const task=f&&await getTask(env.DB,f.task_id);check(task&&fullTaskAccess(user,task),'Taakbewys nie gevind nie.',404);
+   const bytes=await originalFileBytes(env.DB,f);let binary='';for(let n=0;n<bytes.length;n+=8192)binary+=String.fromCharCode(...bytes.slice(n,n+8192));
+   return {id,task_id:task.id,filename:f.filename,mime_type:f.mime_type,base64:btoa(binary),byte_length:bytes.length};
+  }
   if(query.id?.startsWith('appfile-')){
    check(user.username==='alex','Slegs Alex kan hierdie bylaag lees.',403);await ensureTaskSchema(env.DB);
    const id=query.id.slice(8),f=await env.DB.prepare('SELECT * FROM v2_task_attachments WHERE id=?').bind(id).first();
