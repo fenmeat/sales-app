@@ -2,16 +2,21 @@
 import assert from 'node:assert/strict';
 import {build} from 'esbuild';
 import {fileURLToPath} from 'node:url';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {hash} from '../src/auth.js';
 const {chromium,webkit,devices}=await import(process.env.STAFF_PLAYWRIGHT_MODULE??'playwright');
 const origin='https://localhost:8798',key='synthetic-admin-key-'.repeat(3);
 const bundle=await build({stdin:{resolveDir:process.cwd(),sourcefile:'synthetic-clock-worker.js',contents:`import worker from './src/worker.js';
 export default {...worker,async fetch(request,env,ctx){const response=await worker.fetch(request,env,ctx);if(new URL(request.url).pathname==='/api/staff-clock/punch'&&response.ok&&await env.DB.prepare('UPDATE qa_network_loss SET enabled=0 WHERE enabled=1 RETURNING enabled').first())return Response.json({error:'Synthetic response failure after server commit'},{status:503});return response;}};`},bundle:true,format:'esm',platform:'browser',write:false});
-const mf=new Miniflare(convertV4MiniflareOptions({name:'staff-clock-qa',host:'127.0.0.1',port:8798,https:true,modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-09-30',d1Databases:{DB:'qa-clock'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key}),STAFF_PIN_PEPPER:'synthetic-pepper-'.repeat(4)},assets:{directory:fileURLToPath(new URL('../public/',import.meta.url)),binding:'ASSETS',run_worker_first:true,routerConfig:{has_user_worker:true}},outboundService:()=>{throw Error('External traffic blocked');}}));
+const persistence=mkdtempSync(join(tmpdir(),'fenmeat-clock-qa-'));
+const config=convertV4MiniflareOptions({resourcePersistencePath:persistence,name:'staff-clock-qa',host:'127.0.0.1',port:8798,https:true,modules:true,script:bundle.outputFiles[0].text,compatibilityDate:'2026-09-30',d1Databases:{DB:'qa-clock'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key}),STAFF_PIN_PEPPER:'synthetic-pepper-'.repeat(4)},assets:{directory:fileURLToPath(new URL('../public/',import.meta.url)),binding:'ASSETS',run_worker_first:true,routerConfig:{has_user_worker:true}},outboundService:()=>{throw Error('External traffic blocked');}});
+let mf=new Miniflare(config);
 try{
  await mf.ready;await mf.dispatchFetch(origin+'/api/login',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({username:'alex',key})});
- const db=await mf.getD1Database('DB');await db.prepare('CREATE TABLE qa_network_loss(enabled INTEGER)').run();await db.prepare('INSERT INTO qa_network_loss VALUES(0)').run();let version=0;
+ let db=await mf.getD1Database('DB');await db.prepare('CREATE TABLE qa_network_loss(enabled INTEGER)').run();await db.prepare('INSERT INTO qa_network_loss VALUES(0)').run();let version=0;
  for(const [profile,engine] of [['Desktop Chrome',chromium],['Pixel 7',chromium],['iPhone 13',webkit],['iPad (gen 7)',webkit]]){
   const browser=await (process.env.STAFF_BROWSER_EXECUTABLE?chromium:engine).launch({...(process.env.STAFF_BROWSER_EXECUTABLE?{executablePath:process.env.STAFF_BROWSER_EXECUTABLE}:{}),args:engine===chromium?['--ignore-certificate-errors']:[]});
   try{
@@ -35,14 +40,22 @@ try{
    await page.reload();
    await action('Start break');await page.locator('#sync-state').filter({hasText:'Alle plaaslike'}).waitFor();
    assert.deepEqual(await page.evaluate(()=>JSON.parse(localStorage.getItem('fenmeat-clock-pending-v1'))),{});
-   await context.setOffline(true);await action('End break');await page.reload();await page.getByRole('button',{name:/Synthetic Employee/}).waitFor();await action('Clock out');
+   await page.waitForFunction(()=>!document.querySelector('[data-person]')?.disabled);
+   // WebKit's setOffline flag rejects even literal SW responses (Playwright
+   // #42775). Stop the actual origin instead; D1 is kept in isolated temp files.
+   if(engine===webkit)await mf.dispose();else await context.setOffline(true);
+   assert.equal(await page.evaluate(()=>fetch('/api/health').then(()=>true,()=>false)),false);
+   await action('End break');
+   const offlinePage=await page.reload();assert.equal(offlinePage.fromServiceWorker(),true);
+   await page.getByRole('button',{name:/Synthetic Employee/}).waitFor();await action('Clock out');
    const queued=await page.evaluate(()=>JSON.parse(localStorage.getItem('fenmeat-clock-durable-v2')).queue);assert.equal(queued.length,2);
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-   await context.setOffline(false);await page.locator('#sync-state').filter({hasText:'Alle plaaslike'}).waitFor({timeout:60000});
+   if(engine===webkit){mf=new Miniflare(config);await mf.ready;db=await mf.getD1Database('DB');}else await context.setOffline(false);
+   await page.locator('#sync-state').filter({hasText:'Alle plaaslike'}).waitFor({timeout:60000});
    const rows=(await db.prepare('SELECT payload FROM v2_staff_time WHERE employee_id=? ORDER BY revision').bind(employee).all()).results;assert.equal(rows.length,4);
    const punches=JSON.parse(rows.at(-1).payload).punches;assert.deepEqual(punches.map(p=>p.kind),['in','break_start','break_end','out']);assert.equal(punches[2].at,queued[0].captured_at);assert.equal(punches[3].at,queued[1].captured_at);
    assert.equal((await page.request.get(origin+'/api/staff')).status(),401);assert.deepEqual(errors,[]);
    console.log('PASS '+profile+': PIN, clock, break, lost response, offline reload, original-time sync, isolated access, responsive layout');
   }finally{await browser.close();}
  }
-}finally{await mf.dispose();}
+}finally{await mf.dispose();rmSync(persistence,{recursive:true,force:true});}
