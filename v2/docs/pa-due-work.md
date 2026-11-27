@@ -1,4 +1,4 @@
-# PA due work — 0.56.2
+# PA due work — 0.56.3
 
 The existing hourly PA runner must read `daily_report/summary` with ID `pa-due-work`, even when pending sync, feedback, task-work and email queues are empty. Collect all pages before mutations. `pa-work-audit` includes future work for an explicitly requested initial audit; do not read it every hour. Both require Alex. Private work uses the existing private_task bridge, never a shared task. Legacy gaps return their existing TSK with materialize_required; preserve its identity and private history when linking its native steps.
 
@@ -19,3 +19,5 @@ The initial audit also exposed an inaccessible stocktake receipt. `summary/id:ta
 Release verification: 581 full-suite tests passed; after adding the task-evidence bridge, all 17 targeted follow-up/email/privacy checks passed, including the new evidence-access regression. Deployment dry run passed. Live and scheduled-run evidence must be confirmed after publication.
 
 Follow-up results that add or delegate steps also notify each new authorised step owner, including when two people must supply independent evidence. Retries remain idempotent and private step assignments stay restricted.
+
+0.56.3: Temporary failures become eligible at the next hour boundary, so a late result cannot miss the next scheduled hourly run. The server requires PA to retain responsibility for technical retries.

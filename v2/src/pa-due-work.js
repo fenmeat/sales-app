@@ -81,9 +81,14 @@ export function changePaFollowup(task,b,user,at){
  check(typeof d.checked_at==='string'&&Number.isFinite(Date.parse(d.checked_at))&&Date.parse(d.checked_at)>=Date.parse(execution.started_at)-300000&&Date.parse(d.checked_at)<=Date.parse(at)+60000,'Gee die werklike kontroletyd.');
  check(['pa','alex','alinda','xavier','xalinda'].includes(d.next_owner),'Gee die werklike volgende persoon.');
  if(['failed','blocked','approval'].includes(d.outcome)){text(d.reason,2000);text(d.needed,2000);}
- const next_check_at=d.outcome==='failed'?new Date(Date.parse(at)+3600000).toISOString():d.next_check_at;
+ // A failure near the end of an hourly run must be eligible when the next
+ // scheduled run starts, not one hour after this later result was saved.
+ const next_check_at=d.outcome==='failed'?new Date((Math.floor(Date.parse(at)/3600000)+1)*3600000).toISOString():d.next_check_at;
  check(typeof next_check_at==='string'&&Number.isFinite(Date.parse(next_check_at))&&Date.parse(next_check_at)>Date.parse(at),'Gee die volgende kontroletyd.');
- if(d.outcome==='failed')check(!b.task_updates?.length,'Behou die uitstaande werk en datum by ’n tegniese fout.');
+ if(d.outcome==='failed'){
+  check(d.next_owner==='pa','PA bly verantwoordelik vir tegniese herprobering.');
+  check(!b.task_updates?.length,'Behou die uitstaande werk en datum by ’n tegniese fout.');
+ }
  task.pa_followups[b.step_id]={state:d.outcome,source_key:execution.source_key,original_due_date:execution.original_due_date,started_at:execution.started_at,
   checked_at:new Date(d.checked_at).toISOString(),last_success_at:d.outcome==='failed'?execution.last_success_at||null:at,
   attempted,result,sources,next_action,next_owner:d.next_owner,next_check_at:new Date(next_check_at).toISOString(),reason:d.reason||'',needed:d.needed||'',request_id:b.request_id};

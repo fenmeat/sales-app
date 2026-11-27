@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {fixture} from './helpers/report-fixture.js';
 import {saveTask,ensureTaskSchema,getTask} from '../src/tasks-api.js';
 import {readPaReport,ensurePaReportSchema} from '../src/pa-report-api.js';
-import {paCandidates} from '../src/pa-due-work.js';
+import {paCandidates,changePaFollowup} from '../src/pa-due-work.js';
 import {paFollowupLabel} from '../src/task-workflow.js';
 const pa={username:'alex',via:'pa'},uuid=()=>crypto.randomUUID();
 async function setup(t,visibility='private'){
@@ -41,6 +41,19 @@ test('temporary failure retains the overdue work and becomes eligible at the nex
  assert.equal((await due(f)).items.length,0);assert.ok(Date.parse(execution.next_check_at)-Date.now()<3600100);
  assert.ok(paCandidates(r.task,new Date(Date.now()+3601000))[0].due_at<=new Date(Date.now()+3601000).toISOString());
  assert.equal(paFollowupLabel(r.task),'PA kon nie die werk uitvoer nie');
+});
+test('a late failure is eligible for the next hourly run and never becomes human work',()=>{
+ const at='2026-11-27T12:55:00.000Z';
+ const task={id:'synthetic-late-failure',assigned_to:'alex',status:'Pending',task_type:'workflow',steps:[{id:'check',description:'Read reply',assigned_to:'pa',status:'Pending',due_date:'2026-11-24'}]};
+ const source_key=paCandidates(task,new Date(at))[0].source_key;
+ task.pa_followups={check:{state:'working',source_key,claim_id:'late-claim',started_at:'2026-11-27T12:51:00.000Z',lease_until:'2026-11-27T13:51:00.000Z',original_due_date:'2026-11-24'}};
+ const b={action:'pa_followup_result',step_id:'check',claim_id:'late-claim',request_id:'late-result',data:{outcome:'failed',attempted:'Read the original thread.',result:'The email connection returned an unavailable error.',sources:[],checked_at:at,next_action:'PA retries at the next scheduled run.',next_owner:'alex',reason:'Temporary connection failure.',needed:'The connection must recover.'}};
+ assert.throws(()=>changePaFollowup(task,b,pa,at),/PA bly verantwoordelik/);
+ b.data.next_owner='pa';changePaFollowup(task,b,pa,at);
+ assert.equal(task.pa_followups.check.next_check_at,'2026-11-27T13:00:00.000Z');
+ assert.ok(paCandidates(task,new Date('2026-11-27T13:45:17.000Z'))[0].due_at<='2026-11-27T13:45:17.000Z');
+ assert.equal(task.steps[0].due_date,'2026-11-24');
+ assert.equal(task.pa_followups.check.next_owner,'pa');
 });
 test('follow-up delegation notifies every new step owner once while retaining private access rules',async t=>{
  const f=await setup(t,'operational'),c=await claim(f),b=result(f,c,'blocked',{next_owner:'alinda',reason:'Two independent source confirmations are needed.',needed:'Alinda checks price and Xavier checks yield.'});
