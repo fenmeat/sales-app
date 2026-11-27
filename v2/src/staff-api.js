@@ -262,9 +262,13 @@ export async function staffApi({request,url,env,user,bodyOf}){
   const old=await db.prepare('SELECT * FROM v2_staff_time WHERE shift_id=? AND employee_id=? ORDER BY revision DESC LIMIT 1').bind(uuid(b.shift_id),p.id).first();check(old,'Shift not found.',404);check(!JSON.parse(old.payload).exclusion,'Hierdie uitgeslote skof word vir oudit bewaar.',409);
   check(Array.isArray(b.punches),'Supply the corrected clock entries.');
   const shift={id:old.shift_id,employee_id:p.id,punches:b.punches.map(e=>({kind:e.kind,at:e.at})),correction:{reason,actor:user.username,at:stamp,replaces_revision:old.revision},...(b.confirm_review===true?{reviewed:{actor:user.username,at:stamp,reason}}:{})};
-  const s=shiftSummary(shift);check(s.state==='out','A correction must include a complete clock-in and clock-out.');check(Date.parse(s.end_at)<=Date.now(),'A correction cannot use a future clock time.');check(dayAt(s.start_at)>=p.start_date,'A correction cannot precede employment.');
-  const overlaps=await db.prepare(`SELECT t.shift_id FROM v2_staff_time t WHERE employee_id=? AND shift_id!=? AND ${latestCondition} AND start_at<? AND (end_at IS NULL OR end_at>?) LIMIT 1`).bind(p.id,shift.id,s.end_at,s.start_at).first();check(!overlaps,'The corrected shift overlaps another shift.');
-  return op.commit([await protectPayWeek(db,op,p.id,[dayAt(old.start_at),dayAt(old.end_at??old.start_at),dayAt(s.start_at),dayAt(s.end_at)]),registerInsert(db,current,current.state,'clock_correction',user.username,{employee_id:p.id,shift_id:shift.id,reason},stamp),timeInsert(db,op,shift,rev+1,'correction',user.username,stamp)],{ok:true,revision:current.revision+1,clock_revision:rev+1});
+  const s=shiftSummary(shift),original=JSON.parse(old.payload);
+  // An open shift may retain every punch while its confirmed start is corrected.
+  // Do not invent a clock-out, reopen a closed shift, or rewrite recorded breaks.
+  const openStart=old.state!=='out'&&s.state===old.state&&dayAt(s.start_at)===dayAt(old.start_at)&&shift.punches.length===original.punches.length&&shift.punches.slice(1).every((e,i)=>e.kind===original.punches[i+1].kind&&e.at===original.punches[i+1].at);
+  check(s.state==='out'||openStart,'An open-shift correction may only change its clock-in on the same day.');check(Date.parse(shift.punches.at(-1).at)<=Date.now(),'A correction cannot use a future clock time.');check(dayAt(s.start_at)>=p.start_date,'A correction cannot precede employment.');
+  const overlaps=await db.prepare(`SELECT t.shift_id FROM v2_staff_time t WHERE employee_id=? AND shift_id!=? AND ${latestCondition} AND start_at<? AND (end_at IS NULL OR end_at>?) LIMIT 1`).bind(p.id,shift.id,s.end_at??'9999-12-31T23:59:59.999Z',s.start_at).first();check(!overlaps,'The corrected shift overlaps another shift.');
+  return op.commit([await protectPayWeek(db,op,p.id,[dayAt(old.start_at),dayAt(old.end_at??old.start_at),dayAt(s.start_at),dayAt(s.end_at??s.start_at)]),registerInsert(db,current,current.state,'clock_correction',user.username,{employee_id:p.id,shift_id:shift.id,reason},stamp),timeInsert(db,op,shift,rev+1,'correction',user.username,stamp)],{ok:true,revision:current.revision+1,clock_revision:rev+1});
  }
  throw new UserError('Not found.',404);
 }
