@@ -1,4 +1,4 @@
-# PA due work — 0.56.0
+# PA due work — 0.56.1
 
 The existing hourly PA runner must read `daily_report/summary` with ID `pa-due-work`, even when pending sync, feedback, task-work and email queues are empty. Collect all pages before mutations. `pa-work-audit` includes future work for an explicitly requested initial audit; do not read it every hour. Both require Alex. Private work uses the existing private_task bridge, never a shared task. Legacy gaps return their existing TSK with materialize_required; preserve its identity and private history when linking its native steps.
 
@@ -13,5 +13,7 @@ Every result atomically appends a PA conversation message and an immutable dated
 Validation includes existing/private due work without a new request, no reply, substantive reply, approval, failed access/retry, overdue recovery, consecutive-run suppression, optimistic concurrency, evidence enforcement, private task/conversation denial, legacy linking and indexed due lookup. Publication alone does not prove execution: confirm live version, live write/readback and a subsequent recorded hourly run with real task evidence. Preserve the existing hourly schedule; no new automation or Cloudflare cron is needed.
 
 Original task evidence is available to Alex's PA through `summary/id:taskfiles-<task-id>` and `file/id:taskfile-<file-id>`, with current task-access checks. This resolves the confirmed old execution block where only attachments explicitly included in an email proposal could be read through `appfile-`. The old proposal-only route remains restricted. Other users cannot use this owner bridge; their normal task file permissions remain unchanged.
+
+The initial audit also exposed an inaccessible stocktake receipt. `summary/id:taskcounts-<task-id>` now reads only that task's supplier/date receipts through an index, preserving the assigned-user, creation-time and required-material checks. It returns the missing materials and eligibility; it cannot create a count or bypass completion proof. The existing complete action still validates the chosen receipt. All 24 focused due-work and task-runtime checks pass, including partial and wrong-owner receipt rejection.
 
 Release verification: 581 full-suite tests passed; after adding the task-evidence bridge, all 17 targeted follow-up/email/privacy checks passed, including the new evidence-access regression. Deployment dry run passed. Live and scheduled-run evidence must be confirmed after publication.

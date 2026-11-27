@@ -150,6 +150,13 @@ export async function readConversation(env,user,key,offset=0,recent=false){
  return {subject:current,feedback:list.results.slice(0,50).map(feedbackRow),next_offset:list.results.length>50?offset+50:null};
 }
 export async function readPaReport(env,user,query={}){
+ if(query.resource==='summary'&&query.id?.startsWith('taskcounts-')){
+  check(user.username==='alex','Slegs Alex se PA kan telbewyse hier lees.',403);await ensureTaskSchema(env.DB);
+  const task=await getTask(env.DB,query.id.slice(11));check(task&&fullTaskAccess(user,task)&&task.kind==='stocktake','Teltaak nie gevind nie.',404);
+  const offset=Number(query.offset||0);check(Number.isSafeInteger(offset)&&offset>=0,'Ongeldige bladsy.');
+  const rows=(await env.DB.prepare('SELECT r.*,e.revision FROM v2_task_count_receipts r JOIN v2_recipe_events e ON e.request_id=r.request_id WHERE r.supplier=? AND r.count_date=? ORDER BY r.saved_at DESC,r.request_id LIMIT 26 OFFSET ?').bind(task.supplier,task.due_date,offset).all()).results;
+  return {task_id:task.id,revision:task.revision,assigned_to:task.assigned_to,count_date:task.due_date,required_materials:task.required_materials,items:rows.slice(0,25).map(r=>{const material_ids=JSON.parse(r.material_ids),missing=(task.required_materials||[]).filter(id=>!material_ids.includes(id));return {...r,material_ids,missing,eligible:r.actor===task.assigned_to&&r.saved_at>=task.created_at&&!missing.length&&!!task.required_materials?.length};}),next_offset:rows.length>25?offset+25:null};
+ }
  if(query.resource==='summary'&&query.id?.startsWith('taskfiles-')){
   check(user.username==='alex','Slegs Alex se PA kan taakbewyse hier lees.',403);await ensureTaskSchema(env.DB);
   const task=await getTask(env.DB,query.id.slice(10));check(task&&fullTaskAccess(user,task),'Taak nie gevind nie.',404);

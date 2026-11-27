@@ -84,3 +84,16 @@ test('PA can read original task evidence without an email proposal; other users 
  }
  await assert.rejects(()=>readPaReport(f.env,pa,{resource:'file',id:'appfile-'+id}));
 });
+test('saved count evidence distinguishes incomplete and other-owner receipts without accepting a new count',async t=>{
+ const f=await fixture(t),date=new Date().toISOString().slice(0,10);
+ const material=id=>({id,name:id,unit:'kg',supplier:'Crown',pack_qty:20,procure:true,notes:'',source:'Synthetic',price:{amount:null,status:'unknown',date:null,valid_until:null,source:''},stock:{qty:null,date:null,reserve:null,incoming:[],source:''}});
+ const register={schema_version:1,notes:'Synthetic',materials:[material('RM01'),material('RM02')],recipes:[],packaging:[]};
+ assert.equal((await f.call('alex','/api/recipes',{revision:0,request_id:uuid(),reason:'Synthetic fixture',register})).status,200);
+ const b=f.task({kind:'stocktake',supplier:'crown',due_date:date});assert.equal((await f.call('alinda','/api/tasks',b)).status,200);
+ const partial={revision:1,request_id:uuid(),supplier:'crown',date,rows:[{material:'RM01',packs:0,reserve:0}]};assert.equal((await f.call('xalinda','/api/stocktake',partial)).status,200);
+ const other={...partial,revision:2,request_id:uuid(),rows:[...partial.rows,{material:'RM02',packs:2,reserve:0}]};assert.equal((await f.call('xavier','/api/stocktake',other)).status,200);
+ let list=await readPaReport(f.env,pa,{resource:'summary',id:'taskcounts-'+b.task_id});assert.equal(list.items.length,2);assert.equal(list.items.some(r=>r.eligible),false);assert.deepEqual(list.items.find(r=>r.request_id===partial.request_id).missing,['RM02']);
+ const full={...other,revision:3,request_id:uuid()};assert.equal((await f.call('xalinda','/api/stocktake',full)).status,200);
+ list=await readPaReport(f.env,pa,{resource:'summary',id:'taskcounts-'+b.task_id});assert.equal(list.items.filter(r=>r.eligible).length,1);assert.equal(list.items.find(r=>r.eligible).request_id,full.request_id);
+ for(const username of ['alinda','xavier','xalinda','tapiz'])await assert.rejects(()=>readPaReport(f.env,{username},{resource:'summary',id:'taskcounts-'+b.task_id}));
+});

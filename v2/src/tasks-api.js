@@ -36,6 +36,7 @@ export const TASK_SCHEMA=[
  `CREATE INDEX IF NOT EXISTS v2_task_push_pending ON v2_task_notifications(created_at) WHERE push_sent_at IS NULL AND read_at IS NULL`,
  `CREATE INDEX IF NOT EXISTS v2_task_notifications_user ON v2_task_notifications(username,created_at)`,
  `CREATE TABLE IF NOT EXISTS v2_task_count_receipts (request_id TEXT PRIMARY KEY, supplier TEXT NOT NULL, count_date TEXT NOT NULL, material_ids TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL)`,
+ `CREATE INDEX IF NOT EXISTS v2_task_count_lookup ON v2_task_count_receipts(supplier,count_date,saved_at DESC,request_id)`,
  `CREATE TABLE IF NOT EXISTS v2_task_push_keys (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_task_push_subscriptions (endpoint_hash TEXT PRIMARY KEY, username TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL)`,
  `CREATE TABLE IF NOT EXISTS v2_task_attachments (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, username TEXT NOT NULL, mime_type TEXT NOT NULL, filename TEXT NOT NULL, bytes BLOB NOT NULL, created_at TEXT NOT NULL)`
