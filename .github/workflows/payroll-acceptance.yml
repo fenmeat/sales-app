@@ -50,6 +50,7 @@ jobs:
           cache: npm
           cache-dependency-path: v2/package-lock.json
       - run: npm ci --no-audit --no-fund
+      - run: npm run build
       - run: npm install --prefix "$RUNNER_TEMP/payroll-browser" playwright@1.62.1 --no-audit --no-fund
       - run: node "$RUNNER_TEMP/payroll-browser/node_modules/playwright/cli.js" install --with-deps chromium webkit
       - name: Test clock recovery and offline sync on desktop, Android, iPhone and iPad
