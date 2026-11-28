@@ -1,0 +1,126 @@
+name: Text editing browser acceptance
+on:
+  pull_request:
+    branches: [build/sales-v2-cloudflare]
+    paths: ['v2/**', '.github/workflows/text-editing.yml']
+  push:
+    branches: [perf/d1-november-2026, fix/task-responsibility, feature/task-access-0480, feature/task-steps,perf/tasks-loading-20261113,fix/task-editing-20261113, fix/task-search-input, fix/text-editing-0382, fix/pa-conversations-0390, build/sales-v2-cloudflare]
+    paths:
+      - 'v2/src/tasks-api.js'
+      - 'v2/src/task-conversation.js'
+      - 'v2/public/task-conversation-ui.js'
+      - 'v2/test/task-conversation.test.js'
+      - 'v2/scripts/qa-task-responsibility.mjs'
+      - 'v2/src/task-workflow.js'
+      - 'v2/public/pa-report-model.js'
+      - 'v2/test/task-responsibility.test.js'
+      - 'v2/src/task-access.js'
+      - 'v2/test/task-access.test.js'
+      - 'v2/public/task-workflow-ui.js'
+      - 'v2/public/tasks.css'
+      - 'v2/src/task-workflow-actions.js'
+      - 'v2/scripts/qa-task-steps.mjs'
+      - 'v2/public/tasks-app.js'
+      - 'v2/public/task-attachments.js'
+      - 'v2/public/task-scanner.js'
+      - 'v2/public/scan-image.js'
+      - 'v2/public/scan-pdf.js'
+      - 'v2/src/task-files.js'
+      - 'v2/scripts/qa-task-scans.mjs'
+      - 'v2/src/task-workspace.js'
+      - 'v2/src/pa-report-api.js'
+      - 'v2/public/task-workspace-cache.js'
+      - 'v2/public/task-search-render.js'
+      - 'v2/scripts/qa-task-speed.mjs'
+      - 'v2/public/pa-report-ui.js'
+      - 'v2/scripts/qa-pa-conversations.mjs'
+      - 'v2/scripts/qa-task-editing.mjs'
+      - 'v2/scripts/qa-task-pa-work.mjs'
+      - 'v2/src/task-pa-work.js'
+      - 'v2/src/pa-due-work.js'
+      - 'v2/test/pa-due-work.test.js'
+      - 'v2/public/task-pa-work-ui.js'
+      - 'v2/public/input-selection.js'
+      - 'v2/public/invoicing/input-selection.js'
+      - 'v2/scripts/qa-text-editing.mjs'
+      - '.github/workflows/text-editing.yml'
+concurrency:
+  group: task-browser-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, webkit]
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: v2/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Verify worker and task integration tests
+        if: matrix.browser == 'chromium'
+        run: npm test
+      - name: Install isolated browser tools
+        run: npm install --prefix "$RUNNER_TEMP/text-browser" --no-audit --no-fund playwright@1.62.1
+      - name: Install browser
+        run: node "$RUNNER_TEMP/text-browser/node_modules/playwright/cli.js" install --with-deps "${{ matrix.browser }}"
+      - name: Check iPad task ownership, replies, reminders and completion
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-responsibility.mjs
+      - name: Check real text editing and mobile touch profiles
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-text-editing.mjs
+      - name: Check PA conversation and interrupted network
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-pa-conversations.mjs
+      - name: Check PA instruction, returned document and notification
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-pa-work.mjs
+      - name: Check original task editing and real database readback
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-editing.mjs
+      - name: Check paged task speed, lazy details and conditional cache
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-speed.mjs
+      - name: Check document scans, compressed photos and interrupted saves
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TASKS_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-scans.mjs
+      - name: Check delegated task steps and final approval
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-task-steps.mjs
+      - name: Check report links, shared conversation and private cases
+        env:
+          TEXT_BROWSER: ${{ matrix.browser }}
+        run: TEXT_PLAYWRIGHT_MODULE="$RUNNER_TEMP/text-browser/node_modules/playwright/index.mjs" node scripts/qa-report-task-integration.mjs
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: text-editing-${{ matrix.browser }}
+          path: |
+            /tmp/fenmeat-text-editing/
+            /tmp/fenmeat-pa-conversations/
+            /tmp/fenmeat-task-editing/
+            /tmp/fenmeat-task-speed/
+            /tmp/fenmeat-task-steps/
+            /tmp/fenmeat-report-tasks/
+          retention-days: 7

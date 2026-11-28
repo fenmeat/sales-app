@@ -1,0 +1,37 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {build} from 'esbuild';
+import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {timeInsert} from '../src/staff-api.js';
+
+test('admin corrects an open shift start with immutable history, unchanged breaks, concurrency and paid-week guards',async t=>{
+ const compiled=await build({entryPoints:[new URL('../src/worker.js',import.meta.url).pathname],bundle:true,format:'esm',platform:'browser',write:false});
+ const key='synthetic-open-shift-admin-'.repeat(3),mf=new Miniflare(convertV4MiniflareOptions({name:'open-correction',modules:true,script:compiled.outputFiles[0].text,compatibilityDate:'2026-09-30',d1Databases:{DB:'open-correction'},bindings:{APP_ENV:'test',APP_ACCESS_KEYS:JSON.stringify({alex:key})},outboundService:()=>{throw Error('No external traffic');}}));t.after(()=>mf.dispose());
+ const origin='https://staff.example',call=async(path,body,cookie='')=>{const r=await mf.dispatchFetch(origin+path,{method:body?'POST':'GET',headers:{Origin:origin,'Content-Type':'application/json',Cookie:cookie},body:body?JSON.stringify(body):undefined});return {status:r.status,data:await r.json(),headers:r.headers};};
+ const login=await call('/api/login',{username:'alex',key}),admin=login.headers.get('set-cookie').split(';')[0],db=await mf.getD1Database('DB');
+ const employee=crypto.randomUUID(),other=crypto.randomUUID(),people=[employee,other].map((id,i)=>({id,name:'Synthetic '+i,code:'OPEN'+i,active:true,start_date:'2026-11-16',schedules:[]}));
+ await db.prepare('INSERT INTO v2_staff_register VALUES(?,?,?,?,?,?)').bind(1,JSON.stringify({people,leave:[],ledger:[]}),'fixture','fixture',new Date().toISOString(),'{}').run();
+ const at=time=>'2026-11-27T'+time+':00.000Z',punch=(kind,time)=>({kind,at:at(time)});
+ const earlier={id:crypto.randomUUID(),employee_id:employee,punches:[punch('in','00:00'),punch('out','02:30')]};
+ const open={id:crypto.randomUUID(),employee_id:employee,punches:[punch('in','02:38'),punch('break_start','08:00')]};
+ const untouched={id:crypto.randomUUID(),employee_id:other,punches:[punch('in','02:39')]};
+ for(const [s,revision] of [[earlier,1],[open,2],[untouched,1]])await timeInsert(db,{id:crypto.randomUUID()},s,revision,'fixture','fixture',new Date().toISOString()).run();
+ const base={employee_id:employee,shift_id:open.id,revision:1,clock_revision:2,reason:'Owner confirms 05:00 start; employee still on shift'};
+ const save=body=>call('/api/staff/correction',{request_id:crypto.randomUUID(),...base,...body},admin);
+ assert.equal((await call('/api/staff/correction',{request_id:crypto.randomUUID(),...base,punches:[punch('in','03:00'),open.punches[1]]})).status,401);
+ assert.equal((await save({punches:[punch('in','02:00'),open.punches[1]]})).status,400,'open range must not overlap the earlier shift');
+ assert.equal((await save({punches:[punch('in','03:00'),punch('break_start','08:01')]})).status,400,'open correction cannot change a recorded break');
+ assert.equal((await save({punches:[punch('in','03:00')]})).status,400,'open correction cannot remove breaks');
+ assert.equal((await save({punches:[{kind:'in',at:'2026-11-26T03:00:00.000Z'},open.punches[1]]})).status,400,'open start stays on its recorded day');
+ const body={...base,request_id:crypto.randomUUID(),punches:[punch('in','03:00'),open.punches[1]]};
+ const saved=await call('/api/staff/correction',body,admin);assert.equal(saved.status,200,JSON.stringify(saved.data));assert.equal(saved.data.clock_revision,3);
+ assert.equal((await call('/api/staff/correction',body,admin)).data.replayed,true);
+ assert.equal((await save({punches:[punch('in','03:01'),open.punches[1]]})).status,409,'stale version cannot overwrite the correction');
+ const versions=(await db.prepare('SELECT payload,state,end_at FROM v2_staff_time WHERE shift_id=? ORDER BY revision').bind(open.id).all()).results;
+ assert.equal(versions.length,2);assert.deepEqual(JSON.parse(versions[0].payload),open);assert.equal(versions[1].state,'break');assert.equal(versions[1].end_at,null);
+ const corrected=JSON.parse(versions[1].payload);assert.deepEqual(corrected.punches,body.punches);assert.equal(corrected.correction.replaces_revision,2);assert.equal(corrected.correction.actor,'alex');
+ assert.equal((await db.prepare('SELECT COUNT(*) n FROM v2_staff_time WHERE employee_id=?').bind(other).first()).n,1);
+ assert.equal((await save({revision:2,clock_revision:3,shift_id:earlier.id,punches:[earlier.punches[0]]})).status,400,'closed shifts cannot be reopened');
+ await db.prepare('INSERT INTO v2_staff_payroll VALUES(?,?,?,?,?,?)').bind(1,'run:2026-11-27',JSON.stringify({individual_wages:true,status:'Draft',rows:[{employee_id:employee,wage_state:'Approved'}]}),'fixture','fixture',new Date().toISOString()).run();
+ assert.equal((await save({revision:2,clock_revision:3,punches:[punch('in','03:01'),open.punches[1]]})).status,409,'approved wages freeze the open shift too');
+});

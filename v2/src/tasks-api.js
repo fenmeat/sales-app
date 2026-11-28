@@ -1,0 +1,562 @@
+import {DUE_SCHEMA,dueIndexStatements,changePaFollowup,finishPaFollowup} from './pa-due-work.js';
+import {messageStatement,CONVERSATION_SCHEMA,newWorkStatements,migrationPlan,readTaskConversation,withoutTranscript} from './task-conversation.js';
+import {attachmentData,fileStatements,fileChunksSchema,originalFileBytes,downloadOnly} from './task-files.js';
+import {check,UserError,dateKey,today} from './domain.js';
+import {isAdmin,keys,hash} from './auth.js';
+import {isTaskManager,taskVisibility,taskReadScope,canSeeTask,canManageTask,fullTaskAccess,taskView,stepFileAccess} from './task-access.js';
+import {isInvoiceRep} from './invoice-auth.js';
+import {projectTask,taskType,syncRequired,stepReminder,standardSteps,supplierSteps} from './task-workflow.js';
+import {taskOwner} from './task-workflow.js';
+import {registerTaskText,changePaWork,unfinishedWork} from './task-pa-work.js';
+import {workflowAction,validateSteps,completeReminder} from './task-workflow-actions.js';
+import {MAIL_SCHEMA,mailAction,readTaskMail} from './tasks-mail.js';
+
+const paEvent = "action NOT IN ('reminder','followup_reminder','set_visibility')";
+// Drive the lookup from one head per task, including before SQLite has statistics.
+export const taskHeadJoin = 'v2_task_heads h CROSS JOIN v2_task_events e ON e.task_id=h.task_id AND e.revision=h.revision';
+
+export const TASK_SCHEMA=[
+ ...MAIL_SCHEMA,...CONVERSATION_SCHEMA,...DUE_SCHEMA,fileChunksSchema,
+ `CREATE TABLE IF NOT EXISTS v2_task_events (request_id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, task_id TEXT NOT NULL, revision INTEGER NOT NULL, action TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL, UNIQUE(task_id,revision))`,
+ `CREATE INDEX IF NOT EXISTS v2_tasks_latest ON v2_task_events(task_id,revision DESC)`,
+ // D1 batches this bootstrap with trigger installation. LIMIT 0 skips the
+ // historical scan on following cold starts. The event log is append-only.
+ `CREATE TABLE IF NOT EXISTS v2_task_heads(task_id TEXT PRIMARY KEY,revision INTEGER NOT NULL,pa_revision INTEGER)`,
+ `INSERT INTO v2_task_heads SELECT task_id,MAX(revision),MAX(CASE WHEN ${paEvent} THEN revision END)
+  FROM v2_task_events GROUP BY task_id LIMIT (CASE WHEN EXISTS(SELECT 1 FROM v2_task_heads) THEN 0 ELSE -1 END)`,
+ `CREATE TRIGGER IF NOT EXISTS v2_task_head_added AFTER INSERT ON v2_task_events BEGIN
+  INSERT INTO v2_task_heads VALUES(NEW.task_id,NEW.revision,CASE WHEN NEW.${paEvent} THEN NEW.revision END)
+  ON CONFLICT(task_id) DO UPDATE SET revision=MAX(revision,excluded.revision),
+  pa_revision=CASE WHEN pa_revision IS NULL OR excluded.pa_revision>pa_revision THEN excluded.pa_revision ELSE pa_revision END;
+ END`,
+ `CREATE TABLE IF NOT EXISTS v2_task_reminder_checkpoint(id INTEGER PRIMARY KEY CHECK(id=1), event_row INTEGER NOT NULL, period TEXT NOT NULL, checked_at TEXT NOT NULL, next_at TEXT)`,
+ `CREATE TABLE IF NOT EXISTS v2_task_po_links (parent_cycle_id TEXT PRIMARY KEY, task_id TEXT NOT NULL UNIQUE)`,
+ `CREATE TABLE IF NOT EXISTS v2_task_sync (task_id TEXT PRIMARY KEY, acknowledged_revision INTEGER NOT NULL DEFAULT 0, pa_task_id TEXT, source_url TEXT, synced_at TEXT, last_error TEXT)`,
+ `CREATE TABLE IF NOT EXISTS v2_task_notifications (id TEXT PRIMARY KEY, username TEXT NOT NULL, task_id TEXT NOT NULL, kind TEXT NOT NULL, created_at TEXT NOT NULL, read_at TEXT, push_sent_at TEXT, push_attempts INTEGER NOT NULL DEFAULT 0, next_attempt TEXT)`,
+ `CREATE INDEX IF NOT EXISTS v2_task_push_pending ON v2_task_notifications(created_at) WHERE push_sent_at IS NULL AND read_at IS NULL`,
+ `CREATE INDEX IF NOT EXISTS v2_task_notifications_user ON v2_task_notifications(username,created_at)`,
+ `CREATE TABLE IF NOT EXISTS v2_task_count_receipts (request_id TEXT PRIMARY KEY, supplier TEXT NOT NULL, count_date TEXT NOT NULL, material_ids TEXT NOT NULL, actor TEXT NOT NULL, saved_at TEXT NOT NULL)`,
+ `CREATE INDEX IF NOT EXISTS v2_task_count_lookup ON v2_task_count_receipts(supplier,count_date,saved_at DESC,request_id)`,
+ `CREATE TABLE IF NOT EXISTS v2_task_push_keys (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL)`,
+ `CREATE TABLE IF NOT EXISTS v2_task_push_subscriptions (endpoint_hash TEXT PRIMARY KEY, username TEXT NOT NULL, payload TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+ `CREATE TABLE IF NOT EXISTS v2_task_attachments (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, username TEXT NOT NULL, mime_type TEXT NOT NULL, filename TEXT NOT NULL, bytes BLOB NOT NULL, created_at TEXT NOT NULL)`
+];
+const taskSchemaReady=new WeakMap();
+export async function ensureTaskSchema(db){if(!taskSchemaReady.has(db))taskSchemaReady.set(db,db.batch(TASK_SCHEMA.map(s=>db.prepare(s))).catch(e=>{taskSchemaReady.delete(db);throw e;}));await taskSchemaReady.get(db);}
+// Phone registration uses the existing canonical rep IDs, independently of old keys.
+export const taskUsers=env=>[...Object.keys(keys(env)).filter(u=>!isInvoiceRep(u)),'tapiz','mosa'].sort();
+const ID=/^[a-zA-Z0-9-]{8,90}$/,PA_ID=/^TSK-\d{5,}$/;
+const statusSet=new Set(['Pending','Scheduled','Waiting','Complete','Cancelled']);
+const reminderFields=['reminder_mode','reminder_at'];
+const workflowFields=['task_type','repeat','pa_required'];
+const editable=['pa_does_work','visibility',...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','required_materials','po_number','po_revision','document_url','evidence_url','source_url','parent_cycle_id','pa_task_id','requires_evidence',...reminderFields];
+const selfEditable=['pa_does_work',...workflowFields,'title','details','assigned_to','due_date','review_date','priority','kind','supplier','document_url','evidence_url','requires_evidence',...reminderFields];
+export const managesOwnTask=(user,task)=>!(task.steps||[]).some(s=>s.assigned_to!==user.username)&&task.created_by===user.username&&task.assigned_to===user.username&&task.kind!=='po_dispatch';
+export const latestSQL=`SELECT e.*,h.pa_revision AS pa_revision,s.acknowledged_revision,s.pa_task_id AS synced_pa_task_id,s.source_url AS synced_source_url,s.synced_at,s.last_error FROM ${taskHeadJoin} LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`;
+const text=(value,max,required=false)=>{check(typeof value==='string'&&value.length<=max&&(!required||value.trim()),'Enter the required task details.');return value.trim();};
+const optionalText=(v,max)=>v===null||v===undefined?'':text(v,max);
+function safeURL(value){if(!value)return '';let u;try{u=new URL(value);}catch{throw new UserError('Enter a complete secure document link.');}check(u.protocol==='https:'&&!u.username&&!u.password&&u.href.length<=2000,'Use a secure document link.');return u.href;}
+export function decode(row){if(!row)return null;const raw=JSON.parse(row.payload);const task=projectTask({...raw,revision:row.revision,updated_at:row.saved_at,updated_by:row.actor,pa_task_id:row.synced_pa_task_id||raw.pa_task_id||''});return {...task,pa_sync:{acknowledged_revision:row.acknowledged_revision??0,status:!syncRequired(task)?(task.pa_work?.length?(unfinishedWork(task)?'work_pending':'work_answered'):'app_only'):(row.acknowledged_revision??0)>=(row.pa_revision??row.revision)?'synced':'pending',synced_at:row.synced_at??null,error:row.last_error??null}};}
+
+// Compare stable field/step identities; prior payloads remain the authoritative history.
+export function taskChanges(before,after){
+ const changes=[],fields=[...editable,'status','approval'];
+ const add=(field,a,b)=>{if(JSON.stringify(a??null)!==JSON.stringify(b??null))changes.push({field,before:a??null,after:b??null});};
+ for(const k of fields)add(k,before?.[k],after?.[k]);
+ const ids=new Set([...(before?.steps||[]),...(after?.steps||[])].map(s=>s.id));
+ for(const id of ids){const a=before?.steps?.find(s=>s.id===id),b=after?.steps?.find(s=>s.id===id);if(!a||!b)add('steps.'+id,a,b);else for(const k of ['description','assigned_to','due_date','status','required','dependencies','waiting_reason','notes','document_url','requires_evidence','reminder_mode','attachments','completion'])add('steps.'+id+'.'+k,a[k],b[k]);}
+ add('step_order',before?.steps?.map(s=>s.id),after?.steps?.map(s=>s.id));
+ return changes;
+}
+
+export async function getTask(db,id){check(ID.test(id),'Invalid task.');return decode(await db.prepare(latestSQL+' WHERE h.task_id=?').bind(id).first());}
+export {canSeeTask};
+export function currentTaskNotification(task,n,now=new Date()){
+ if(task)task=projectTask(task,new Date(now.getTime()+7200000).toISOString().slice(0,10));
+ if(!task||!canSeeTask({username:n.username},task))return false;
+ if(n.kind==='follow_up'){
+  const when=task.followup_reminders?.[n.username];
+  return openTask(task)&&canManageTask({username:n.username},task)&&!!when&&n.id==='followup-'+task.id+'-'+n.username+'-'+Math.floor(Date.parse(when)/1000)&&Date.parse(when)<=now.getTime();
+ }
+ if(n.kind==='update_requested')return openTask(task)&&task.feedback_request?.status==='pending'&&task.feedback_request.to===n.username&&n.id===task.feedback_request.id+'-'+n.username;
+ if(['step_due','step_overdue'].includes(n.kind))return !!task.steps?.some(step=>step.assigned_to===n.username&&stepReminder(task,step,now)?.id===n.id);
+ if(['assigned','due'].includes(n.kind)&&taskOwner(task)==='pa')return false;
+ if(n.kind!=='due')return true;
+ if(!openTask(task)||n.username!==task.assigned_to)return false;
+ const mode=task.reminder_mode??'daily';
+ if(mode==='off')return false;
+ const date=new Date(now.getTime()+7200000).toISOString().slice(0,10);
+ const id=mode==='once'?'reminder-once-'+task.id+'-'+Math.floor(Date.parse(task.reminder_at)/1000):'reminder-'+task.id+'-'+date;
+ const due=task.next_action_date||(task.status==='Waiting'?task.review_date:task.due_date||task.review_date);
+ return n.id===id&&(mode==='once'?Date.parse(task.reminder_at)<=now.getTime():!!due&&due<=date);
+}
+function visible(user,task){check(task&&canSeeTask(user,task),'Task not found.',404);return taskView(user,task);}
+export async function listTasks(env,user,query={}){
+ check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
+ const offset=Number(query.offset??0);check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
+ const access=taskReadScope(user,query.mine);
+ const conditions=[access.sql],params=[...access.params];
+ if(query.pending_sync){check(isAdmin(user.username),'Only admins can synchronise PA tasks.',403);conditions.push("COALESCE(s.acknowledged_revision,0)<h.pa_revision AND (COALESCE(NULLIF(json_extract(e.payload,'$.pa_task_id'),''),s.pa_task_id,NULLIF(json_extract(e.payload,'$.parent_cycle_id'),''),'')<>'' OR json_extract(e.payload,'$.pa_required')=1 OR (COALESCE(json_extract(e.payload,'$.task_type'),'') NOT IN ('workflow','reminder') AND json_extract(e.payload,'$.kind')<>'general'))");}
+ const where=conditions.length?' WHERE '+conditions.join(' AND '):'';
+ const result=await env.DB.prepare(latestSQL+where+' ORDER BY e.saved_at DESC,e.task_id LIMIT 101 OFFSET ?').bind(...params,offset).all();
+ const notifications=await env.DB.prepare(`SELECT n.id,n.username,n.task_id,n.kind,n.created_at,n.read_at,e.payload FROM v2_task_notifications n JOIN v2_task_events e ON e.task_id=n.task_id AND e.revision=(SELECT MAX(revision) FROM v2_task_events WHERE task_id=n.task_id) WHERE n.username=? ORDER BY n.created_at DESC LIMIT 100`).bind(user.username).all();
+ const register=isInvoiceRep(user.username)?null:await env.DB.prepare('SELECT payload FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();
+ const suppliers=register?[...new Set(JSON.parse(register.payload).materials.filter(m=>m.procure&&m.resale_available!==false).map(m=>m.supplier.trim().toLowerCase()))].sort():[];
+ return {username:user.username,admin:isAdmin(user.username),task_manager:isTaskManager(user.username),invoice_rep:isInvoiceRep(user.username),today:today(),users:isTaskManager(user.username)?taskUsers(env):[user.username],suppliers,tasks:result.results.slice(0,100).map(row=>taskView(user,decode(row))),next_offset:result.results.length>100?offset+100:null,notifications:notifications.results.filter(n=>currentTaskNotification(JSON.parse(n.payload),n)).map(({payload,username,...n})=>n)};
+}
+function validateReminder(task){
+ const t={...task,reminder_mode:task.reminder_mode??'daily'};
+ check(['daily','once','off'].includes(t.reminder_mode),'Choose a reminder option.');
+ if(t.reminder_mode==='once'){
+  check(typeof t.reminder_at==='string'&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(t.reminder_at)&&Number.isFinite(Date.parse(t.reminder_at))&&new Date(t.reminder_at).toISOString()===t.reminder_at,'Choose a valid reminder date and time.');
+ }else t.reminder_at='';
+ return t;
+}
+function validateTask(raw,env){
+ const t=validateReminder(raw);check(['operational','assigned','confidential','private'].includes(taskVisibility(t)),'Kies wie die taak mag sien.');t.task_type=t.task_type||taskType(t);check(['reminder','workflow','legacy'].includes(t.task_type),'Kies ’n taaksoort.');t.repeat=t.repeat||'none';check(['none','daily','weekly','monthly'].includes(t.repeat),'Kies ’n herhaling.');check(t.task_type==='reminder'||t.repeat==='none','Slegs herinneringe kan herhaal.');if(t.task_type==='reminder')check(!t.pa_task_id&&!t.parent_cycle_id&&t.kind==='general','Gekoppelde werk kan nie ’n gewone herinnering wees nie.');t.pa_required=t.task_type==='reminder'?false:!!t.pa_required;t.title=text(t.title,180,true);t.details=optionalText(t.details,5000);
+ if(t.pa_does_work!==undefined)check(typeof t.pa_does_work==='boolean'&&(!t.pa_does_work||t.task_type==='reminder'),'Gebruik PA se werk vir ’n gewone taak.');
+ check(taskUsers(env).includes(t.assigned_to),'Choose a current app user.');
+ check(['general','stocktake','po_dispatch'].includes(t.kind),'Choose a task type.');
+ check(['Critical','High','Normal','Low'].includes(t.priority),'Choose a priority.');
+ t.due_date=t.due_date?dateKey(t.due_date):'';t.review_date=t.review_date?dateKey(t.review_date):'';
+ check(t.due_date||t.review_date||t.task_type==='workflow','Set a due date or a review date.');
+ t.document_url=safeURL(t.document_url);t.evidence_url=safeURL(t.evidence_url);t.source_url=safeURL(t.source_url);
+ t.pa_task_id=optionalText(t.pa_task_id,40);t.parent_cycle_id=optionalText(t.parent_cycle_id,40);
+ check(!t.pa_task_id||PA_ID.test(t.pa_task_id),'Invalid PA task link.');check(!t.parent_cycle_id||PA_ID.test(t.parent_cycle_id),'Invalid parent cycle.');
+ t.requires_evidence=!!t.requires_evidence;t.supplier=optionalText(t.supplier,120).toLowerCase();
+ t.required_materials=t.required_materials??[];check(Array.isArray(t.required_materials)&&t.required_materials.length<=300&&t.required_materials.every(x=>typeof x==='string'&&/^[A-Z0-9_-]{1,40}$/.test(x)),'Invalid stocktake materials.');t.required_materials=[...new Set(t.required_materials)];
+ t.po_number=optionalText(t.po_number,30);t.po_revision=optionalText(t.po_revision,80);
+ if(t.kind==='po_dispatch'){check(/^PO-\d{3,6}(?:\/[A-Z])?$/.test(t.po_number)&&t.document_url&&t.po_revision&&t.parent_cycle_id,'A dispatch task needs its approved PO, document revision and existing PA cycle.');}
+ if(t.kind==='stocktake'){check(t.supplier&&t.due_date,'A stocktake needs a supplier and count date.');check(['alex','alinda','xavier','xalinda'].includes(t.assigned_to),'Choose a user with Stocktake access.');check(!t.requires_evidence,'A stocktake uses its complete saved count as evidence. Use a separate general task if an additional photo is needed.');}
+ return t;
+}
+function notification(db,requestId,username,task,kind,at){return db.prepare('INSERT INTO v2_task_notifications(id,username,task_id,kind,created_at) VALUES(?,?,?,?,?)').bind(requestId+'-'+username,username,task.id,kind,at);}
+export async function saveTask(env,user,b){
+ check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
+ check(b&&typeof b.request_id==='string'&&ID.test(b.request_id),'Die taak is nie gestoor nie: request_id ontbreek of is ongeldig. Gebruik 8–90 letters, syfers of koppeltekens en behou dieselfde request_id vir ’n identiese herhaling.');
+ // A new connector task has no database ID yet. Derive it from the owner and
+ // retry key, never a fresh random UUID, so an interrupted create is replayable.
+ if(user.via==='pa'&&(b.action??'create')==='create'&&(b.task_id===undefined||b.task_id===null||b.task_id===''))b={...b,task_id:'pa-'+await hash(JSON.stringify([user.username,b.request_id]))};
+ check(typeof b.task_id==='string'&&ID.test(b.task_id),'Die taak is nie gestoor nie: task_id ontbreek of is ongeldig. Lees die bestaande taak se id terug; gebruik 8–90 letters, syfers of koppeltekens. By ’n nuwe PA-taak kan task_id weggelaat word.');
+ check(Number.isSafeInteger(b.revision)&&b.revision>=0,'Read the task before saving.');
+ if(['report_contacts','queue_email','email_status','cancel_email'].includes(b.action))return mailAction(env,user,b,()=>getTask(env.DB,b.task_id));
+ const legacyFingerprint=await hash(JSON.stringify({...b,actor:user.username}));
+ const fingerprint=user.via==='pa'?await hash(JSON.stringify(canonicalTaskRequest({...b,actor:user.username}))):legacyFingerprint;
+ const prior=await env.DB.prepare('SELECT fingerprint,task_id,revision FROM v2_task_events WHERE request_id=?').bind(b.request_id).first();
+ if(prior){check([fingerprint,legacyFingerprint].includes(prior.fingerprint),'Hierdie request_id is reeds vir ander inhoud gebruik. Lees die taak terug; gebruik ’n nuwe request_id slegs vir ’n nuwe wysiging.',409);return {task:visible(user,await getTask(env.DB,prior.task_id)),replayed:true};}
+ const old=await getTask(env.DB,b.task_id),admin=isAdmin(user.username),at=new Date().toISOString();
+ if(old)visible(user,old);
+ else check((b.action??'create')==='create','Task not found.',404);
+ check((old?.revision??0)===b.revision,'This task changed. Reload before saving.',409);
+ check(env.TASK_WORKFLOWS_READ_ONLY!=='true'||!old||taskType(old)!=='workflow'||b.action==='restore_task_revision','Stapwysigings is tydelik gesluit vir onderhoud.',503);
+ const manager=isTaskManager(user.username),manage=old&&canManageTask(user,old);
+ let action=b.action??'create';
+ if(action==='complete'&&old?.dispatch_step_id&&old.task_type==='workflow'){
+  action='step_complete';b={...b,action,step_id:old.dispatch_step_id};
+ }
+ if(old&&!fullTaskAccess(user,old))check(['step_start','step_note','step_complete'].includes(action),'Jy kan net jou eie stap bywerk.',403);
+ if(b.data&&Object.hasOwn(b.data,'visibility')){
+  check(manager,'Slegs taakbestuurders kan sigbaarheid kies.',403);
+  if(!admin)check(b.data.visibility!=='confidential'&&(!old||b.data.visibility===taskVisibility(old)),'Net administrateurs kan hierdie taak se sigbaarheid verander.',403);
+ }
+ check(!old||taskVisibility(old)!=='private'||!b.data?.visibility||b.data.visibility==='private','Private PA-take bly privaat.',403);
+ if(b.data?.visibility==='private')check(user.username==='alex','Slegs Alex kan private take bestuur.',403);
+ let task=old?structuredClone(old):null,files=[],conversationStatements=[];
+ const appendFiles=['attach','update','note','respond','pa_request','pa_resume'].includes(action);
+ check(b.files===undefined||appendFiles||['create','pa_result','step_add','step_update','step_note'].includes(action),'Files cannot be added with this task action.');
+ if(action==='create'){
+  check(!old,'This task already exists.',409);
+  check(b.data&&Object.keys(b.data).every(k=>editable.includes(k)||['area','steps','require_final_approval'].includes(k)),'Unknown task field.');check(!b.data.area||b.data.area==='Fen Meat'||b.data.visibility==='private'&&user.username==='alex','Personal PA matters cannot be imported into FenMeat.');
+  if(!admin){check(manager||!b.data.assigned_to||b.data.assigned_to===user.username,'You can only create tasks for yourself.',403);check(Object.keys(b.data).every(k=>selfEditable.includes(k)||['area','steps','require_final_approval'].includes(k)||(manager&&k==='visibility'))&&['general','stocktake'].includes(b.data.kind??'general'),'Only admins can create linked PA or PO tasks.',403);}
+  task=validateTask({...(manager&&!admin&&b.data.assigned_to&&b.data.assigned_to!==user.username?{visibility:'assigned'}:{}),kind:'general',priority:'Normal',assigned_to:user.username,...b.data,id:b.task_id,area:b.data.visibility==='private'?'Private PA':'Fen Meat',status:'Pending',created_by:user.username,created_at:at,completion:null,waiting_reason:''},env);
+  const supplierPlan=user.via==='pa'&&task.kind==='po_dispatch'&&!b.data.steps;
+  if(supplierPlan){task.task_type='workflow';task.dispatch_step_id='dispatch';}
+  check(!b.data.steps||task.task_type==='workflow','Kies Taak met stappe.');
+  if(task.task_type==='workflow'){
+   const inputs=b.data.steps||(supplierPlan?supplierSteps(task):null)||[{id:'step-1',description:task.title,notes:task.details,assigned_to:task.assigned_to,due_date:task.due_date||task.review_date,status:'Pending',requires_evidence:task.requires_evidence}];
+   check(Array.isArray(inputs)&&inputs.length<=100,'Gebruik 1 tot 100 stappe.');
+   const steps=[];
+   for(const input of inputs){
+    const historical=admin&&user.via==='pa'&&task.kind==='general'&&input.status==='Complete'&&input.completion?.note?.trim()&&safeURL(input.completion?.recorded_source);
+    check(!input.waiver&&input.status!=='Waived'&&!input.attachments?.length&&input.status!=='Completed'&&(historical||(!input.completion&&input.status!=='Complete')),'Gee die oorspronklike bevestiging vir elke voltooide stap.');
+    if(historical)check(!input.completion.attachments?.length&&(!input.completion.at||(Number.isFinite(Date.parse(input.completion.at))&&Date.parse(input.completion.at)<=Date.now()+60000)),'Kontroleer die datum en bron van die bevestiging.');
+    check(manager||input.assigned_to===user.username,'Jy kan net eie stappe skep.',403);
+    check(input.files===undefined||Array.isArray(input.files)&&input.files.length<=12,'Kies hoogstens 12 stapdokumente.');
+    const added=[];for(const f of input.files||[])added.push(await attachmentData(f));files.push(...added);
+    const {files:ignored,...step}=input;steps.push({...step,status:step.status||'Pending',attachments:added.map(f=>f.id),completion:historical?{recorded_source:historical,note:text(input.completion.note,3000,true),...(input.completion.at?{at:input.completion.at}:{}),...(input.completion.by?{by:text(input.completion.by,80,true)}:{})}:null});
+   }
+   check(b.data.require_final_approval===undefined||typeof b.data.require_final_approval==='boolean','Kies of finale goedkeuring nodig is.');
+   task.require_final_approval=b.data.require_final_approval===true;
+   task.steps=validateSteps(steps,taskUsers(env));task.approval=null;
+   if(!task.require_final_approval&&task.steps.every(s=>s.required===false||s.status==='Complete')){task.status='Complete';task.historical_closure=true;}
+  }
+  if(task.kind==='stocktake'&&!task.required_materials.length){
+   const register=await env.DB.prepare('SELECT payload FROM v2_recipe_events ORDER BY revision DESC LIMIT 1').first();
+   const materials=register?JSON.parse(register.payload).materials:[];
+   task.required_materials=materials.filter(m=>m.supplier.trim().toLowerCase()===task.supplier&&m.procure&&m.resale_available!==false).map(m=>m.id);
+   check(task.required_materials.length,'No stocktake materials were found for this supplier.');
+  }
+  if(task.kind==='po_dispatch'){
+   const duplicate=await env.DB.prepare(latestSQL+" WHERE json_extract(e.payload,'$.parent_cycle_id')=? AND json_extract(e.payload,'$.kind')='po_dispatch' LIMIT 1").bind(task.parent_cycle_id).first();
+   check(!duplicate,'This PO cycle already has a dispatch task. Update its existing revision.',409);
+  }
+  check(b.files===undefined||(Array.isArray(b.files)&&b.files.length<=12),'Choose up to 12 different attachments.');
+  const references=[];for(const input of b.files??[]){const f=await attachmentData(input);files.push(f);references.push(f.id);}
+  check(new Set(files.map(f=>f.id)).size===files.length,'Choose up to 12 different attachments.');
+  // References belong to the instructions, never to completion evidence.
+  task.attachments=references;
+ }else{
+  check(old,'Task not found.',404);
+  if(action==='conversation_migrate'){
+   check(user.username==='alex'&&user.via==='pa','Net Alex se PA-koppeling kan die gesprek omskakel.',403);
+   check(typeof b.backup_reference==='string'&&b.backup_reference.trim(),'Bewaar eers die rugsteun.');
+   if(!task.conversation_version){const plan=await migrationPlan(env.DB,task,at);task=plan.task;conversationStatements=plan.statements;}
+  }else if(['pa_request','pa_claim','pa_result','pa_resume','pa_recover','pa_followup_claim','pa_followup_result'].includes(action)){
+   if(action==='pa_result'&&b.files){check(Array.isArray(b.files)&&b.files.length<=4,'Kies hoogstens vier verslaglêers.');for(const input of b.files)files.push(await attachmentData(input));}
+   if(action.startsWith('pa_followup_'))changePaFollowup(task,b,user,at);
+   else await changePaWork(task,b,user,env.DB,at,files,safeURL);
+   if(['pa_result','pa_followup_result'].includes(action)&&b.task_updates){
+    check(user.via==='pa'&&user.username==='alex'&&Array.isArray(b.task_updates)&&b.task_updates.length<=20,'Ongeldige taakbywerking.');
+    for(let update of b.task_updates){
+     check(update&&['summary','step_add','step_update','step_complete'].includes(update.action),'Gebruik ’n veilige taakbywerking.');
+     if(update.action==='summary'){
+      check(update.data&&Object.keys(update.data).every(k=>['title','details'].includes(k)),'Werk net die taakopsomming hier by.');
+      task=validateTask({...task,...update.data},env);
+     }else{
+      const previous=task.steps?.find(s=>s.id===update.step_id);
+      check(!previous||previous.status!=='Complete','Behou die reeds voltooide stap.');
+      if(previous&&update.data){check(!(previous.requires_evidence&&update.data.requires_evidence===false)&&!(previous.required!==false&&update.data.required===false)&&(!update.data.dependencies||(previous.dependencies||[]).every(id=>update.data.dependencies.includes(id))),'Behou die bestaande bewys- en stapvereistes.');}
+      if(update.action==='step_complete'){check(update.confirmation?.trim()&&update.note?.trim(),'Gee die bevestigde afhandeling en bron.');update={...update,note:update.note+' — Bevestiging: '+update.confirmation};}
+      task=await workflowAction({task,b:update,user,admin,manage,users:taskUsers(env),at,db:env.DB});
+     }
+    }
+   }
+  }else if(action==='standardize_task'){
+   check(admin,'Net administrateurs kan bestaande take omskakel.',403);
+   check(!task.step_format&&taskType(task)!=='workflow','Hierdie taak gebruik reeds die stapformaat.',409);
+   if(b.native_history){
+    check(!b.steps&&(!task.repeat||task.repeat==='none')&&Array.isArray(b.native_history)&&b.native_history.length<=20,'Hou herhalende werk by sy eie datum.');
+    check(b.native_history.every(s=>s.id!=='current'&&s.status==='Complete'&&s.completion?.note&&!s.attachments?.length&&!s.completion?.attachments?.length),'Gebruik bevestigde geskiedenis van hierdie taak.');
+    task.native_history=validateSteps(b.native_history,taskUsers(env));
+   }
+   if(b.review){
+    check((task.kind==='stocktake'&&b.review.assigned_to==='pa')||(taskType(task)==='reminder'&&[task.assigned_to,'pa','alinda','alex'].includes(b.review.assigned_to)),'Behou die oorspronklike telpersoon.');
+    task.native_review={assigned_to:b.review.assigned_to,description:text(b.review.description,1000,true),due_date:dateKey(b.review.due_date)};
+   }
+   if(b.steps){
+    check(Array.isArray(b.steps)&&b.steps.length>0,'Kies die stappe.');
+    check(task.kind!=='stocktake'&&taskType(task)!=='reminder','Behou die telling of herhalende herinnering se eie proses.');
+    check(b.steps.every(s=>!s.attachments?.length&&!s.completion?.attachments?.length&&!s.waiver),'Behou bestaande dokumente op die oorspronklike taak.');
+    check(b.steps.filter(s=>s.status==='Complete').every(s=>s.completion?.note?.trim()),'Elke oorgedraagde voltooiing benodig ’n bron.');
+    task.steps=validateSteps(b.steps,taskUsers(env));
+    task.legacy_completion=task.completion;
+    task.historical_closure=task.status==='Complete'&&task.steps.every(s=>s.status==='Complete');
+    const done=task.steps.every(s=>s.status==='Complete');
+    check(!done||task.status==='Complete','Behou die bestaande finale goedkeuring.');
+    task.task_type='workflow';
+    if(!done&&task.status!=='Cancelled'){task.status='Pending';task.completion=null;}
+   }
+   task.last_reason=text(b.note,2000,true);
+  }else if(action==='set_visibility'){
+   check(admin,'Slegs administrateurs kan taaktoegang verander.',403);
+   check(['operational','assigned','confidential','private'].includes(b.data?.visibility),'Kies wie die taak mag sien.');
+   task.visibility=b.data.visibility;task.last_reason=text(b.note,2000,true);
+  }else if(action==='restore_task_revision'){
+   check(admin,'Only admins can restore task history.',403);check(Number.isSafeInteger(b.restore_revision)&&b.restore_revision>0&&b.restore_revision<old.revision,'Choose an earlier saved revision.');text(b.note,2000,true);
+   const row=await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? AND revision=?').bind(old.id,b.restore_revision).first();check(row,'Earlier task not found.',404);const restored=JSON.parse(row.payload);
+   check(restored.id===old.id&&restored.parent_cycle_id===old.parent_cycle_id&&(!restored.pa_task_id||restored.pa_task_id===old.pa_task_id),'Preserve the task and PA identity.');task={...restored,pa_task_id:old.pa_task_id,last_reason:b.note,restored_from:b.restore_revision};
+  }else if(['start_workflow','step_add','step_update','step_complete','step_reopen','step_waive','step_start','step_note','step_delete','step_reorder','approve_workflow','status_override'].includes(action)){task=await workflowAction({task,b,user,admin,manage,users:taskUsers(env),at,db:env.DB});
+  }else if(action==='update'){
+   check(manage||managesOwnTask(user,old),'Only admins can change tasks assigned by someone else. You can change your reminder.',403);check(b.data&&Object.keys(b.data).every(k=>(admin?editable:selfEditable).includes(k)||(manage&&k==='visibility')),'Unknown task field.');
+   if(!manage)check(!Object.hasOwn(b.data,'assigned_to')||b.data.assigned_to===user.username,'You can only keep tasks assigned to yourself.',403);
+   check(manage||!['Complete','Cancelled'].includes(old.status),'Reopen this task before changing its instructions.');
+   const fields={...b.data};
+   if(old.task_type==='reminder'&&old.review_date===old.due_date&&fields.due_date&&fields.due_date!==old.due_date&&(!Object.hasOwn(fields,'review_date')||fields.review_date===old.review_date))fields.review_date=fields.due_date;
+   task=validateTask({...old,...fields},env);
+   check(task.task_type===old.task_type&&task.kind===old.kind&&task.parent_cycle_id===old.parent_cycle_id&&task.pa_task_id===old.pa_task_id,'Keep the existing task type and PA identity.');
+  }else if(action==='attach'){
+   // Reference documents can be added after completion without reopening work
+   // or replacing the evidence that was recorded when it was completed.
+   check(Array.isArray(b.files)&&b.files.length>0,'Kies eers ’n dokument of skandeer ’n bladsy.');
+   task.last_update={by:user.username,at,kind:'attachment',text:'Dokumente bygevoeg.'};
+  }else if(action==='reminder'){
+   check(openTask(old),'Reopen this task before changing its reminder.');
+   check(b.data&&Object.keys(b.data).length&&Object.keys(b.data).every(k=>reminderFields.includes(k)),'Only reminder fields can be changed here.');
+   task=validateReminder({...old,...b.data});
+  }else if(action==='followup_reminder'){
+   check(manage,'Only task managers can follow up another person’s task.',403);
+   check(openTask(old),'Reopen this task before setting a follow-up.');
+   check(b.data&&Object.keys(b.data).length===1&&Object.hasOwn(b.data,'reminder_at')&&typeof b.data.reminder_at==='string','Choose your follow-up time.');
+   const when=validateReminder({reminder_mode:b.data.reminder_at?'once':'off',reminder_at:b.data.reminder_at}).reminder_at;
+   check(!when||Date.parse(when)>Date.parse(at),'Choose a reminder time in the future.');
+   task.followup_reminders={...old.followup_reminders};
+   if(when)task.followup_reminders[user.username]=when;else delete task.followup_reminders[user.username];
+  }else if(action==='complete'){
+   check(taskType(old)!=='workflow','Merk die individuele stappe klaar.');
+   check(openTask(old),'This task is already closed.');
+   const note=optionalText(b.note,2000),proof_url=safeURL(b.proof_url||task.evidence_url),attachments=Array.isArray(b.attachments)?b.attachments:[];
+   check(attachments.length<=12&&new Set(attachments).size===attachments.length&&attachments.every(x=>typeof x==='string'&&ID.test(x)),'Choose up to 12 different attachments.');
+   check(attachments.every(id=>!task.attachments?.includes(id)),'Add completion evidence; the task instruction photos are not completion evidence.');
+   for(const id of attachments){const file=await env.DB.prepare('SELECT task_id FROM v2_task_attachments WHERE id=?').bind(id).first();check(file?.task_id===task.id,'An attachment belongs to another task.');}
+   check(!task.requires_evidence||proof_url||attachments.length,'Attach the required completion evidence.');
+   const completion={by:user.username,at,note,proof_url,attachments};
+   if(task.kind==='po_dispatch'){
+    check(admin,'An admin must confirm PO sending.',403);check(b.po_revision===task.po_revision,'The approved PO changed. Open the current document first.',409);
+    check(['Email','WhatsApp','Other'].includes(b.channel),'Choose how you sent the PO.');
+    check(typeof b.sent_at==='string'&&Number.isFinite(Date.parse(b.sent_at))&&Date.parse(b.sent_at)<=Date.now()+60000,'Enter the actual sending time.');
+    completion.sent_at=new Date(b.sent_at).toISOString();completion.channel=b.channel;completion.po_revision=task.po_revision;completion.owner_confirmation=true;
+   }
+   if(task.kind==='stocktake'){
+    check(ID.test(b.stocktake_request_id??''),'Save the supplier count before completing this task.');
+    const event=await env.DB.prepare('SELECT r.*,e.revision FROM v2_task_count_receipts r JOIN v2_recipe_events e ON e.request_id=r.request_id WHERE r.request_id=?').bind(b.stocktake_request_id).first();
+    check(event&&event.actor===task.assigned_to&&event.saved_at>=task.created_at,'Use the assigned person’s saved count for this task.');
+    check(event.supplier===task.supplier&&event.count_date===task.due_date,'The count must match this supplier and requested count date.');
+    const counted=JSON.parse(event.material_ids);
+    check(task.required_materials.length&&task.required_materials.every(id=>counted.includes(id)),'Save all requested material counts together before completing this task.');
+    completion.stocktake={request_id:event.request_id,revision:event.revision,date:task.due_date,supplier:task.supplier};
+   }
+   task.status='Complete';task.completion=completion;task.waiting_reason='';task=completeReminder(task,at);
+   if(task.feedback_request?.status==='pending')task.feedback_request={...task.feedback_request,status:'answered',answered_at:at,answer:'complete',note};
+  }else if(action==='request_update'){
+   check(manage&&old.assigned_to!==user.username,'An admin can request an update from another task owner.',403);
+   check(openTask(old),'This task is already closed.');
+   check(old.feedback_request?.status!=='pending','An update has already been requested. Wait for the reply.',409);
+   task.feedback_request={id:b.request_id,by:user.username,to:old.assigned_to,at,status:'pending',question:text(b.note,1000,true)};
+  }else if(action==='respond'||action==='note'){
+   check(openTask(old),'Reopen this task before adding an update.');
+   if(action==='respond'){
+    check(old.feedback_request?.status==='pending'&&old.feedback_request.to===user.username,'There is no current update request for you.',409);
+    check(['in_progress','blocked'].includes(b.response),'Choose a response.');
+    if(b.response==='blocked'){task.waiting_reason=text(b.note,2000,true);task.review_date=dateKey(b.review_date);task.status='Waiting';}
+    task.feedback_request={...old.feedback_request,status:'answered',answered_at:at,answer:b.response,note:optionalText(b.note,2000)};
+   }
+   task.last_update={by:user.username,at,kind:action==='respond'?b.response:'note',text:action==='respond'&&b.response==='in_progress'?(optionalText(b.note,2000)||'Work is in progress.'):text(b.note,2000,true)};
+  }else if(action==='undo_complete'){
+   check(old.kind==='general'&&old.status==='Complete'&&old.completion?.by===user.username,'Only your own recent general-task completion can be undone.',403);
+   const event=await env.DB.prepare('SELECT action,payload FROM v2_task_events WHERE task_id=? AND revision=?').bind(old.id,old.revision).first();
+   check(event?.action==='complete'&&Date.parse(at)-Date.parse(old.completion.at)<=300000,'This completion can no longer be undone. Ask an admin to reopen it.',409);
+   const before=await env.DB.prepare('SELECT payload FROM v2_task_events WHERE task_id=? AND revision=?').bind(old.id,old.revision-1).first();
+   check(before,'The earlier task could not be found.',409);task=JSON.parse(before.payload);task.last_update={by:user.username,at,kind:'undo_complete',text:'Completion undone.'};
+  }else if(action==='wait'){
+   check(taskType(task)!=='workflow','Kies die stap wat op iemand wag.');
+   check(!['Complete','Cancelled'].includes(task.status),'Reopen this task first.');task.waiting_reason=text(b.note,2000,true);task.review_date=dateKey(b.review_date);task.status='Waiting';
+  }else if(action==='reopen'||action==='cancel'){
+   check(manage||managesOwnTask(user,old),'Only admins can reopen or cancel tasks assigned by someone else.',403);text(b.note,2000,true);task.status=action==='reopen'?'Pending':'Cancelled';task.last_reason=b.note;task.completion=null;
+   if(taskType(task)==='workflow')task.approval=null;
+  }else throw new UserError('Unsupported task action.');
+ }
+ if(['step_add','step_update','step_note'].includes(action)){
+  check(b.files===undefined||Array.isArray(b.files)&&b.files.length<=12,'Kies hoogstens 12 stapdokumente.');
+  const step=task.steps.find(s=>s.id===b.step_id);const added=[];
+  for(const input of b.files||[])added.push(await attachmentData(input));files.push(...added);
+  step.attachments=[...(step.attachments||[]),...added.map(f=>f.id)];check(step.attachments.length<=120&&new Set(step.attachments).size===step.attachments.length,'Hierdie stap het reeds die dokument of te veel dokumente.');
+ }
+ check(new Set(files.map(f=>f.id)).size===files.length,'Kies verskillende dokumente.');
+ check(files.reduce((n,f)=>n+f.bytes.length,0)<=6000000,'Die dokumente saam mag hoogstens 6 MB wees.');
+ if(appendFiles&&b.files!==undefined){
+  check(Array.isArray(b.files)&&b.files.length<=12,'Choose up to 12 different attachments.');
+  for(const input of b.files)files.push(await attachmentData(input));
+  check(new Set(files.map(f=>f.id)).size===files.length,'Choose up to 12 different attachments.');
+  const ids=[...(task.attachments||[]),...files.map(f=>f.id)];
+  check(new Set(ids).size===ids.length,'Hierdie dokument is reeds by die taak gevoeg.',409);
+  check(ids.length<=120,'Hierdie taak het reeds baie dokumente. Voeg ’n dokumentskakel by.');
+  task.attachments=ids;
+  if(['attach','note','respond'].includes(action))task.last_update.attachments=files.map(f=>f.id);
+ }
+ if(['restore_task_revision','undo_complete'].includes(action)&&old?.pa_work)task.pa_work=old.pa_work;
+ if(action==='note'&&b.completion_scope==='part'){
+  check(task.kind==='general'&&task.task_type!=='workflow'&&openTask(task),'Gebruik die toepaslike taakstap.');
+  check(user.username===task.assigned_to,'Bevestig net jou eie aandeel.',403);
+  task.part_confirmation={by:user.username,at,note:text(b.note,2000,true),proof_url:safeURL(b.proof_url),attachments:task.last_update?.attachments||[]};
+  await changePaWork(task,{action:'pa_request',request_id:b.request_id,note:'My aandeel is klaar: '+task.part_confirmation.note+'. Gaan na wie die volgende stap doen.'},user,env.DB,at,files,safeURL);
+ }
+ if(task.pa_does_work&&(action==='create'||action==='update'&&!old?.pa_does_work))
+  await changePaWork(task,{action:'pa_request',request_id:b.request_id,note:task.details||task.title},user,env.DB,at,files,safeURL);
+ if(['create','note','respond'].includes(action)&&user.via!=='pa')registerTaskText(task,{...b,action},user,at);
+ if(old?.assigned_to!==task.assigned_to&&task.feedback_request?.status==='pending')task.feedback_request={...task.feedback_request,status:'cancelled',cancelled_at:at};
+ if(action==='create'||action==='standardize_task')task.step_format=1;
+ if(task.task_type!=='legacy')task=projectTask(task);
+ check(!(task.status==='Complete'||action==='complete')||!unfinishedWork(task),'Handel eers die oop PA-opdrag af.');
+ check(statusSet.has(task.status),'Invalid task status.');
+ if(task.reminder_mode==='once'&&(!old||old.reminder_mode!=='once'||old.reminder_at!==task.reminder_at))check(Date.parse(task.reminder_at)>Date.parse(at),'Choose a reminder time in the future.');
+ for(const key of ['revision','updated_at','updated_by','pa_sync','progress','next_action','next_action_date','next_assigned_to','ready_for_approval'])delete task[key];
+ if(task.task_type==='workflow')delete task.native_step;
+ if(task.step_format&&task.task_type!=='workflow'){
+  if(task.native_review&&action==='update'){
+   if(old.assigned_to!==task.assigned_to||old.details!==task.details)delete task.native_review;
+   else if(old.review_date!==task.review_date)task.native_review={...task.native_review,due_date:task.review_date||task.due_date};
+  }
+  if(action==='pa_result'&&b.next_action&&task.native_review)task.native_review={...task.native_review,description:text(b.next_action,1000,true)};
+  const step=standardSteps(task).at(-1);
+  task.native_step={id:step.id,description:step.description,assigned_to:step.assigned_to,status:step.status,due_date:step.due_date};
+ }
+ if(task.steps)task.steps=task.steps.map(({blocked,effective_status,overdue,...step})=>step);
+ if(old&&['update','step_add','step_update','step_delete','step_reorder','step_reopen','step_waive','step_start','step_note','approve_workflow','start_workflow','restore_task_revision','status_override','reminder','followup_reminder'].includes(action)){
+  const reason=optionalText(b.note,2000),changes=taskChanges(old,task);
+  const reduced=old.requires_evidence&&!task.requires_evidence||(old.steps||[]).some(s=>{const n=task.steps?.find(n=>n.id===s.id);return n&&(s.requires_evidence&&!n.requires_evidence||s.required!==false&&n.required===false||(s.dependencies||[]).some(id=>!n.dependencies?.includes(id)));});
+  check(!reduced||reason,'Sê waarom die bewys- of stapvereiste verander.');
+  check(!(['Complete','Cancelled'].includes(old.status)&&['update','step_add','step_update'].includes(action))||reason,'Gee ’n rede wanneer jy ’n afgehandelde taak korrigeer.');
+  task.last_edit={by:user.username,at,reason,previous_revision:old.revision,changes};
+  task.last_reason=reason;
+ }
+ if(action==='set_visibility')task.last_edit={by:user.username,at,reason:task.last_reason,previous_revision:old.revision,changes:taskChanges(old,task)};
+ // Validate the resulting state too: a historical restore has no data.visibility.
+ check(!old||taskVisibility(old)!=='private'||taskVisibility(task)==='private','Private PA-take bly privaat.',403);
+ if(taskVisibility(task)==='confidential')check(isAdmin(task.assigned_to)&&(task.steps||[]).every(s=>s.assigned_to==='pa'||isAdmin(s.assigned_to)),'Delegeer vertroulike werk net aan Alex of Alinda.');
+ if(taskVisibility(task)==='private')check(user.username==='alex'&&task.assigned_to==='alex'&&(task.steps||[]).every(s=>['alex','pa'].includes(s.assigned_to)),'Private PA-werk bly net by Alex en PA.',403);
+ if(action==='pa_followup_result')finishPaFollowup(task,b);
+ const revision=b.revision+1;
+ const statements=[env.DB.prepare('INSERT INTO v2_task_events(request_id,fingerprint,task_id,revision,action,payload,actor,saved_at) VALUES(?,?,?,?,?,?,?,?)').bind(b.request_id,fingerprint,task.id,revision,action,JSON.stringify(task),user.username,at)];
+ statements.push(...conversationStatements,...newWorkStatements(env.DB,old,task,files));
+ statements.push(...dueIndexStatements(env.DB,task,revision));
+ if(action==='pa_followup_result'){
+  const f=task.pa_followups[b.step_id];
+  statements.push(env.DB.prepare('INSERT INTO v2_pa_followup_events VALUES(?,?,?,?)').bind(b.request_id,task.id,at,JSON.stringify({...f,step_id:b.step_id})));
+  statements.push(messageStatement(env.DB,task.id,{id:'followup-'+b.request_id,role:'pa',actor:'pa',at,text:f.result,next_action:f.next_action,followup:{step_id:b.step_id,outcome:f.state,checked_at:f.checked_at,attempted:f.attempted,sources:f.sources,next_owner:f.next_owner,next_check_at:f.next_check_at,reason:f.reason,needed:f.needed}}));
+  if(['approval','blocked'].includes(f.state)&&f.next_owner!=='pa'&&canSeeTask({username:f.next_owner},task))statements.push(notification(env.DB,b.request_id,f.next_owner,task,'pa_action',at));
+ }
+ statements.push(...files.flatMap(file=>fileStatements(env.DB,task.id,user.username,at,file)));
+ if(action==='create'&&task.kind==='po_dispatch')statements.push(env.DB.prepare('INSERT INTO v2_task_po_links VALUES(?,?)').bind(task.parent_cycle_id,task.id));
+ if(action==='create'||old?.assigned_to!==task.assigned_to)statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'assigned',at));
+ else if(['complete','wait'].includes(action))statements.push(notification(env.DB,b.request_id,task.created_by,task,action==='complete'?'completed':'waiting',at));
+ else if(['update','reopen','cancel','undo_complete'].includes(action))statements.push(notification(env.DB,b.request_id,task.assigned_to,task,action,at));
+ const stepNotices=new Map(),beforeStep=old?.steps?.find(s=>s.id===b.step_id),afterStep=task.steps?.find(s=>s.id===b.step_id);
+ if(action==='create'&&task.task_type==='workflow')for(const step of task.steps)if(step.assigned_to!==task.assigned_to)stepNotices.set(step.assigned_to,'step_assigned');
+ if(['step_add','step_update','start_workflow','pa_result','pa_followup_result'].includes(action))for(const step of task.steps||[])if(!old?.steps?.some(s=>s.id===step.id&&s.assigned_to===step.assigned_to))stepNotices.set(step.assigned_to,'step_assigned');
+ if(action.startsWith('step_')){
+  stepNotices.set(task.assigned_to,action==='step_complete'?'step_completed':'step_update');
+  if(afterStep&&action!=='step_complete'&&afterStep.assigned_to!==beforeStep?.assigned_to)stepNotices.set(afterStep.assigned_to,'step_assigned');
+ }
+ if(action==='approve_workflow'&&task.created_by!==user.username)stepNotices.set(task.created_by,'completed');
+ for(const [u,kind] of stepNotices)if(u!==user.username)statements.push(notification(env.DB,b.request_id+'-step',u,task,kind,at));
+ if(action==='pa_result'){
+  const job=task.pa_work.find(j=>j.id===b.work_id);
+  for(const u of new Set([job.actor,task.assigned_to]))if(canSeeTask({username:u},task))
+    statements.push(notification(env.DB,b.request_id,u,task,b.status==='answered'?'pa_result':'pa_action',at));
+ }
+ if(action==='request_update')statements.push(notification(env.DB,b.request_id,task.assigned_to,task,'update_requested',at));
+ const recipients=new Set();
+ if(['respond','note'].includes(action))recipients.add(task.created_by);
+ if(['respond','note','complete','undo_complete'].includes(action)&&old?.feedback_request)recipients.add(old.feedback_request.by);
+ for(const recipient of recipients)if(recipient!==user.username&&!(action==='complete'&&recipient===task.created_by)&&canSeeTask({username:recipient},task))statements.push(notification(env.DB,b.request_id,recipient,task,'response',at));
+ try{await env.DB.batch(statements);}catch{
+  // Concurrent identical retries may reach the unique constraint together.
+  const saved=await env.DB.prepare('SELECT fingerprint,task_id FROM v2_task_events WHERE request_id=?').bind(b.request_id).first();
+  if(saved&&[fingerprint,legacyFingerprint].includes(saved.fingerprint))return {task:visible(user,await getTask(env.DB,saved.task_id)),replayed:true};
+  throw new UserError('This task changed while saving. Reload; your previous work is safe.',409);
+ }
+ return {task:taskView(user,await getTask(env.DB,task.id)),replayed:false};
+}
+export async function acknowledgeTask(env,user,b){
+ check(isAdmin(user.username),'Only admins can synchronise PA.',403);
+ const t=await getTask(env.DB,b.task_id);check(t&&fullTaskAccess(user,t),'Task not found.',404);check(t&&syncRequired(t),'Hierdie herinnering bly net in die app.');check(t&&b.revision===t.revision,'Read the current task before confirming its PA update.',409);
+ check(PA_ID.test(b.pa_task_id??''),'Provide the existing PA task ID.');const source=safeURL(b.source_url);check(source.startsWith('https://docs.google.com/spreadsheets/'),'Provide the verified PA register row.');
+ check(!t.pa_task_id||t.pa_task_id===b.pa_task_id,'Do not replace an existing PA task identity.');
+ check(!t.parent_cycle_id||t.parent_cycle_id===b.pa_task_id,'A PO step must remain linked to its existing cycle.');
+ await env.DB.prepare('INSERT INTO v2_task_sync(task_id,acknowledged_revision,pa_task_id,source_url,synced_at,last_error) VALUES(?,?,?,?,?,NULL) ON CONFLICT(task_id) DO UPDATE SET acknowledged_revision=MAX(acknowledged_revision,excluded.acknowledged_revision),pa_task_id=excluded.pa_task_id,source_url=excluded.source_url,synced_at=excluded.synced_at,last_error=NULL').bind(t.id,b.revision,b.pa_task_id,source,new Date().toISOString()).run();
+ return {task:await getTask(env.DB,t.id)};
+}
+export async function completeCountTasks(env,user,count){
+ const rows=await env.DB.prepare(latestSQL+" WHERE json_extract(e.payload,'$.kind')='stocktake' AND json_extract(e.payload,'$.status') IN ('Pending','Waiting') AND json_extract(e.payload,'$.assigned_to')=?").bind(user.username).all();
+ const completed=[];
+ for(const row of rows.results){const task=decode(row);if(task.supplier!==count.supplier.toLowerCase()||task.due_date!==count.date)continue;
+  try{const result=await saveTask(env,user,{task_id:task.id,revision:task.revision,request_id:await hash('count-task:'+task.id+':'+count.request_id),action:'complete',stocktake_request_id:count.request_id,note:'Completed from the saved supplier count.'});completed.push(result.task.id);}catch(e){if(!(e instanceof UserError))throw e;}
+ }
+ return completed;
+}
+export async function tasksApi({request,url,env,user,bodyOf}){
+ const path=url.pathname;
+ check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
+ if(request.method==='GET'&&['/api/tasks/workspace','/api/tasks/options','/api/tasks/inbox'].includes(path)){
+  const {readTaskWorkspace,taskOptions,taskInbox}=await import('./task-workspace.js');
+  if(path==='/api/tasks/options')return taskOptions(env,user);
+  if(path==='/api/tasks/inbox')return taskInbox(env,user);
+  const r=await readTaskWorkspace(env,user,Object.fromEntries(url.searchParams));
+  if(request.headers.get('If-None-Match')===r.etag)return new Response(null,{status:304,headers:{ETag:r.etag,'Cache-Control':'private, no-store',Vary:'Cookie, Authorization'}});
+  return Response.json(r,{headers:{ETag:r.etag,'Cache-Control':'private, no-store',Vary:'Cookie, Authorization'}});
+ }
+ if(path==='/api/tasks/receipt'&&request.method==='GET'){
+  const id=url.searchParams.get('request_id');check(ID.test(id??''),'Invalid save identifier.');
+  const row=await env.DB.prepare('SELECT task_id FROM v2_task_events WHERE request_id=? AND actor=?').bind(id,user.username).first();
+  return {saved:!!row&&row.task_id===url.searchParams.get('task_id')&&canSeeTask(user,await getTask(env.DB,row.task_id))};
+ }
+ if(path==='/api/tasks/emails'&&request.method==='GET')return readTaskMail(env,user);
+ if(path==='/api/tasks/conversation'&&request.method==='GET')return readTaskConversation(env,user,await getTask(env.DB,url.searchParams.get('id')),Object.fromEntries(url.searchParams));
+ if(path==='/api/tasks'&&request.method==='GET'&&url.searchParams.has('id')){const task=visible(user,await getTask(env.DB,url.searchParams.get('id')));return {task:url.searchParams.get('brief')==='1'?withoutTranscript(task):task};}
+ if(path==='/api/tasks'&&request.method==='GET')return listTasks(env,user,{offset:url.searchParams.get('offset')??0,mine:url.searchParams.get('mine')==='1'});
+ if(path==='/api/tasks/file'&&request.method==='GET'){
+  const id=url.searchParams.get('id');check(ID.test(id??''),'Invalid attachment.');
+  const file=await env.DB.prepare('SELECT id,task_id,mime_type,filename,hex(bytes) encoded FROM v2_task_attachments WHERE id=?').bind(id).first();check(file,'Attachment not found.',404);const task=taskView(user,await getTask(env.DB,file.task_id));check(task&&(!task.step_only||stepFileAccess(user,task,id)),'Attachment not found.',404);
+  return new Response(await originalFileBytes(env.DB,file),{headers:{'Content-Type':file.mime_type,'Content-Disposition':(downloadOnly(file.mime_type)?'attachment':'inline')+'; filename="'+file.filename+'"','Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'}});
+ }
+ if(path==='/api/tasks/audit'&&request.method==='GET'){
+  const task=visible(user,await getTask(env.DB,url.searchParams.get('id')??''));
+  const rows=await env.DB.prepare('SELECT revision,action,actor,saved_at,payload FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 101').bind(task.id).all();return {task,history:rows.results.slice(0,100).map(({payload,...r},i)=>{const historical=JSON.parse(payload),saved=taskView(user,historical),prior=rows.results[i+1];if(!saved)return null;
+   if(task.step_only||saved.step_only){
+    const steps=(saved.steps||[]).filter(s=>s.assigned_to===user.username&&task.steps?.some(n=>n.id===s.id&&n.assigned_to===user.username));
+    if(!steps.length)return null;
+    return {...r,task:{steps},changes:[],reason:''};
+   }
+   const previous=prior&&taskView(user,JSON.parse(prior.payload));
+   return {...r,task:saved,changes:previous&&!previous.step_only?taskChanges(previous,saved):[],reason:saved.last_edit?.previous_revision===r.revision-1?saved.last_edit.reason:saved.last_reason||''};}).filter(Boolean)};
+ }
+ check(request.method==='POST','Method not allowed.',405);const b=await bodyOf(request);
+ if(path==='/api/tasks/check-count'){
+  const task=visible(user,await getTask(env.DB,b.task_id));check(!task.step_only&&task.kind==='stocktake'&&openTask(task),'Choose an open stocktake.');
+  const receipts=await env.DB.prepare('SELECT request_id FROM v2_task_count_receipts WHERE actor=? AND supplier=? AND count_date=? AND saved_at>=? ORDER BY saved_at DESC LIMIT 5').bind(task.assigned_to,task.supplier,task.due_date,task.created_at).all();
+  let last;for(const r of receipts.results){try{return await saveTask(env,{username:task.assigned_to},{task_id:task.id,revision:task.revision,request_id:await hash('count-task:'+task.id+':'+r.request_id),action:'complete',stocktake_request_id:r.request_id,note:'Completed from the saved supplier count.'});}catch(e){if(!(e instanceof UserError))throw e;last=e;}}
+  throw last??new UserError('No complete count by the assigned person has been saved for the requested date. Open Stocktake and save all requested materials.');
+ }
+ if(path==='/api/tasks/file'){
+  const task=visible(user,await getTask(env.DB,b.task_id));check(!['Complete','Cancelled'].includes(task.status),'Reopen the task before adding evidence.');
+  const file=await attachmentData(b);
+  const old=await env.DB.prepare('SELECT task_id FROM v2_task_attachments WHERE id=?').bind(b.id).first();if(old){check(old.task_id===task.id,'Attachment identifier already used.',409);return {id:b.id};}
+  const count=await env.DB.prepare('SELECT COUNT(*) n FROM v2_task_attachments WHERE task_id=? AND id NOT IN (SELECT value FROM json_each(?))').bind(task.id,JSON.stringify(task.attachments??[])).first();check(count.n<(task.task_type==='workflow'?120:12),'Hierdie taak se bewysberging is vol. Gebruik ’n dokumentskakel.');
+  await env.DB.batch(fileStatements(env.DB,task.id,user.username,new Date().toISOString(),file));return {id:b.id};
+ }
+ if(path==='/api/tasks')return saveTask(env,user,b);
+ if(path==='/api/tasks/read'){check(/^[a-zA-Z0-9_-]{8,140}$/.test(b.id??''),'Invalid notification.');await env.DB.prepare('UPDATE v2_task_notifications SET read_at=? WHERE id=? AND username=?').bind(new Date().toISOString(),b.id,user.username).run();return {saved:true};}
+ throw new UserError('Task endpoint not found.',404);
+}
+function openTask(task){return ['Pending','Scheduled','Waiting'].includes(task.status);}
+export async function readTasksForPa(env,user,query={}){
+ await ensureTaskSchema(env.DB);check(isAdmin(user.username),'Only admins can read PA task integration.',403);
+ if(query.resource==='email_requests'||query.resource==='report_contacts')return readTaskMail(env,user,query);
+ if(query.resource==='search'){
+  check(query.q?.trim(),'Gee ’n taaknommer of soekwoord.');
+  const {readTaskWorkspace}=await import('./task-workspace.js');
+  const {ensurePaReportSchema}=await import('./pa-report-api.js');
+  await ensurePaReportSchema(env.DB);
+  const {pa}=await readTaskWorkspace(env,user,{scope:'all',status:'all',search:query.q,offset:query.offset});
+  const page=pa.workspace;
+  return {total:page.total,next_offset:page.next_offset,rows:page.rows.map(r=>({id:r.id,app_task_id:r.workflow_id||r.app_task_id||(r.is_pa?null:r.id),title:r.title,status:r.status,assigned_to:r.assigned_to}))};
+ }
+ if(query.task_id){let task=await getTask(env.DB,query.task_id);
+  if(!task&&PA_ID.test(query.task_id)){
+   const {readTaskSubject,ensurePaReportSchema}=await import('./pa-report-api.js');
+   await ensurePaReportSchema(env.DB);
+   const row=await readTaskSubject(env,user,query.task_id);
+   if(!row.app_task_id)return {pa_task:row,app_task_id:null};
+   task=await getTask(env.DB,row.app_task_id);
+  }
+  check(task&&fullTaskAccess(user,task),'Task not found.',404);const history=await env.DB.prepare('SELECT revision,action,actor,saved_at FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 50').bind(task.id).all();return {task,history:history.results,history_has_more:task.revision>50,save_contract:taskSaveContract};}
+ return {...await listTasks(env,user,{pending_sync:query.resource==='pending_sync',offset:query.offset??0}),save_contract:taskSaveContract};
+}
+
+function canonicalTaskRequest(value){
+ if(Array.isArray(value))return value.map(canonicalTaskRequest);
+ if(value&&typeof value==='object')return Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonicalTaskRequest(value[k])]));
+ return value;
+}
+const taskSaveContract={
+ create:'save_task({task:{action:"create",revision:0,request_id,data:{title,details,assigned_to,due_date,review_date,priority,reminder_mode,reminder_at}}}). task_id is optional ONLY for create; omitted IDs are derived from owner + request_id. Search with get_tasks resource search and q before creating; reuse an existing task for the same obligation.',
+ visibility:'For new ordinary business work set data.visibility to operational. assigned limits sharing to administrators and task participants. confidential is for Alex and Alinda. private is Alex-only, including all admin connectors. Personal cases use the daily_report private_task bridge with an existing private TSK; never copy their content to the shared workbook. Older unclassified tasks keep assignment-based access.',
+ update:'Read the current task first. save_task({task:{action:"update",task_id:task.id,revision:task.revision,request_id,data:{only_changed_fields},note}}). Use existing usernames from users. Use details for the description.',
+ identifiers:'task_id and save_task request_id: 8–90 ASCII letters, digits or hyphens. UUIDs are safe. save_app_data request_id: 16–80. Reuse the SAME request_id and identical content for a retry; a changed request needs a new request_id. Never use a task id as the request id.',
+ standardize:'Admin only. standardize_task preserves a single native reminder or stocktake. For a researched existing cycle pass steps with sourced confirmations, latest revision and a reason in note. Read back the same id. step_waive requires a reason.',
+ workflow:'Create data.task_type=workflow and data.steps=[{id,description,assigned_to,due_date,status:Pending or In Progress,notes,reminder_mode:due/daily/off,requires_evidence,files?}]. Steps stay under one parent. step_add/step_update use step_id and data; step_start/step_complete/step_reopen/step_note use step_id. step_note accepts note/files; add/update accept files. step_delete requires confirm:true and note; step_reorder uses all step_ids in desired order. Completing or waiving the last required step closes the task. For a separate sign-off set data.require_final_approval=true when creating a workflow. approve_workflow is then final approval after all required steps finish, by Alex or assigned_to, also by any task manager for ordinary operational workflows. Read ready_for_approval, progress and steps; never create duplicate tasks per step.',
+ actions:'Use complete, reopen, wait or cancel for status, not data.status. wait requires note (the waiting reason) and review_date; reopen requires note. Workflow steps retain their existing completion/evidence rules.',
+ reminder:'reminder_mode: once, daily or off. once requires a future UTC ISO timestamp with milliseconds; 07:00 Africa/Johannesburg is 05:00:00.000Z. A future open reminder displays Scheduled until its due date, then Pending.',
+ readback:'After saving, call get_tasks({query:{task_id:result.task.id}}) and check the actual saved fields and revision before reporting success. History is append-only; these reads include the latest 50 event summaries.',
+ fallback:'save_app_data({target:"tasks",revision,request_id,reason,data:{task_id,action,data,...action_fields}}) uses the same task writer. Omit task_id only for create.'
+};
