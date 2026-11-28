@@ -164,10 +164,10 @@ export async function staffClockApi({request,url,env,bodyOf}){
  throw new UserError('Not found.',404);
 }
 
-export async function staffApi({request,url,env,user,bodyOf}){
+export async function staffApi({request,url,env,user,bodyOf,registerSnapshot,payrollRunOnly=false}){
  check(canManageStaff(user.username),'Your account does not have Staff administration access.',403);
- const db=env.DB,path=url.pathname,current=await staffState(db),stamp=new Date().toISOString();
- if(path==='/api/staff/payroll'||path==='/api/staff/payroll/history')return payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,registerInsert,env});
+ const db=env.DB,path=url.pathname,current=registerSnapshot??await staffState(db),stamp=new Date().toISOString();
+ if(path==='/api/staff/payroll'||path==='/api/staff/payroll/history')return payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,registerInsert,env,payrollRunOnly});
  if(path==='/api/staff/imports'||path.startsWith('/api/staff/imports/'))return staffImportApi({request,url,db,user,bodyOf,current});
  if(path==='/api/staff'&&request.method==='GET'){
   const devices=(await db.prepare('SELECT id,name,code_expires,expires,revoked,created_by,created_at,token_hash IS NOT NULL AS enrolled FROM v2_staff_devices ORDER BY created_at DESC').all()).results;

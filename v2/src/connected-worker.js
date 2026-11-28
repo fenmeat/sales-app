@@ -2,6 +2,7 @@ import {CLOCK_SCOPE,CLOCK_SCOPES,dueAttendance} from './pa-attendance.js';
 import {queueTaskReminders,flushTaskPush} from './tasks-push.js';
 import {scheduledLedger} from './zoho-ledger.js';
 import app from './worker.js';
+import {LEAVE_SCOPE,LEAVE_SCOPES} from './pa-leave.js';
 import {OAuthProvider,OAuthError,AuthorizationError,insufficientScope} from '@cloudflare/workers-oauth-provider';
 import {authenticate,keys,hash,sameOrigin,isAdmin} from './auth.js';
 import {UserError,check} from './domain.js';
@@ -11,7 +12,7 @@ import {WRITE_TOOLS} from './pa-writes.js';
 import {STAFF_READ_SCOPE,needsStaffRead} from './pa-staff-reads.js';
 
 const PA_ORIGIN='https://fenmeat-sales-test.alexander-fenwick.workers.dev';
-const RESOURCE=PA_ORIGIN+'/mcp',SCOPES=['fenmeat:read','fenmeat:write',STAFF_READ_SCOPE,CLOCK_SCOPE,'offline_access'];
+const RESOURCE=PA_ORIGIN+'/mcp',SCOPES=['fenmeat:read','fenmeat:write',STAFF_READ_SCOPE,CLOCK_SCOPE,LEAVE_SCOPE,'offline_access'];
 const headers={'Cache-Control':'no-store','Pragma':'no-cache','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer'};
 const json=(data,status=200,extra={})=>Response.json(data,{status,headers:{...headers,...extra}});
 const escape=value=>String(value).replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';');
@@ -43,7 +44,7 @@ async function consent(request,env) {
     check(allowedRedirect(auth.redirectUri),'Hierdie terugkeerskakel word nie toegelaat nie. Begin die koppeling in ChatGPT.',400);
     check(auth.codeChallengeMethod==='S256'&&!!auth.codeChallenge,'PKCE S256 is required.',400);
     const details=await oauth.describeConsent(auth),pending=await oauth.beginConsent(auth);
-    return page(`<section><p><strong>${escape(details.clientName)}</strong> vra toegang vir ChatGPT. Toegang keer terug na <strong>${escape(details.redirectHost)}</strong>.</p><p>Jy gee toestemming om FenMeat se verkope, forecasts, produksieplanne, trolleys, resepte, voorraad, Order Guy en die bestaande FEN Zoho-fakture en ontvangste te lees.</p><p>Die verbinding kan homself hernu. Kies hieronder of dit ook data mag verander of private Staff-data mag lees. Elke wysiging word nagegaan en met sy vorige waarde aangeteken. Dit gee geen toestemming om bestellings te stuur of Zoho te verander nie. Jy kan die verbinding enige tyd hier intrek.</p><form id="consent-form" method="post"><input type="hidden" name="handle" value="${escape(pending.handle)}"><label class="scope-choice"><input type="checkbox" name="write_access" value="yes" ${auth.scope.includes('fenmeat:write')?'checked':''}>Laat ook skryftoegang toe: resepte, grondstowwe, pryse, pakgroottes, voorraad, produkte, verkope en produksie.</label><label class="scope-choice"><input type="checkbox" name="staff_read_access" value="yes" ${auth.scope.includes(STAFF_READ_SCOPE)?'checked':''}>Laat Staff-leestoegang toe: personeelprofiele, ID- en bankbesonderhede, tariewe, klokrekords, verlof en ingevoerde loongeskiedenis. Hierdie keuse laat lees toe.</label><label class="scope-choice"><input type="checkbox" name="staff_write_access" value="yes">Laat PA werknemers in en uit klok en kloktye regstel. Vereis Staff-leestoegang. Dit sluit geskeduleerde klokopdragte in. Elke verandering dra jou naam. Geen loongoedkeuring of betaling nie.</label><button name="decision" value="approve" id="approve" disabled>Bevestig gekose toegang</button><button name="decision" value="deny" class="secondary">Kanselleer</button></form></section>`,pending.headers);
+    return page(`<section><p><strong>${escape(details.clientName)}</strong> vra toegang vir ChatGPT. Toegang keer terug na <strong>${escape(details.redirectHost)}</strong>.</p><p>Jy gee toestemming om FenMeat se verkope, forecasts, produksieplanne, trolleys, resepte, voorraad, Order Guy en die bestaande FEN Zoho-fakture en ontvangste te lees.</p><p>Die verbinding kan homself hernu. Kies hieronder of dit ook data mag verander of private Staff-data mag lees. Elke wysiging word nagegaan en met sy vorige waarde aangeteken. Dit gee geen toestemming om bestellings te stuur of Zoho te verander nie. Jy kan die verbinding enige tyd hier intrek.</p><form id="consent-form" method="post"><input type="hidden" name="handle" value="${escape(pending.handle)}"><label class="scope-choice"><input type="checkbox" name="write_access" value="yes" ${auth.scope.includes('fenmeat:write')?'checked':''}>Laat ook skryftoegang toe: resepte, grondstowwe, pryse, pakgroottes, voorraad, produkte, verkope en produksie.</label><label class="scope-choice"><input type="checkbox" name="staff_read_access" value="yes" ${auth.scope.includes(STAFF_READ_SCOPE)?'checked':''}>Laat Staff-leestoegang toe: personeelprofiele, ID- en bankbesonderhede, tariewe, klokrekords, verlof en ingevoerde loongeskiedenis. Hierdie keuse laat lees toe.</label><label class="scope-choice"><input type="checkbox" name="staff_write_access" value="yes">Laat PA werknemers in en uit klok en kloktye regstel. Vereis Staff-leestoegang. Dit sluit geskeduleerde klokopdragte in. Elke verandering dra jou naam. Geen loongoedkeuring of betaling nie.</label><label class="scope-choice"><input type="checkbox" name="staff_leave_access" value="yes">Laat PA verlofaansoeke registreer. Vereis Staff-leestoegang. Goedkeuring bly in Staff.</label><button name="decision" value="approve" id="approve" disabled>Bevestig gekose toegang</button><button name="decision" value="deny" class="secondary">Kanselleer</button></form></section>`,pending.headers);
   }
   check(request.method==='POST','Method not allowed.',405);sameOrigin(request);
   const form=await request.formData(),handle=String(form.get('handle')??'');
@@ -52,10 +53,12 @@ async function consent(request,env) {
   const user=await administrator(request,env);
   const clockWrite=form.get('staff_write_access')==='yes';
   check(!clockWrite||form.get('staff_read_access')==='yes','Kies ook Staff-leestoegang om klokinskrywings te kan verander.');
-  const scope=['fenmeat:read',...(form.get('write_access')==='yes'?['fenmeat:write']:[]),...(form.get('staff_read_access')==='yes'?[STAFF_READ_SCOPE]:[]),...(clockWrite?[CLOCK_SCOPE]:[]),'offline_access'];
+  const leaveWrite=form.get('staff_leave_access')==='yes';
+  check(!leaveWrite||form.get('staff_read_access')==='yes','Kies ook Staff-leestoegang om verlof te registreer.');
+  const scope=['fenmeat:read',...(form.get('write_access')==='yes'?['fenmeat:write']:[]),...(form.get('staff_read_access')==='yes'?[STAFF_READ_SCOPE]:[]),...(clockWrite?[CLOCK_SCOPE]:[]),...(leaveWrite?[LEAVE_SCOPE]:[]),'offline_access'];
   const approved=await oauth.approveConsent(request,handle,{scope});
   check(allowedRedirect(approved.request.redirectUri),'Invalid redirect URI.');
-  const {redirectTo}=await oauth.completeAuthorization({request:approved.request,userId:user.username,metadata:{name:'ChatGPT · '+user.username+' · '+(scope.includes('fenmeat:write')?'FenMeat lees en skryf':'FenMeat lees')+(scope.includes(STAFF_READ_SCOPE)?' + Staff lees':'')+(clockWrite?' + klokwysigings':'')},scope,props:{username:user.username,keyFingerprint:await hash(keys(env)[user.username])}});
+  const {redirectTo}=await oauth.completeAuthorization({request:approved.request,userId:user.username,metadata:{name:'ChatGPT · '+user.username+' · '+(scope.includes('fenmeat:write')?'FenMeat lees en skryf':'FenMeat lees')+(scope.includes(STAFF_READ_SCOPE)?' + Staff lees':'')+(clockWrite?' + klokwysigings':'')+(leaveWrite?' + verlofaansoeke':'')},scope,props:{username:user.username,keyFingerprint:await hash(keys(env)[user.username])}});
   approved.headers.set('Location',redirectTo);
   return new Response(null,{status:302,headers:approved.headers});
 }
@@ -63,7 +66,7 @@ async function management(request,env) {
   const user=await administrator(request,env),oauth=env.OAUTH_PROVIDER;
   if(request.method==='GET') {
     const grants=await oauth.listUserGrants(user.username,{limit:100});
-    return json({username:user.username,endpoint:RESOURCE,grants:grants.items.map(g=>({id:g.id,name:g.metadata?.name??'ChatGPT',write_access:g.scope.includes('fenmeat:write'),staff_read_access:g.scope.includes(STAFF_READ_SCOPE),staff_write_access:g.scope.includes(CLOCK_SCOPE),created_at:new Date(g.createdAt*1000).toISOString(),expires_at:g.expiresAt?new Date(g.expiresAt*1000).toISOString():null})),more:!!grants.cursor});
+    return json({username:user.username,endpoint:RESOURCE,grants:grants.items.map(g=>({id:g.id,name:g.metadata?.name??'ChatGPT',write_access:g.scope.includes('fenmeat:write'),staff_read_access:g.scope.includes(STAFF_READ_SCOPE),staff_write_access:g.scope.includes(CLOCK_SCOPE),staff_leave_access:g.scope.includes(LEAVE_SCOPE),created_at:new Date(g.createdAt*1000).toISOString(),expires_at:g.expiresAt?new Date(g.expiresAt*1000).toISOString():null})),more:!!grants.cursor});
   }
   check(request.method==='POST','Method not allowed.',405);sameOrigin(request);
   const body=await request.json();check(typeof body.grant_id==='string'&&/^[a-zA-Z0-9_-]{1,200}$/.test(body.grant_id),'Choose an existing connection.');
@@ -92,6 +95,8 @@ const provider=new OAuthProvider({
     if(!await rateLimit(env.DB,'mcp:'+ctx.auth.userId,120,60))return json({error:'Too many app requests. Try again shortly.'},429,{'Retry-After':'60'});
     if(request.method==='POST'){
       let rpc;try{rpc=await request.clone().json();}catch{}
+      if(rpc?.method==='tools/call'&&rpc.params?.name==='request_staff_leave'&&!LEAVE_SCOPES.every(s=>ctx.auth.scope.includes(s)))
+        return insufficientScope(ctx.auth,[...new Set([...ctx.auth.scope.filter(s=>s!=='offline_access'),...LEAVE_SCOPES])],'Gee aparte toestemming om verlofaansoeke te registreer.');
       if(rpc?.method==='tools/call'&&rpc.params?.name==='save_staff_attendance'&&!CLOCK_SCOPES.every(s=>ctx.auth.scope.includes(s)))
         return insufficientScope(ctx.auth,[...new Set([...ctx.auth.scope.filter(s=>s!=='offline_access'),...CLOCK_SCOPES])],'Gee aparte toestemming om FenMeat se klokrekords te verander.');
       if(rpc?.method==='tools/call'&&WRITE_TOOLS.has(rpc.params?.name)&&!ctx.auth.scope.includes('fenmeat:write'))return insufficientScope(ctx.auth,['fenmeat:read','fenmeat:write'],'Approve write access using your own Alex or Alinda admin account before saving.');

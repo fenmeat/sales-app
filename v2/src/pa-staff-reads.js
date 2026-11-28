@@ -2,10 +2,10 @@ import {openAttendance,clockReceipt} from './pa-attendance.js';
 import {check,dateKey,addDays,today} from './domain.js';
 import {isAdmin,keys} from './auth.js';
 import {readOnlyDatabase} from './pa-reads.js';
-import {staffState,staffApi} from './staff-api.js';
+import {staffState,staffApi,shiftsBetween} from './staff-api.js';
 import {loadBundle,deriveImport,staffImportApi} from './staff-import.js';
 import {FRESH_START,nextFriday,profileAt} from './payroll-domain.js';
-import {LEAVE_TYPES,balance} from './staff-domain.js';
+import {LEAVE_TYPES,balance,periodHours,staffPerson} from './staff-domain.js';
 
 export const STAFF_READ_SCOPE='fenmeat:staff:read';
 export const needsStaffRead=(name,args)=>name==='get_staff_data'||(name==='get_access_status'&&args?.staff!==undefined);
@@ -86,18 +86,36 @@ export async function readStaffData(args,env,username,scopes,attempt=0){
   const url=new URL('https://fenmeat.invalid/api/staff/imports/rows');for(const[k,v]of Object.entries({id,sheet:args.sheet_id,q:args.q??'',offset:args.offset??0}))url.searchParams.set(k,String(v));
   return result(await staffImportApi({request:new Request(url),url,db,user:{username},bodyOf,current}));
  }
- if(resource==='hours'){
+ if(resource==='attendance'){
+  const from=dateKey(args.from),to=dateKey(args.to);
+  check(from<=to&&to<=addDays(from,30),'Choose at most 31 calendar days.');
+  const name=args.q?.trim().toLowerCase();
+  const candidates=name?state.people.filter(p=>[p.name,p.code,p.name.split(/\s+/)[0]].some(value=>value?.toLowerCase()===name)):[];
+  if(!args.employee_id&&candidates.length!==1){
+   check(false,candidates.length?'Meer as een werknemer pas. Kies die werknemer uit die personeellys.':'Kies ’n werknemer of soek die volle naam in die personeellys.');
+  }
+  const person=staffPerson(state,args.employee_id??candidates[0].id);
+  const shifts=await shiftsBetween(db,from,to,person.id);
+  const [row]=periodHours([person],shifts,state.leave,from,to);
+  return {from,to,name:person.name,...row,attendance_complete:row.issues.length===0,
+   source_kind:'native_clock_and_approved_leave',revision:current.revision,saved_at:current.saved_at,connection};
+ }
+ if(resource==='hours'||resource==='wages'){
   const timeBefore=(await db.prepare('SELECT COALESCE(MAX(rowid),0) revision FROM v2_staff_time').first()).revision;
   const from=dateKey(args.from),to=dateKey(args.to);check(from<=to&&to<=addDays(from,30),'Choose at most 31 calendar days.');
   const url=new URL('https://fenmeat.invalid/api/staff/hours');url.searchParams.set('from',from);url.searchParams.set('to',to);if(args.employee_id)url.searchParams.set('employee_id',args.employee_id);
-  const hours=await staffApi({request:new Request(url),url,env:{DB:db},user:{username},bodyOf});
+  const hours=resource==='wages'?{}:await staffApi({request:new Request(url),url,env:{DB:db},user:{username},bodyOf,registerSnapshot:current});
   // A bounded week read can reconcile the displayed payroll hours with punches.
   // Use the same live wage preview as Staff, including completeness and deductions.
   const friday=nextFriday(from);
+  if(resource==='wages'){
+   check(from===addDays(friday,-4)&&to===friday&&from>=FRESH_START.start_date,'Kies die betaalweek van Maandag tot Vrydag.');
+   if(args.employee_id)staffPerson(state,args.employee_id);
+  }
   if(from>=FRESH_START.start_date && from>=addDays(friday,-4) && to<=friday &&
     await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='v2_staff_payroll'").first()){
    const payrollUrl=new URL('/api/staff/payroll',url);payrollUrl.searchParams.set('pay_date',friday);payrollUrl.searchParams.set('view','wages');
-   const week=await staffApi({request:new Request(payrollUrl),url:payrollUrl,env:{DB:db},user:{username},bodyOf});
+   const week=await staffApi({request:new Request(payrollUrl),url:payrollUrl,env:{DB:db},user:{username},bodyOf,registerSnapshot:current,payrollRunOnly:true});
    hours.payroll={pay_date:friday,from:week.run.from,to:week.run.to,source:week.source,generated_at:connection.generated_at,
     rows:week.run.rows.filter(r=>!args.employee_id||r.employee_id===args.employee_id).map(r=>({
      employee_id:r.employee_id,name:r.name,employment_type:r.employment_type,ready:r.ready===true,
@@ -110,7 +128,7 @@ export async function readStaffData(args,env,username,scopes,attempt=0){
       paid_leave_minutes:d.paid_leave_minutes,issues:d.issues})),
      amount_is_final:r.ready===true||['Approved','Paid'].includes(r.wage_state)
     }))};
-   hours.payroll_hours={status:week.run.status,refresh_needed:week.stale,saved:week.saved,rows:week.run.rows
+   if(resource==='hours')hours.payroll_hours={status:week.run.status,refresh_needed:week.stale,saved:week.saved,rows:week.run.rows
     .filter(r=>!args.employee_id||r.employee_id===args.employee_id)
     .map(r=>({employee_id:r.employee_id,rotating:r.profile?.monday_rotation??(r.profile?.break_rule==='60 minutes if no break recorded'),
      days:r.source.days.filter(d=>d.date>=from&&d.date<=to).map(d=>({date:d.date,workplace:d.workplace,
@@ -118,11 +136,16 @@ export async function readStaffData(args,env,username,scopes,attempt=0){
       recorded_break_seconds:d.recorded_break_seconds,clock_gap_seconds:d.clock_gap_seconds,automatic_break_seconds:d.automatic_break_seconds,
       adjustment_minutes:d.adjustment_minutes,payable_seconds:d.payable_seconds,paid_day_off:r.paid_days?.includes(d.date)??false}))}))};
   }
-  hours.payroll_complete=hours.payroll?.rows.every(r=>r.amount_is_final)??false;
-  hours.attendance_complete=hours.rows.filter(r=>state.people.some(p=>p.id===r.employee_id&&p.active)).every(r=>r.issues.length===0);
-  hours.attendance_warnings=hours.payroll?hours.payroll.rows.filter(r=>!r.amount_is_final).map(r=>({employee_id:r.employee_id,name:r.name,issues:r.issues})):hours.rows.filter(r=>r.issues.length).map(r=>({employee_id:r.employee_id,issues:r.issues}));
   const timeAfter=(await db.prepare('SELECT COALESCE(MAX(rowid),0) revision FROM v2_staff_time').first()).revision;
   if(timeBefore!==timeAfter){check(attempt<1,'Clock records changed during reading. Read the week again before calculating wages.',409);return readStaffData(args,env,username,scopes,attempt+1);}
+  if(resource==='wages'){
+   check(hours.payroll,'Payroll is nog nie gereed vir hierdie week nie.',409);
+   const complete=hours.payroll.rows.length>0&&hours.payroll.rows.every(row=>row.amount_is_final);
+   return result({payroll:hours.payroll,payroll_complete:complete,time_version:timeAfter});
+  }
+  hours.payroll_complete=!!hours.payroll?.rows.length&&hours.payroll.rows.every(r=>r.amount_is_final);
+  hours.attendance_complete=hours.rows.filter(r=>state.people.some(p=>p.id===r.employee_id&&p.active)).every(r=>r.issues.length===0);
+  hours.attendance_warnings=hours.payroll?hours.payroll.rows.filter(r=>!r.amount_is_final).map(r=>({employee_id:r.employee_id,name:r.name,issues:r.issues})):hours.rows.filter(r=>r.issues.length).map(r=>({employee_id:r.employee_id,issues:r.issues}));
   hours.time_version=timeAfter;
   return result({...hours,source_kind:'native_clock_and_approved_leave'});
  }

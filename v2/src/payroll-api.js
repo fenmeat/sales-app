@@ -38,7 +38,7 @@ function carryDraftInputs(row,old){
  }
  return row;
 }
-export async function payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,registerInsert,env}){
+export async function payrollApi({request,url,db,user,bodyOf,current,operation,shiftsBetween,registerInsert,env,payrollRunOnly=false}){
  if(request.method==='GET' && url.pathname.endsWith('/history'))return {events:(await db.prepare("SELECT revision,entity_key,action,actor,saved_at,json_extract(payload, '$.change_note') AS reason FROM v2_staff_payroll ORDER BY revision DESC LIMIT 100").all()).results};
  const targetDate=friday(url.searchParams.get('pay_date')??nextFriday()),view=request.method==='GET'&&url.searchParams.get('view')==='wages'?{date:targetDate,month:url.searchParams.get('month')??targetDate.slice(0,7)}:null;
  const state=await savedState(db,view),timeVersion=(await db.prepare('SELECT COALESCE(MAX(rowid),0) revision FROM v2_staff_time').first()).revision;
@@ -113,6 +113,7 @@ export async function payrollApi({request,url,db,user,bodyOf,current,operation,s
     }catch(error){if(!(error instanceof UserError))throw error;row.issues=[...row.issues,error.message];}
    }
   }
+  if(payrollRunOnly)return {run,source,stale:!wageView&&stale(run),saved:!!run.saved_revision};
   return {can_start_fresh:isAdmin(user.username),revision:state.revision,source,settings:state.settings,openings:state.openings,run,stale:!wageView&&stale(run),saved:!!run.saved_revision,runs:state.runs.map(({pay_date,status,totals,saved_at})=>({pay_date,status,totals,saved_at})).sort((a,b)=>b.pay_date.localeCompare(a.pay_date)),month:monthlyReport(url.searchParams.get('month')??payDate.slice(0,7),state.runs.map(postedRun),state.openings,state.settings.company,current.state.people,fresh)};
  }
  check(request.method==='POST','Not found.',404);

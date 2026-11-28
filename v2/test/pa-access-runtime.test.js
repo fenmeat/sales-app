@@ -32,9 +32,9 @@ async function fixture(t) {
     const r=await req('/oauth/authorize?'+query);const html=await r.text();
     return {response:r,html,verifier,handle:html.match(/name="handle" value="([^"]+)"/)?.[1],cookie:cookies(r.headers).join('; '),query};
   }
-  async function approve(start,session,write=false,staffRead=false,staffWrite=false) {return req('/oauth/authorize',{form:{handle:start.handle,decision:'approve',...(write?{write_access:'yes'}:{}),...(staffRead?{staff_read_access:'yes'}:{}),...(staffWrite?{staff_write_access:'yes'}:{})},headers:{Cookie:[start.cookie,session].filter(Boolean).join('; ')}});}
+  async function approve(start,session,write=false,staffRead=false,staffWrite=false,leaveWrite=false) {return req('/oauth/authorize',{form:{handle:start.handle,decision:'approve',...(write?{write_access:'yes'}:{}),...(staffRead?{staff_read_access:'yes'}:{}),...(staffWrite?{staff_write_access:'yes'}:{}),...(leaveWrite?{staff_leave_access:'yes'}:{})},headers:{Cookie:[start.cookie,session].filter(Boolean).join('; ')}});}
   async function exchange(client,code,verifier='p'.repeat(64),extra={}) {return req('/oauth/token',{form:{grant_type:'authorization_code',client_id:client.client_id,code,code_verifier:verifier,redirect_uri:callback,resource:origin+'/mcp',...extra}});}
-  async function connect(write=false,username='alex',staffRead=false,staffWrite=false) {const session=await login(username),c=await client(),start=await begin(c);assert.equal(start.response.status,200,start.html);assert.equal(start.response.headers.get('referrer-policy'),'same-origin');const response=await approve(start,session,write,staffRead,staffWrite);assert.equal(response.status,302,await response.clone().text());const location=new URL(response.headers.get('location'));assert.equal(location.origin,'https://chatgpt.com');assert.equal(location.searchParams.get('iss'),origin);assert.equal(location.searchParams.get('state'),'synthetic-state');const code=location.searchParams.get('code'),r=await exchange(c,code);assert.equal(r.status,200,await r.clone().text());const tokens=await r.json();assert.ok(tokens.refresh_token);return {session,client:c,tokens,code,start};}
+  async function connect(write=false,username='alex',staffRead=false,staffWrite=false,leaveWrite=false) {const session=await login(username),c=await client(),start=await begin(c);assert.equal(start.response.status,200,start.html);assert.equal(start.response.headers.get('referrer-policy'),'same-origin');const response=await approve(start,session,write,staffRead,staffWrite,leaveWrite);assert.equal(response.status,302,await response.clone().text());const location=new URL(response.headers.get('location'));assert.equal(location.origin,'https://chatgpt.com');assert.equal(location.searchParams.get('iss'),origin);assert.equal(location.searchParams.get('state'),'synthetic-state');const code=location.searchParams.get('code'),r=await exchange(c,code);assert.equal(r.status,200,await r.clone().text());const tokens=await r.json();assert.ok(tokens.refresh_token);return {session,client:c,tokens,code,start};}
   async function rpc(tokens,method,params={}) {const r=await req('/mcp',{body:{jsonrpc:'2.0',id:1,method,params},headers:{Accept:'application/json, text/event-stream','MCP-Protocol-Version':'2025-06-18',...(tokens?{Authorization:'Bearer '+tokens.access_token}:{})}});const text=await r.text();if(r.ok)assert.ok(text,'Empty RPC response: '+method+' '+(params.name??''));return {response:r,data:text?JSON.parse(text):{}};}
   return {mf,db,req,login,client,begin,approve,exchange,connect,rpc};
 }
@@ -187,7 +187,7 @@ test('OAuth discovery, owner consent, SDK handshake, all seven read tools and da
   const unauth=await f.rpc(null,'tools/list');assert.equal(unauth.response.status,401);assert.match(unauth.response.headers.get('www-authenticate'),/oauth-protected-resource/);
   const {tokens,session}=await f.connect();
   const init=await f.rpc(tokens,'initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'synthetic',version:'1'}});assert.equal(init.response.status,200);assert.equal(init.data.result.serverInfo.name,'fenmeat-read-access');
-  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,19);for(const tool of list.data.result.tools){const write=['save_app_data','restore_app_change','test_app_write_access','save_task','acknowledge_task_sync','save_staff_attendance'].includes(tool.name);assert.equal(tool.annotations.readOnlyHint,!write);assert.deepEqual(tool._meta.securitySchemes[0].scopes,tool.name==='save_staff_attendance'?['fenmeat:read',STAFF_READ_SCOPE,'fenmeat:staff:write']:write?['fenmeat:read','fenmeat:write']:tool.name==='get_staff_data'?['fenmeat:read',STAFF_READ_SCOPE]:['fenmeat:read']);}
+  const list=await f.rpc(tokens,'tools/list');assert.equal(list.data.result.tools.length,20);for(const tool of list.data.result.tools){const write=['save_app_data','restore_app_change','test_app_write_access','save_task','acknowledge_task_sync','save_staff_attendance','request_staff_leave'].includes(tool.name);assert.equal(tool.annotations.readOnlyHint,!write);assert.deepEqual(tool._meta.securitySchemes[0].scopes,tool.name==='request_staff_leave'?['fenmeat:read',STAFF_READ_SCOPE,'fenmeat:staff:leave']:tool.name==='save_staff_attendance'?['fenmeat:read',STAFF_READ_SCOPE,'fenmeat:staff:write']:write?['fenmeat:read','fenmeat:write']:tool.name==='get_staff_data'?['fenmeat:read',STAFF_READ_SCOPE]:['fenmeat:read']);}
   for(const [name,args] of [['get_catalog',{}],['get_sales',{from:'2026-10-12',to:'2026-10-12'}],['get_forecast',{date:'2026-10-13',route:'MB'}],['get_production',{date:'2026-10-12'}],['get_recipes',{}],['get_material_stock',{}],['get_order_requirements',{from:'2026-10-12',to:'2026-10-12'}]]) {
     const r=await f.rpc(tokens,'tools/call',{name,arguments:args});assert.equal(r.response.status,200);assert.equal(r.data.result?.isError,undefined,JSON.stringify(r.data));assert.equal(r.data.result.structuredContent.connection.access,'read_only');
     if(name==='get_production')assert.equal(r.data.result.structuredContent.source_kind,'unsaved_suggestion');
@@ -502,4 +502,31 @@ test('Duplicate simultaneous requests produce one punch, and an overdue schedule
  await dueAttendance({DB:f.db,APP_ACCESS_KEYS:JSON.stringify({alex:key})});
  assert.equal((await read(alex,job.request_id)).status,'expired');
  assert.equal((await f.db.prepare('SELECT COUNT(*) n FROM v2_staff_time').first()).n,1);
+});
+
+test('one employee attendance, weekly wages and separately authorised pending leave use the Staff engine',async t=>{
+ const f=await fixture(t);
+ const prior=await f.connect(true,'alex',true,true);
+ await seedStaff(f,prior.session);
+ const lookup=await ok(f,prior.tokens,'get_staff_data',{query:{resource:'people',q:'Synthetic worker'}});
+ const employee_id=lookup.people.find(p=>p.name==='Synthetic worker').id;
+ const week={employee_id,from:'2026-11-23',to:'2026-11-27'};
+ const read=resource=>ok(f,prior.tokens,'get_staff_data',{query:{...week,resource}});
+ const attendance=await read('attendance'),legacy=await read('hours'),wages=await read('wages');
+ assert.deepEqual(attendance.days,legacy.rows[0].days);
+ assert.equal(attendance.shifts,undefined);assert.equal(attendance.payroll,undefined);
+ assert.deepEqual(wages.payroll.rows,legacy.payroll.rows);
+ const request={employee_id,request_id:crypto.randomUUID(),record_id:crypto.randomUUID(),revision:lookup.revision,
+  date:'2026-11-27',type:'Annual',units:1,reason:'Synthetic leave request'};
+ const denied=await f.rpc(prior.tokens,'tools/call',{name:'request_staff_leave',arguments:{request}});
+ assert.equal(denied.response.status,403);
+ const separate=await f.connect(false,'alex',true,false,true);
+ const status=await ok(f,separate.tokens,'get_access_status');
+ assert.equal(status.staff_leave_access,true);assert.equal(status.staff_write_access,false);
+ const submit=()=>ok(f,separate.tokens,'request_staff_leave',{request});
+ const saved=await submit();assert.equal(saved.revision,lookup.revision+1);
+ assert.equal((await submit()).replayed,true);
+ const stored=await ok(f,separate.tokens,'get_staff_data',{query:{resource:'leave',employee_id}});
+ assert.equal(stored.leave.filter(r=>r.id===request.record_id).length,1);
+ assert.equal(stored.leave.find(r=>r.id===request.record_id).status,'Pending');
 });
