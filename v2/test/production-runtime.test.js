@@ -4,7 +4,11 @@ import {applyProductionSuggestion} from '../src/production.js';
 const origin='https://production-local.example',key='test-production-key-012345678901234567890';
 test('live production API reads register output for new days without rewriting a saved manual plan',async t=>{
  const {call,save}=await fixture(t);
- let day=(await call('/api/production?date=2026-10-07')).data;day.plan.items[0].yield_qty=11;day=(await save(day)).data;
+ let day=(await call('/api/production?date=2026-10-07')).data;
+ const screen=(await call('/api/production?date=2026-10-07&view=screen')).data;
+ assert.equal(screen.username,'alex');assert.deepEqual(screen.plan,day.plan);
+ assert.ok(screen.catalog.routes.every(route=>!Object.hasOwn(route,'invoice_stores')));
+ assert.equal(day.catalog,undefined);day.plan.items[0].yield_qty=11;day=(await save(day)).data;
  const register={schema_version:1,notes:'Synthetic test',materials:[{id:'RAW',name:'Raw',unit:'kg',supplier:'Test',pack_qty:10,procure:true,source:'Test',notes:'',price:{amount:null,status:'unknown',date:null,valid_until:null,source:''},stock:{qty:null,date:null,reserve:null,incoming:[],source:''}}],recipes:[{group:'W01',name:'Test',version:1,effective_date:'2026-10-01',status:'approved',complete:true,batch_kg:10,ingredients:[{material:'RAW',qty:10,unit:'kg',status:'approved',note:''}],consumables:[],source:'Test approved formula',notes:'',forecast_yields:[{product:'W01',qty:17,status:'approved',source:'Test approved output'}]}],packaging:[]};
  assert.equal((await call('/api/recipes',{revision:0,request_id:crypto.randomUUID(),reason:'Test current output',register})).status,200);
  assert.equal((await call('/api/production?date=2026-10-07')).data.plan.items[0].yield_qty,11);

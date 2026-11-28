@@ -48,9 +48,12 @@ try{for(const [name,engine,device]of profiles){
  const browser=await engine.launch({headless:true,...(engine===chromium&&process.env.CHROMIUM_EXECUTABLE?{executablePath:process.env.CHROMIUM_EXECUTABLE}:{}),args:engine===chromium?['--no-sandbox']:[]});
  try{const {defaultBrowserType,...opts}=device,context=await browser.newContext({...opts,timezoneId:'Africa/Johannesburg'});
  await context.route('**/*',r=>new URL(r.request().url()).origin===origin?r.continue():r.abort());
- const page=await context.newPage(),errors=[];page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));
+ const page=await context.newPage(),errors=[],initialReads=[];
+ page.on('request',request=>{const path=new URL(request.url()).pathname;if(path.startsWith('/api/'))initialReads.push(path);});
+ page.setDefaultTimeout(10000);page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>sessionStorage.setItem('fm_sales_selection:alex',JSON.stringify({date:'2026-11-16',route:'R01',tab:'morning'})));
  await page.goto(origin+'/sales',{waitUntil:'commit'});await page.getByRole('heading',{name:'Morning load',exact:true}).waitFor();
+ assert.deepEqual(initialReads,['/api/bootstrap','/api/run']);
  const loadMs=Math.round(await page.evaluate(()=>performance.now()));
  const cards=page.locator('.morning-table tbody tr'),card=cards.filter({hasText:'SYNTHETIC CHAKALAKA'});
  const rows=card.locator('.forecast-summary dd'),details=card.locator('.forecast-details'),forecast=card.locator('.forecast-breakdown');

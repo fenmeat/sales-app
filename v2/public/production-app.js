@@ -15,7 +15,15 @@ function notice(message,error=false){$('#notice').textContent=message;$('#notice
 async function api(path,body){const r=await fetch(path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined,signal:AbortSignal.timeout(30000)});const data=await r.json();if(!r.ok)throw Error(data.error??'Connection failed.');return data;}
 async function safe(fn){try{await fn();}catch(e){notice(e.message,true);}}
 function remember(r){state.result=r;state.saved=r.revision?structuredClone(r):null;state.dirty=false;state.planDirty=false;state.pending=null;state.selection=null;render();}
-async function load(date){state.busy=true;app.inert=true;try{const [r,b]=await Promise.all([api('/api/production?date='+date),api('/api/bootstrap')]);state.catalog=b.catalog;state.username=b.username;state.date=date;remember(r);}finally{state.busy=false;app.inert=false;}}
+async function load(date){
+ state.busy=true;app.inert=true;
+ try{
+  const {catalog,username,...plan}=await api('/api/production?view=screen&date='+date);
+  // An open tab may briefly have a newer screen than the Worker during rollout.
+  const setup=catalog?{catalog,username}:await api('/api/bootstrap');
+  state.catalog=setup.catalog;state.username=setup.username;state.date=date;remember(plan);
+ }finally{state.busy=false;app.inert=false;}
+}
 function markDirty(planning=true){state.dirty=true;state.pending=null;if(planning){state.planDirty=true;state.result.plan.phase='draft';}$('#prod-save-state').textContent='Unsaved changes';$('#prod-phase').textContent=state.result.plan.phase;update();}
 function input({value,label,group,code,field,whole=false,step=null}){return `<input type="${whole?'number':'text'}" inputmode="${whole?'numeric':'decimal'}" min="${['disks_per_roll','rolls_per_batch'].includes(field)?'1':field==='yield_qty'?'0.001':'0'}" max="100000" step="${step??(whole?'1':field==='yield_qty'?'any':'0.001')}" aria-label="${esc(label)}" data-field="${field}" ${code?'data-code="'+esc(code)+'"':''} ${group?'data-group="'+esc(group)+'"':''} value="${value??''}">`;}
 function yieldDetail(i){return ['batch','shared','cooked'].includes(i.mode)?`<details class="yield-detail"><summary data-yield-summary="${i.code}">Recipe yield · ${num(i.yield_qty)} sales units</summary><p>${esc(i.yield_note)}</p><label>Sales units per complete recipe${input({value:i.yield_qty,label:i.name+' yield per recipe',code:i.code,field:'yield_qty'})}</label></details>`:'';}
@@ -91,4 +99,4 @@ function printStaffSheet(){
 }
 window.addEventListener('beforeunload',e=>{if(state.dirty){e.preventDefault();e.returnValue='';}});
 document.addEventListener('click',e=>{if(!e.target.closest('.more-menu'))$('.more-menu')?.removeAttribute('open');});
-try{const b=await api('/api/bootstrap');state.catalog=b.catalog;await load(state.date);}catch(e){app.innerHTML='<main class="production-shell"><section class="panel"><h1>Production planning</h1><p>'+esc(e.message)+'</p><a href="/">Home · Sign in or retry</a></section></main>';}
+try{await load(state.date);}catch(e){app.innerHTML='<main class="production-shell"><section class="panel"><h1>Production planning</h1><p>'+esc(e.message)+'</p><a href="/">Home · Sign in or retry</a></section></main>';}

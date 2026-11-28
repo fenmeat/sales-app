@@ -95,10 +95,11 @@ async function screen(){
  const deps={document,window:{addEventListener(){}},location:{assign:path=>redirects.push(path)},ResizeObserver:class{observe(){}disconnect(){}},today,routeName,routeScheduled,
   calculateSummary:productionSummary,productionStockBalance,productionPlanningView,babalasRecipeUpdateNeeded,applyProductionSuggestion,createProductionTrolley,
   trolleyPlanHTML,updateTrolleyPlan(){},readNumericInput:el=>parseDecimal(el.value),
-  fetch:async(path,options)=>{requests.push({path,...options});assert.equal(options.method,'GET');return {ok:true,json:async()=>structuredClone(path==='/api/bootstrap'?{catalog,username:'alex'}:initial)};}};
+  fetch:async(path,options)=>{requests.push({path,...options});assert.equal(options.method,'GET');return {ok:true,json:async()=>structuredClone(path==='/api/bootstrap'?{catalog,username:'alex'}:path.includes('view=screen')?{...initial,catalog,username:'alex'}:initial)};}};
  const execute=new (Object.getPrototypeOf(async function(){}).constructor)(...Object.keys(deps),source+'\nreturn state;');
  const state=await execute(...Object.values(deps));
  assert.ok(document.querySelector('[data-coldroom-units="R01"]'),document.body.textContent);
+ assert.equal(requests.length,1);assert.match(requests[0].path,/view=screen/);
  const edit=(selector,value)=>{const el=document.querySelector(selector);el.value=value;el.oninput();};
  const text=selector=>document.querySelector(selector).textContent;
  return {document,state,initial,requests,redirects,edit,text};

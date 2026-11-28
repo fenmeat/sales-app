@@ -26,7 +26,7 @@ const accessResponse=result=>{const r=json(result.data);for(const c of result.co
 function printRevision(url){const value=url.searchParams.get('revision');if(value===null)return null;check(/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value)),'Invalid document revision.');return Number(value);}
 async function init(db){if(!initialized.has(db))initialized.set(db,ensureSchema(db).catch(e=>{initialized.delete(db);throw e;}));await initialized.get(db);}
 async function bodyOf(req,limit=750000){check(Number(req.headers.get('Content-Length')??0)<=limit,'Upload too large.',413);const text=await req.text();check(text.length<=limit,'Upload too large.',413);try{return JSON.parse(text);}catch{throw new UserError('Invalid JSON.');}}
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.58.1',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.58.2',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null,ctx=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
@@ -99,7 +99,14 @@ async function handle(request,env,paUser=null,ctx=null){
   const pdf=await productionStaffPDF({plan:JSON.parse(row.payload),revision:row.revision},await catalog(env.DB));
   return new Response(pdf,{headers:{...headers,'Content-Type':'application/pdf','X-FenMeat-Print-Revision':String(row.revision),'Content-Disposition':`inline; filename="FenMeat-Production-${date}.pdf"`}});
  }
- if((path==='/api/production'||path==='/api/production/audit')&&['GET','POST'].includes(method))return json(await productionApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),forecastResult,runResult,bodyOf}));
+ if((path==='/api/production'||path==='/api/production/audit')&&['GET','POST'].includes(method)){
+  const currentCatalog=await catalog(env.DB);
+  const plan=await productionApi({request,url,db:env.DB,user,catalog:currentCatalog,forecastResult,runResult,bodyOf});
+  if(method==='GET'&&path==='/api/production'&&url.searchParams.get('view')==='screen'){
+   return json({...plan,catalog:catalogForBrowser(currentCatalog),username:user.username});
+  }
+  return json(plan);
+ }
  if(path.startsWith('/api/invoicing/')){const result=await invoiceApi({request,url,env,user,catalog:await catalog(env.DB),bodyOf});return result instanceof Response?new Response(result.body,{status:result.status,headers:{...headers,...Object.fromEntries(result.headers)}}):json(result);}
  if(path==='/api/logout'&&method==='POST'){const token=request.headers.get('Cookie')?.match(/fm_session=([a-f0-9]{64})/)?.[1];if(token)await env.DB.prepare('DELETE FROM v2_sessions WHERE token_hash=?').bind(await hash(token)).run();if(user.phone_id)await env.DB.prepare('UPDATE v2_invoice_phones SET session_hash=NULL,session_expires=NULL,revision=revision+1 WHERE id=?').bind(user.phone_id).run();return json({ok:true},200,{'Set-Cookie':'fm_session=; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=0'});}
  if(path==='/api/staff'||path.startsWith('/api/staff/'))return json(await staffApi({request,url,env,user,bodyOf}));

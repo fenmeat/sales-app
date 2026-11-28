@@ -107,7 +107,7 @@ export async function workspaceDiagnostic(env,user,query={}){
  await Promise.all([ensureTaskSchema(env.DB),ensurePaReportSchema(env.DB)]);
  const status=query.status||'open',start=Date.now(),r=await readTaskWorkspace(env,user,{scope:'all',status,compact:'1'});
  const detailStart=Date.now(),detail=await getTask(env.DB,'fnb-atm-refunds-20261102-03'),detail_ms=Date.now()-detailStart;
- return {detail_ms,detail_revision:detail?.revision,detail_status:detail?.status,version:'0.58.1',measured_at:new Date().toISOString(),total_ms:detailStart-start,bytes:new TextEncoder().encode(JSON.stringify(r)).length,records:r.pa.workspace.rows.length,total:r.pa.workspace.total,counts:r.pa.workspace.counts,snapshot:r.pa.workspace.snapshot,etag:r.etag};
+ return {detail_ms,detail_revision:detail?.revision,detail_status:detail?.status,version:'0.58.2',measured_at:new Date().toISOString(),total_ms:detailStart-start,bytes:new TextEncoder().encode(JSON.stringify(r)).length,records:r.pa.workspace.rows.length,total:r.pa.workspace.total,counts:r.pa.workspace.counts,snapshot:r.pa.workspace.snapshot,etag:r.etag};
 }
 
 // Read-only release check on the deployed Worker. Return counts only.
