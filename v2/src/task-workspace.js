@@ -26,7 +26,7 @@ function compact(row){
 // A paged view of existing events + the existing PA mirror, never another register.
 export async function readTaskWorkspace(env,user,query={}){
  check(taskUsers(env).includes(user.username),'This account cannot use Tasks.',403);
- const admin=isAdmin(user.username),rep=isInvoiceRep(user.username),status=query.status||'open',scope=query.scope||'mine',search=String(query.search||'').trim().slice(0,200),offset=Number(query.offset||0),size=25;
+ const admin=isAdmin(user.username),rep=isInvoiceRep(user.username),status=query.status||'open',scope=query.report_default==='1'&&admin?(user.username==='alex'?'all':'fenmeat'):(query.scope||'mine'),search=String(query.search||'').trim().slice(0,200),offset=Number(query.offset||0),size=25;
  check(statuses.has(status)&&['mine','pa','others','fenmeat','private','all'].includes(scope),'Choose a task list.');
  check(admin||['mine','all'].includes(scope)||isTaskManager(user.username)&&['pa','others','fenmeat'].includes(scope),'Only admins can view other task lists.',403);check(scope!=='private'||user.username==='alex','Private tasks are for Alex only.',403);
  check(Number.isSafeInteger(offset)&&offset>=0&&offset<=100000,'Invalid page.');
@@ -81,7 +81,10 @@ export async function readTaskWorkspace(env,user,query={}){
   if(latest){row.latest_work_answer=latest.answer;if(!row.latest_answer||Date.parse(latest.at)>Date.parse(row.latest_answer_at))row.latest_answer=latest.answer;}
  }
  const pageTasks=new Map();for(const r of items){for(const t of r.stages||[])pageTasks.set(t.id,brief(t));if(!r.is_pa)pageTasks.set(r.id,brief(r));}
- pa.rows=canonical.filter(r=>included.has(r.id)).map(r=>({...r,subject_key:r.id,subject_hash:page.find(p=>p.id===r.id).subject_hash}));
+ const sources=canonical.filter(r=>included.has(r.id));
+ // Cards already carry display fields. A link can fetch the full current subject on demand.
+ pa.rows=query.compact==='1'?sources.map(r=>({id:r.id,subject_key:r.id,app_task_id:r.app_task_id,title:r.title})):
+  sources.map(r=>({...r,subject_key:r.id,subject_hash:page.find(p=>p.id===r.id).subject_hash}));
  pa.feedback=[];pa.report=null;pa.history=[];pa.rabbi=null;pa.rabbi_history=[];pa.alerts=[];pa.reminders=[];
  pa.workspace={rows:page,counts,total:selected.length,page_size:size,offset:pageOffset,next_offset:pageOffset+size<selected.length?pageOffset+size:null,snapshot,reset,scope,status,search,person,date,priority};
  app.tasks=[...pageTasks.values()];
@@ -102,9 +105,9 @@ export async function taskInbox(env,user){
 export async function workspaceDiagnostic(env,user,query={}){
  check(user.username==='alex','Only Alex can inspect Tasks performance.',403);
  await Promise.all([ensureTaskSchema(env.DB),ensurePaReportSchema(env.DB)]);
- const status=query.status||'open',start=Date.now(),r=await readTaskWorkspace(env,user,{scope:'all',status});
+ const status=query.status||'open',start=Date.now(),r=await readTaskWorkspace(env,user,{scope:'all',status,compact:'1'});
  const detailStart=Date.now(),detail=await getTask(env.DB,'fnb-atm-refunds-20261102-03'),detail_ms=Date.now()-detailStart;
- return {detail_ms,detail_revision:detail?.revision,detail_status:detail?.status,version:'0.41.0',measured_at:new Date().toISOString(),total_ms:detailStart-start,bytes:new TextEncoder().encode(JSON.stringify(r)).length,records:r.pa.workspace.rows.length,total:r.pa.workspace.total,counts:r.pa.workspace.counts,snapshot:r.pa.workspace.snapshot,etag:r.etag};
+ return {detail_ms,detail_revision:detail?.revision,detail_status:detail?.status,version:'0.58.1',measured_at:new Date().toISOString(),total_ms:detailStart-start,bytes:new TextEncoder().encode(JSON.stringify(r)).length,records:r.pa.workspace.rows.length,total:r.pa.workspace.total,counts:r.pa.workspace.counts,snapshot:r.pa.workspace.snapshot,etag:r.etag};
 }
 
 // Read-only release check on the deployed Worker. Return counts only.

@@ -22,3 +22,11 @@ await writeFile(new URL('./src/recipe-fonts.js',import.meta.url),'// Generated b
 await build({entryPoints:['public/tasks-app.js'],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:'public/tasks-bundle.js',minify:true,legalComments:'inline'});
 
 await build({entryPoints:['src/wage-pdf-client.js'],bundle:true,format:'esm',platform:'browser',target:'es2022',outfile:'public/wage-pdf-bundle.js',minify:true,legalComments:'inline'});
+
+// One entry per screen. PDF rendering and wage exports stay on demand.
+await build({
+ entryPoints:{sales:'public/app.js',staff:'public/staff-app.js',financial:'public/financial-app.js',
+  production:'public/production-app.js',recipes:'public/recipes-app.js',pos:'public/pos-app.js'},
+ bundle:true,format:'esm',platform:'browser',target:'es2022',outdir:'public',entryNames:'[name]-bundle',
+ external:['./pdf-pages.js','./wage-pdf-bundle.js'],minify:true,legalComments:'inline'
+});

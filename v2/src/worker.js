@@ -1,6 +1,6 @@
 import {financeApi} from './finance-api.js';
 import {paReportApi} from './pa-report-api.js';
-import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,addDraftProducts,summarise,isQty,effectiveAvailability,routeScheduled,routeName,comparableRouteVisit,previousRouteVisit,FACTORY_ROUTE,validateShopDeliveries} from './domain.js';
+import {check,UserError,dateKey,addDays,today,validateCatalog,validateRun,emptyRun,addDraftProducts,summarise,isQty,FACTORY_ROUTE,validateShopDeliveries} from './domain.js';
 import {invoiceApi,verifyInvoiceReconciliation,invoiceCatalogGuard} from './invoice-api.js';
 import {posApi} from './pos-api.js';
 import {authenticateApp,isInvoiceRep,repName,invoicePageRedirect,invoiceAccessApi,invoicePhonesApi} from './invoice-auth.js';
@@ -10,13 +10,15 @@ import {orderGuyApi,readRegister} from './order-guy-api.js';
 import {withResaleMaterials} from './order-guy.js';
 import {productionApi} from './production-api.js';
 import {staffApi,staffClockApi} from './staff-api.js';
-import {forecastRoute} from './month-cycle.js';
-import {effectiveHistory,applyForecastRefresh} from './forecast-history.js';
+import {catalog,catalogForBrowser,idFor,lastEvent,runResult,readSalesRuns} from './sales-queries.js';
+import {forecastResult} from './forecast-queries.js';
+import {applyForecastRefresh} from './forecast-history.js';
 import {zohoStatus,beginZoho,completeZoho,checkZoho,previewZohoInvoices,previewZohoInvoice,readZoho} from './zoho.js';
 import {zohoReconciliation,verifyZohoSnapshot} from './zoho-reconcile.js';
 import {applyZohoMappings} from './zoho-matching.js';
 import {ensureSchema} from './schema.js';
 import {keys,login,sameOrigin,hash,isAdmin,canManageProductAvailability,canViewRecipes,appNavigation} from './auth.js';
+const assetPaths=new Set(['/financial','/financial/','/financial.html','/financial-app.js','/financial-budget.js','/budget-domain.js','/financial.css','/finance-domain.js','/sales','/sales/','/sales.html','/home-app.js','/home.css','/pos','/pos/','/pos.html','/pos-app.js','/pos-model.js','/pos-receipt.js','/pos.css','/tasks','/tasks/','/tasks.html','/tasks-app.js','/task-mail-proposal.js','/tasks-bundle.js','/task-workspace-cache.js','/task-search-render.js','/task-workflow.js','/task-workflow-ui.js','/task-pa-work-ui.js','/task-conversation-ui.js','/task-attachments.js','/task-scanner.js','/scan-image.js','/scan-pdf.js','/tasks-report.js','/pa-report-ui.js','/pa-report-model.js','/task-report-model.js','/tasks.css','/tasks-sw.js','/tasks.webmanifest','/tasks-icon.svg','/print-page','/print-page/','/print-page.html','/print-page.js','/print-page-options.js','/print-preview.js','/print-preview.css','/pdf-pages.js','/pdfjs/pdf.min.mjs','/pdfjs/pdf.worker.min.mjs','/pdfjs/LiberationSans-Regular.ttf','/pdfjs/LiberationSans-Bold.ttf','/pdfjs/LiberationSans-Italic.ttf','/pdfjs/LiberationSans-BoldItalic.ttf','/pdfjs/LICENSE','/pdfjs/LICENSE_LIBERATION','/staff-clock','/staff-clock/','/staff-clock.html','/staff-clock.js','/staff-clock-storage.js','/staff-clock-sw.js','/staff','/staff/','/staff.html','/staff-app.js','/payroll-ui.js','/pay-wages-ui.js','/wage-messages.js','/wage-pdf-bundle.js','/staff-import-ui.js','/staff-history-ui.js','/staff-model.js','/staff.css','/pa-access.js','/pa-access.css','/sales-bundle.js','/staff-bundle.js','/financial-bundle.js','/production-bundle.js','/recipes-bundle.js','/pos-bundle.js','/','/index.html','/app.js','/shop-deliveries.js','/styles.css','/domain.js','/invoice-domain.js','/forecast.js','/forecast-history.js','/access-setup','/access-setup/','/access-setup.html','/access-setup.js','/staff-access','/staff-access/','/staff-access.html','/staff-access.js','/staff-access.css','/production','/production/','/production.html','/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.css','/production.js','/input-selection.js','/workflow-keyboard.js','/print-document.js','/decimal-input.js','/availability-controls.js','/zoho-page-check.js','/zoho-recon-status.js','/recipes','/recipes/','/recipes.html','/recipes-app.js','/recipes.css','/stocktake.js','/stocktake-view.js','/stocktake-state.js']);
 const initialized=new WeakMap();
 const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','X-Frame-Options':'DENY','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"};
 const json=(body,status=200,extra={})=>Response.json(body,{status,headers:{...headers,...extra}});
@@ -24,35 +26,15 @@ const accessResponse=result=>{const r=json(result.data);for(const c of result.co
 function printRevision(url){const value=url.searchParams.get('revision');if(value===null)return null;check(/^[1-9]\d*$/.test(value)&&Number.isSafeInteger(Number(value)),'Invalid document revision.');return Number(value);}
 async function init(db){if(!initialized.has(db))initialized.set(db,ensureSchema(db).catch(e=>{initialized.delete(db);throw e;}));await initialized.get(db);}
 async function bodyOf(req,limit=750000){check(Number(req.headers.get('Content-Length')??0)<=limit,'Upload too large.',413);const text=await req.text();check(text.length<=limit,'Upload too large.',413);try{return JSON.parse(text);}catch{throw new UserError('Invalid JSON.');}}
-async function catalog(db){const r=await db.prepare('SELECT * FROM v2_catalog WHERE id=1').first();return effectiveAvailability(r?{...JSON.parse(r.payload),revision:r.revision}:{products:[],routes:[],revision:0});}
-function catalogForBrowser(c){return {...c,routes:c.routes.filter(r=>r.code!==FACTORY_ROUTE).map(r=>{const {invoice_stores,...publicRoute}=r;return {...publicRoute,invoice_enabled:!!invoice_stores?.length};})};}
-const idFor=(d,r)=>`${d}|${r}`;
-async function lastEvent(db,date,route){return db.prepare('SELECT * FROM v2_events WHERE run_id=? ORDER BY revision DESC LIMIT 1').bind(idFor(date,route)).first();}
-async function runResult(db,date,route){const e=await lastEvent(db,date,route);if(e){const run=JSON.parse(e.payload);return {run,revision:e.revision,saved_at:e.saved_at,actor:e.actor,summary:summarise(run)};}return null;}
-async function forecastResult(db,date,route,c){
- const from=addDays(date,-168),asOf=today();
- const history=await db.prepare('SELECT service_date AS date,product,qty,quality,source,constrained FROM v2_history WHERE route=? AND service_date>=? AND service_date<? ORDER BY service_date,product').bind(route,from,date).all();
- const events=await db.prepare(`SELECT e.*,
- (SELECT action FROM v2_events a WHERE a.run_id=e.run_id AND a.action IN ('returns','close','reopen','load') ORDER BY revision DESC LIMIT 1) AS confirmation_action,
- (SELECT payload FROM v2_events a WHERE a.run_id=e.run_id AND a.action IN ('returns','close','reopen','load') ORDER BY revision DESC LIMIT 1) AS confirmation_payload
- FROM v2_events e JOIN (SELECT run_id,MAX(revision) revision FROM v2_events WHERE route=? AND service_date>=? AND service_date<? GROUP BY run_id) latest ON e.run_id=latest.run_id AND e.revision=latest.revision`).bind(route,from,date).all();
- const effective=effectiveHistory(history.results,events.results,{from,to:date,asOf});
- const definition=c.routes.find(r=>r.code===route),rows=effective.rows.filter(r=>comparableRouteVisit(definition,date,r.date));
- const {forecasts,month_cycle}=forecastRoute(rows,date,c.products.map(p=>p.code));
- for(const f of Object.values(forecasts)){if(f.missing_dates)f.missing_dates=f.missing_dates.filter(d=>comparableRouteVisit(definition,date,d));if(!routeScheduled(definition,date))f.warning='This route is not scheduled for this date. Choose a scheduled date, or enter an explicit exceptional load.';}
- const expected=previousRouteVisit(definition,date,asOf),expectedRows=rows.filter(r=>r.date===expected);
- const snapshot=await hash(JSON.stringify({version:'1.5-explained-safety-stock',date,route,schedule:definition?.schedule??null,products:c.products.map(p=>p.code).sort(),rows,excluded:effective.excluded}));
- return {forecasts,snapshot,route_name:routeName(definition,date),scheduled:routeScheduled(definition,date),model:'8/12-week baseline with measured month phase and latest comparable sales safety minimum',month_cycle,expected_visit:expected,latest_actual:rows.at(-1)?.date??null,expected_visit_present:expectedRows.length>0,excluded_count:effective.excluded.length,cycle_excluded_count:effective.rows.length-rows.length,provisional_count:rows.filter(r=>r.quality==='provisional').length};
-}
-async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.58.0',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
+async function health(env){try{const r=await env.DB.prepare("SELECT COUNT(*) AS table_count FROM sqlite_master WHERE type='table' AND name IN ('products','routes','route_runs','route_run_items','cash_ups')").first();return json({environment:'test',sales_app_ready:false,pilot_build:'0.58.1',database:'connected',core_tables_ready:Number(r?.table_count)===5,access_configured:Object.keys(keys(env)).length>0});}catch{return json({environment:'test',sales_app_ready:false,database:'unavailable'},503);}}
 async function handle(request,env,paUser=null,ctx=null){
  check(env.APP_ENV==='test','Test environment is not configured.',503);const url=new URL(request.url),path=url.pathname,method=request.method;
  if(path==='/api/health'&&['GET','HEAD'].includes(method))return health(env);
  // Cloudflare redirects standalone .html pages to extensionless canonical URLs.
- const assetPaths=new Set(['/financial','/financial/','/financial.html','/financial-app.js','/financial-budget.js','/budget-domain.js','/financial.css','/finance-domain.js','/sales','/sales/','/sales.html','/home-app.js','/home.css','/pos','/pos/','/pos.html','/pos-app.js','/pos-model.js','/pos-receipt.js','/pos.css','/tasks','/tasks/','/tasks.html','/tasks-app.js','/task-mail-proposal.js','/tasks-bundle.js','/task-workspace-cache.js','/task-search-render.js','/task-workflow.js','/task-workflow-ui.js','/task-pa-work-ui.js','/task-conversation-ui.js','/task-attachments.js','/task-scanner.js','/scan-image.js','/scan-pdf.js','/tasks-report.js','/pa-report-ui.js','/pa-report-model.js','/task-report-model.js','/tasks.css','/tasks-sw.js','/tasks.webmanifest','/tasks-icon.svg','/print-page','/print-page/','/print-page.html','/print-page.js','/print-page-options.js','/print-preview.js','/print-preview.css','/pdf-pages.js','/pdfjs/pdf.min.mjs','/pdfjs/pdf.worker.min.mjs','/pdfjs/LiberationSans-Regular.ttf','/pdfjs/LiberationSans-Bold.ttf','/pdfjs/LiberationSans-Italic.ttf','/pdfjs/LiberationSans-BoldItalic.ttf','/pdfjs/LICENSE','/pdfjs/LICENSE_LIBERATION','/staff-clock','/staff-clock/','/staff-clock.html','/staff-clock.js','/staff-clock-storage.js','/staff-clock-sw.js','/staff','/staff/','/staff.html','/staff-app.js','/payroll-ui.js','/pay-wages-ui.js','/wage-messages.js','/wage-pdf-bundle.js','/staff-import-ui.js','/staff-history-ui.js','/staff-model.js','/staff.css','/pa-access.js','/pa-access.css','/','/index.html','/app.js','/shop-deliveries.js','/styles.css','/domain.js','/invoice-domain.js','/forecast.js','/forecast-history.js','/access-setup','/access-setup/','/access-setup.html','/access-setup.js','/staff-access','/staff-access/','/staff-access.html','/staff-access.js','/staff-access.css','/production','/production/','/production.html','/production-app.js','/production-trolleys.js','/production-staff-print.js','/production.css','/production.js','/input-selection.js','/workflow-keyboard.js','/print-document.js','/decimal-input.js','/availability-controls.js','/zoho-page-check.js','/zoho-recon-status.js','/recipes','/recipes/','/recipes.html','/recipes-app.js','/recipes.css','/stocktake.js','/stocktake-view.js','/stocktake-state.js']);
+
  if((assetPaths.has(path)||['/invoicing','/invoicing/','/invoicing/phones','/invoicing/phones/','/invoicing/phones.html'].includes(path)||/^\/invoicing\/[a-z0-9-]+\.(?:js|css|webmanifest)$/.test(path))&&['GET','HEAD'].includes(method)){
   if(!['/','/index.html','/tasks','/tasks/','/tasks.html'].includes(path)&&!(path.startsWith('/print-page')&&url.searchParams.get('document')==='shops')&&!path.startsWith('/invoicing')&&(!path.split('/').at(-1).includes('.')||path.endsWith('.html'))&&request.headers.has('Cookie')){await init(env.DB);if(await invoicePageRedirect(request,env))return new Response(null,{status:302,headers:{...headers,Location:'/invoicing/'}});}
-  const r=await env.ASSETS.fetch(request);return new Response(r.body,{status:r.status,headers:{...Object.fromEntries(r.headers),...headers}});
+  const r=await env.ASSETS.fetch(request);return new Response(r.body,{status:r.status,headers:{...Object.fromEntries(r.headers),...headers,...(r.ok&&/\.(?:js|mjs|css|ttf)$/.test(path)?{'Cache-Control':'private, no-cache'}:{})}});
  }
  check(path.startsWith('/api/'),'Not found.',404);check(['GET','POST'].includes(method),'Method not allowed.',405);
  check(Object.keys(keys(env)).length>0,'Access is not configured. Use the setup instructions on the sign-in screen.',503);
@@ -74,7 +56,7 @@ async function handle(request,env,paUser=null,ctx=null){
  if(path==='/api/tasks/push')return json(await pushApi({request,env,user,bodyOf}));
  if(path==='/api/tasks'||path.startsWith('/api/tasks/')){const result=await tasksApi({request,url,env,user,bodyOf:req=>bodyOf(req,(path==='/api/tasks'||path==='/api/tasks/file')?8100000:750000)});if(ctx&&method==='POST')ctx.waitUntil(flushTaskPush(env));return result instanceof Response?result:json(result);}
  if(path==='/api/invoicing/phones')return json(await invoicePhonesApi({request,env,user,bodyOf}));
- if(path.startsWith('/api/pos/')){const result=await posApi({request,url,db:env.DB,user,catalog:await catalog(env.DB),bodyOf});return result instanceof Response?new Response(result.body,{status:result.status,headers:{...headers,...Object.fromEntries(result.headers)}}):json(result);}
+ if(path.startsWith('/api/pos/')){const result=await posApi({request,url,db:env.DB,user,loadCatalog:()=>catalog(env.DB),bodyOf});return result instanceof Response?new Response(result.body,{status:result.status,headers:{...headers,...Object.fromEntries(result.headers)}}):json(result);}
  if(path==='/api/print/recipe'){
   check(canViewRecipes(user.username),'Your account does not have recipe access.',403);
   check(method==='GET','Method not allowed.',405);
@@ -132,7 +114,7 @@ async function handle(request,env,paUser=null,ctx=null){
  if(path==='/api/zoho/check'&&method==='POST')return json(await checkZoho(env,user));
  if(path==='/api/zoho/invoices/preview'&&method==='POST')return json(await previewZohoInvoices(env,user,await bodyOf(request)));
  if(path==='/api/zoho/invoice/preview'&&method==='POST')return json(await previewZohoInvoice(env,user,await bodyOf(request),await catalog(env.DB)));
- if(path==='/api/bootstrap'&&method==='GET'){const c=await catalog(env.DB);const counts=await env.DB.prepare('SELECT COUNT(*) AS rows, MAX(service_date) AS latest FROM v2_history').first();const sync=await env.DB.prepare('SELECT id,saved_at FROM v2_sync').all();const zoho=await zohoStatus(env,user);return json({username:user.username,capabilities:{manage_product_availability:canManageProductAvailability(user.username)},today:today(),catalog:catalogForBrowser(c),history:counts,sync:sync.results,zoho_connected:zoho.connected,zoho});}
+ if(path==='/api/bootstrap'&&method==='GET'){const [c,counts,sync,zoho]=await Promise.all([catalog(env.DB),env.DB.prepare('SELECT COUNT(*) AS rows, MAX(service_date) AS latest FROM v2_history').first(),env.DB.prepare('SELECT id,saved_at FROM v2_sync').all(),zohoStatus(env,user)]);return json({username:user.username,capabilities:{manage_product_availability:canManageProductAvailability(user.username)},today:today(),catalog:catalogForBrowser(c),history:counts,sync:sync.results,zoho_connected:zoho.connected,zoho});}
  if(path==='/api/products/availability'&&method==='POST'){
   check(canManageProductAvailability(user.username),'Your account cannot change product availability.',403);
   const b=await bodyOf(request),old=await catalog(env.DB);
@@ -189,7 +171,7 @@ async function handle(request,env,paUser=null,ctx=null){
  if(path==='/api/audit'&&method==='GET'){const date=dateKey(url.searchParams.get('date'));const r=await env.DB.prepare('SELECT revision,action,actor,saved_at,payload FROM v2_events WHERE run_id=? ORDER BY revision DESC LIMIT 50').bind(idFor(date,url.searchParams.get('route'))).all();return json({events:r.results});}
  if(path==='/api/sync/export'&&method==='GET'){
  const from=dateKey(url.searchParams.get('from')??addDays(today(),-30)),to=dateKey(url.searchParams.get('to')??today());check(from<=to&&to<=addDays(from,93),'Export up to 93 days at a time.');
- const r=await env.DB.prepare('SELECT e.* FROM v2_events e JOIN (SELECT run_id,MAX(revision) revision FROM v2_events WHERE service_date BETWEEN ? AND ? GROUP BY run_id) latest ON latest.run_id=e.run_id AND latest.revision=e.revision ORDER BY e.service_date,e.route').bind(from,to).all();return json({generated_at:new Date().toISOString(),from,to,runs:r.results.map(e=>({run:JSON.parse(e.payload),revision:e.revision,actor:e.actor,saved_at:e.saved_at,summary:summarise(JSON.parse(e.payload))}))});}
+ return json({generated_at:new Date().toISOString(),from,to,runs:await readSalesRuns(env.DB,from,to)});}
  if(path==='/api/sync/ack'&&method==='POST'){const b=await bodyOf(request);check(typeof b.spreadsheet_id==='string'&&/^[a-zA-Z0-9_-]{20,100}$/.test(b.spreadsheet_id),'Invalid spreadsheet.');await env.DB.prepare('INSERT INTO v2_sync VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET saved_at=excluded.saved_at,payload=excluded.payload').bind('spreadsheet',new Date().toISOString(),JSON.stringify({spreadsheet_id:b.spreadsheet_id})).run();return json({ok:true});}
  throw new UserError('Not found.',404);
 }

@@ -11,7 +11,13 @@ export const FINANCE_SCHEMA=[
  `CREATE TABLE IF NOT EXISTS v2_finance_parts(import_id TEXT NOT NULL,part INTEGER NOT NULL,digest TEXT NOT NULL,payload TEXT NOT NULL,PRIMARY KEY(import_id,part))`,
  `CREATE TABLE IF NOT EXISTS v2_finance_files(id TEXT PRIMARY KEY,record_id TEXT NOT NULL,filename TEXT NOT NULL,mime_type TEXT NOT NULL,digest TEXT NOT NULL,bytes BLOB NOT NULL,actor TEXT NOT NULL,saved_at TEXT NOT NULL)`
 ];
-export async function ensureFinanceSchema(db){await db.batch(FINANCE_SCHEMA.map(s=>db.prepare(s)));}
+const schemaReady=new WeakMap();
+export async function ensureFinanceSchema(db){
+ if(!schemaReady.has(db)){
+  schemaReady.set(db,db.batch(FINANCE_SCHEMA.map(s=>db.prepare(s))).catch(error=>{schemaReady.delete(db);throw error;}));
+ }
+ await schemaReady.get(db);
+}
 const parseRow=r=>({id:r.id,type:r.kind,revision:r.revision,data:JSON.parse(r.payload),actor:r.actor,saved_at:r.saved_at});
 export async function financeRecords(db){return (await db.prepare('SELECT * FROM v2_finance_records ORDER BY saved_at DESC,id').all()).results.map(parseRow);}
 const idValid=id=>typeof id==='string'&&/^[a-zA-Z0-9-]{12,100}$/.test(id);
@@ -25,6 +31,17 @@ async function importedSource(db,id){
 }
 export async function readFinance(db,query={}){
  const resource=query.resource??'summary';
+ if(resource==='audit'){check(idValid(query.id),'Choose a financial record.');return {history:(await db.prepare('SELECT revision,action,reason,payload,actor,saved_at FROM v2_finance_events WHERE record_id=? ORDER BY revision DESC LIMIT 100').bind(query.id).all()).results.map(r=>({...r,data:JSON.parse(r.payload),payload:undefined}))};}
+ if(resource==='record'){
+  const rows=(await db.prepare(`SELECT r.* FROM v2_finance_records target JOIN v2_finance_records r
+   ON r.id=target.id
+   OR (target.kind IN ('account','weekly') AND r.kind='payment' AND json_extract(r.payload,'$.target_id')=target.id)
+   OR (target.kind='account' AND r.kind='invoice' AND json_extract(r.payload,'$.month')=json_extract(target.payload,'$.month'))
+   OR (target.kind='credit' AND r.kind='credit' AND json_extract(r.payload,'$.date') BETWEEN date(json_extract(target.payload,'$.date'),'-60 days') AND json_extract(target.payload,'$.date'))
+   WHERE target.id=? ORDER BY r.saved_at DESC,r.id`).bind(query.id??'').all()).results.map(parseRow);
+  const record=rows.find(row=>row.id===query.id);check(record,'Record not found.',404);
+  return {record,summary:recordSummary(record,rows)};
+ }
  const imports=(await db.prepare('SELECT id,status,result,created_at,completed_at FROM v2_finance_imports ORDER BY created_at DESC').all()).results.map(r=>({...r,result:r.result?JSON.parse(r.result):null}));
  if(resource==='source'){
   const item=imports.find(i=>i.status==='complete'&&(query.import_id?i.id===query.import_id:i.result?.source_sheets?.some(s=>String(s.id)===String(query.sheet))));check(item,'No completed source import.',404);const {source}=await importedSource(db,item.id);
@@ -33,10 +50,10 @@ export async function readFinance(db,query={}){
   const rows=sheet.data[0].rowData.map((r,i)=>({row:i+1,cells:r.values??[]})).filter(r=>r.cells.some(c=>sourceText(c)||c.note)).filter(r=>!q||r.cells.some(c=>(sourceText(c)+' '+(c.note??'')).toLowerCase().includes(q)));
   return {sheet:sheet.properties.title,rows:rows.slice(offset,offset+30),total:rows.length,next_offset:offset+30<rows.length?offset+30:null,source_id:item.id};
  }
- if(resource==='audit'){check(idValid(query.id),'Choose a financial record.');return {history:(await db.prepare('SELECT revision,action,reason,payload,actor,saved_at FROM v2_finance_events WHERE record_id=? ORDER BY revision DESC LIMIT 100').bind(query.id).all()).results.map(r=>({...r,data:JSON.parse(r.payload),payload:undefined}))};}
+
  const records=await financeRecords(db);
  if(resource==='export')return {format:'fen-financial-records-v1',generated_at:new Date().toISOString(),records,imports};
- if(resource==='record'){const record=records.find(r=>r.id===query.id);check(record,'Record not found.',404);return {record,summary:recordSummary(record,records)};}
+
  const summaries=Object.fromEntries(records.filter(r=>!r.data.archived).map(r=>[r.id,recordSummary(r,records)]));
  return {records,summaries,imports,today:today(),counts:Object.fromEntries(Object.keys(FINANCE_TYPES).map(t=>[t,records.filter(r=>r.type===t&&!r.data.archived).length]))};
 }

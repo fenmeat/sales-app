@@ -3,7 +3,8 @@ import {ledgerCommand} from './zoho-ledger.js';
 import {readPaReport,savePaReport} from './pa-report-api.js';
 import {check,UserError,dateKey} from './domain.js';
 import {hash,isAdmin} from './auth.js';
-import {catalog,paBusinessRequest} from './worker.js';
+import {catalog} from './sales-queries.js';
+import {paBusinessRequest} from './worker.js';
 import {ensureTaskSchema,readTasksForPa,saveTask,acknowledgeTask} from './tasks-api.js';
 
 export const WRITE_TOOLS=new Set(['save_app_data','restore_app_change','test_app_write_access','save_task','acknowledge_task_sync']);

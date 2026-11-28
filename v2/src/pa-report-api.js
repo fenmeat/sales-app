@@ -1,3 +1,4 @@
+import {canReadRabbi,rabbiReading,readSharedRabbi} from './rabbi-reading.js';
 import {dueWorkPage} from './pa-due-work.js';
 import {readTaskConversation,reportMessageStatements} from './task-conversation.js';
 import {standardSteps,stepProgress,taskOwner} from './task-workflow.js';
@@ -63,9 +64,17 @@ export async function visiblePaRows(env,user,rows){
   json_extract(e.payload,'$.parent_cycle_id') parent_cycle_id,json_extract(e.payload,'$.kind') kind,
   json_extract(e.payload,'$.assigned_to') assigned_to,json_extract(e.payload,'$.created_by') created_by,
   json_extract(e.payload,'$.visibility') visibility FROM ${taskHeadJoin} LEFT JOIN v2_task_sync s ON s.task_id=e.task_id`).all()).results;
+ const links=new Map();
+ for(const source of sources){
+  for(const key of new Set([source.id,source.pa_task_id,source.parent_cycle_id].filter(Boolean))){
+   if(!links.has(key))links.set(key,[]);
+   links.get(key).push(source);
+  }
+ }
  return rows.filter(r=>{
   if(r.scope!=='fenmeat')return false;
-  const linked=sources.filter(t=>t.id===r.app_task_id||t.pa_task_id===r.id||t.parent_cycle_id===r.id);
+  const linked=[...new Set([...(links.get(r.app_task_id)||[]),...(links.get(r.id)||[])])]
+   .filter(t=>t.id===r.app_task_id||t.pa_task_id===r.id||t.parent_cycle_id===r.id);
   // A stale mirror must never override the native task's owner-only boundary.
   if(linked.some(t=>taskVisibility(t)==='private'))return false;
   if(isAdmin(user.username))return true;
@@ -74,14 +83,12 @@ export async function visiblePaRows(env,user,rows){
    linked.every(t=>isTaskManager(user.username)&&taskVisibility(t)==='operational'));
  });
 }
-const canReadRabbi=user=>['alex','alinda','xalinda','xavier'].includes(user.username);
-// Share the reading itself, never the surrounding private report, links or replies.
-function rabbiReading(report,owner=false){
- const section=report?.sections.find(s=>s.id==='rabbi');
- return section?{date:report.date,title:section.title,items:section.items.filter(i=>owner||!i.requires_action&&!i.pa_task_ids?.length&&!i.app_task_ids?.length).map(({id,title,text})=>({id,title,text}))}:null;
-}
 async function latest(db,key){const r=await db.prepare('SELECT * FROM v2_pa_report_versions WHERE resource_key=? ORDER BY revision DESC LIMIT 1').bind(key).first();return r?{...JSON.parse(r.payload),revision:r.revision,saved_at:r.saved_at}:null;}
 export const workflowState=(row,task)=>task?.task_type==='workflow'?{...row,status:task.status,workflow_revision:task.revision,pa_followups:task.pa_followups,review_date:task.next_action_date||'',next_action_date:task.next_action_date||'',...({title:task.title,next_action:task.next_action||row.next_action,responsibility:{owner:taskOwner(task),action:task.next_action||'Maak die taak oop vir die volgende stap.',situation:task.details,version:row.responsibility?.version||1}})}:row;
+export async function readTaskSubject(env,user,key){
+ check(TSK.test(key),'Invalid PA task number.');
+ return subject(env,user,key);
+}
 async function subject(env,user,key){
  const register=await latest(env.DB,'register');
  if(TSK.test(key)){const r=register?.rows.find(r=>r.id===key);check(r&&(await visiblePaRows(env,user,[r])).length,'Report item not found.',404);const mail=user.username==='alex'?await env.DB.prepare('SELECT summary FROM v2_pa_followup_mail WHERE subject_key=? ORDER BY revision DESC LIMIT 1').bind(key).first():null;if(r.app_task_id)await ensureTaskSchema(env.DB);const current=workflowState(projectMail(r,mail&&JSON.parse(mail.summary)),r.app_task_id?await getTask(env.DB,r.app_task_id):null);return {...current,subject_key:r.id,subject_hash:await hash(JSON.stringify(current)),register_revision:register.revision};}
@@ -169,6 +176,7 @@ export async function readPaReport(env,user,query={}){
  if(query.resource==='summary'&&/^tasks-workspace(?:-(open|scheduled|closed))?$/.test(query.id||''))return (await import('./task-workspace.js')).workspaceDiagnostic(env,user,{status:query.id.split('-')[2]||'open'});
  if(query.resource==='summary'&&query.id==='tasks-performance')return (await import('./task-performance.js')).taskPerformance(env,user);
  check(users(env).includes(user.username),'This account cannot use Daily Report.',403);await ensurePaReportSchema(env.DB);
+ if(query.view==='rabbi'&&user.username!=='alex')return readSharedRabbi(env.DB,user,query.date);
  if(query.resource==='summary'&&['pa-due-work','pa-work-audit'].includes(query.id)){await ensureTaskSchema(env.DB);return dueWorkPage(env.DB,user,{offset:query.offset||0,audit:query.id==='pa-work-audit'});}
  if(query.resource==='summary'&&query.id==='pa-followup-report'){
   check(user.username==='alex','Net Alex kan PA se volledige opvolgverslag lees.',403);await ensureTaskSchema(env.DB);
@@ -203,9 +211,11 @@ export async function readPaReport(env,user,query={}){
   const previous=lastReport?await latest(env.DB,lastReport.resource_key):null;
   const mails=await mailSummaries(env.DB);await ensureTaskSchema(env.DB);
   const app_email=[];
-  for(const [key,mail] of mails){
-   if(!key.startsWith('app-'))continue;
-   const t=await getTask(env.DB,key.slice(4));if(!t)continue;
+  const appKeys=[...mails.keys()].filter(key=>key.startsWith('app-'));
+  const linked=appKeys.length?(await env.DB.prepare(latestSQL+' WHERE h.task_id IN (SELECT value FROM json_each(?))').bind(JSON.stringify(appKeys.map(key=>key.slice(4)))).all()).results:[];
+  const byId=new Map(linked.map(row=>[row.task_id,decode(row)]));
+  for(const key of appKeys){
+   const mail=mails.get(key),t=byId.get(key.slice(4));if(!t)continue;
    const projected=projectMail(t,mail);
    app_email.push({id:t.id,title:t.title,status:t.task_type==='workflow'?t.status:projected.status,email:projected.email,next_action:projected.next_action,review_date:projected.review_date});
   }

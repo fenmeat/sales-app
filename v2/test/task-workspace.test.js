@@ -57,3 +57,19 @@ test('many report alerts reuse bounded source reads and workspace diagnostics ne
  const diagnostic=await readPaReport(env,{username:'alex'},{resource:'summary',id:'tasks-workspace-open'});assert.equal(diagnostic.records,25);assert.equal(diagnostic.total,70);assert.doesNotMatch(JSON.stringify(diagnostic),/PRIVATE ONLY ALEX|Synthetic next action/);
  await assert.rejects(readPaReport(env,{username:'alinda'},{resource:'summary',id:'tasks-workspace-open'}),/Only Alex/);assert.deepEqual(await db.prepare('SELECT COUNT(*) n FROM v2_task_events').first(),before);
 });
+
+test('PA search returns only visible matches and a TSK number resolves without paging the register',async t=>{
+ const {env,rows,call}=await setup(t);
+ const {readTasksForPa}=await import('../src/tasks-api.js');
+ const read=(username,query)=>readTasksForPa(env,{username},query);
+ const subject=await read('alex',{task_id:rows[0].id});
+ assert.equal(subject.pa_task.id,rows[0].id);
+ const secret=rows.at(-1);
+ assert.equal((await read('alinda',{resource:'search',q:secret.title})).total,0);
+ await assert.rejects(()=>read('alinda',{task_id:secret.id}),/not found/i);
+ const full=await call('alex','/api/tasks/workspace?scope=all');
+ const compact=await call('alex','/api/tasks/workspace?scope=all&compact=1');
+ assert.deepEqual(compact.data.pa.workspace,full.data.pa.workspace);
+ assert.ok(JSON.stringify(compact.data).length<JSON.stringify(full.data).length);
+ assert.equal((await call('alinda','/api/tasks/workspace?report_default=1')).data.pa.workspace.scope,'fenmeat');
+});

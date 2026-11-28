@@ -213,7 +213,8 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4,retryNow=f
      // without its source ID. Once that Britos invoice is present, fetch only
      // the matching payment from Zoho; never infer or write an allocation ID.
      const all=await generation(db,job.id),invoices=[...all.values()].filter(r=>r.kind==='invoice'&&r.value.lines.some(l=>cfg.mapping[l.item_id]?.owner)).map(r=>r.value);
-     for(const r of all.values())if(r.kind==='payment'&&r.value.allocations.some(a=>!a.invoice_id&&invoices.some(i=>i.number===a.number&&i.customer_id===r.value.customer_id)))state.queue.push({kind:'payment_lookup',id:r.id,customer_id:r.value.customer_id,date:r.value.date,page:1});
+     const invoiceKeys=new Set(invoices.map(i=>JSON.stringify([i.customer_id,i.number])));
+     for(const r of all.values())if(r.kind==='payment'&&r.value.allocations.some(a=>!a.invoice_id&&invoiceKeys.has(JSON.stringify([r.value.customer_id,a.number]))))state.queue.push({kind:'payment_lookup',id:r.id,customer_id:r.value.customer_id,date:r.value.date,page:1});
      state.payment_links_checked=true;await checkpoint([]);if(state.queue.length)continue;
      checkedGeneration=all;
     }
@@ -264,12 +265,19 @@ export async function advanceLedger(env,{read=readFenBooks,maxCalls=4,retryNow=f
    const response=await read(env,{username:'alex'},path,{...(inventory?{date_start:'2026-10-14'}:{last_modified_time:filterSince}),page:String(state.page),per_page:'100',sort_column:'created_time',sort_order:'A'});used++;state.calls++;
    const rows=kind==='invoice'?response.invoices:response.customer_payments??response.customerpayments,pg=response.page_context;
    check(Array.isArray(rows)&&rows.length<=100&&Number(pg?.page)===state.page&&typeof pg.has_more_page==='boolean','Zoho did not confirm complete delta pagination.',502);
+   // The delta decision only needs the stored modification stamp. Look up one
+   // bounded page using the existing (kind,id) key, including legacy null stamps.
+   const pageIds=rows.map(r=>String(kind==='invoice'?r.invoice_id:r.payment_id));
+   const matches=!inventory&&pageIds.length?(await db.prepare(
+    "SELECT id,json_extract(payload,'$.modified') modified FROM v2_zoho_mirror_records WHERE kind=? AND id IN (SELECT value FROM json_each(?))"
+   ).bind(kind,JSON.stringify(pageIds)).all()).results:[];
+   const stamps=new Map(matches.map(r=>[r.id,r.modified]));
    const ids=new Set();for(const r of rows){const id=String(kind==='invoice'?r.invoice_id:r.payment_id);check(/^\d{1,40}$/.test(id)&&!ids.has(id),'Duplicate/invalid source index identity.',502);ids.add(id);
     const changed=timestamp(r.last_modified_time);
     if(inventory){check(typeof r.date==='string'&&r.date>='2026-10-14','Zoho ignored the inventory date filter.',502);state.inventory_ids[kind].push(id);continue;}
     check(changed>=timestamp(filterSince),'Zoho ignored the modification filter; the mirror has not advanced.',502);
     if(changed>timestamp(state.until))continue;
-    const previous=await source(db,kind,id);if(previous&&(previous.modified?timestamp(previous.modified)===changed:changed<timestamp(cfg.asof)-2*3600000)){state.unchanged++;continue;}
+    const modified=stamps.get(id);if(stamps.has(id)&&(modified?timestamp(modified)===changed:changed<timestamp(cfg.asof)-2*3600000)){state.unchanged++;continue;}
     state.queue.push({kind,id,modified:r.last_modified_time});
    }
    if(pg.has_more_page)state.page++;else{state.phase=inventory?(kind==='invoice'?'inventory_payments':'finish'):(kind==='invoice'?'payments':state.inventory?'inventory_invoices':'finish');state.page=1;}

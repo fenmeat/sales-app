@@ -1,5 +1,6 @@
-import {check,dateKey,addDays,summarise,UserError} from './domain.js';
-import {catalog,runResult,forecastResult} from './worker.js';
+import {check,dateKey,addDays,UserError} from './domain.js';
+import {catalog,runResult,readSalesRuns} from './sales-queries.js';
+import {forecastResult} from './forecast-queries.js';
 import {productionApi} from './production-api.js';
 import {orderGuyApi,readRegister} from './order-guy-api.js';
 import {recipeCost} from './order-guy.js';
@@ -29,8 +30,8 @@ export async function readPaData(name, args, env, username) {
   if(name==='get_sales') {
     const from=dateKey(args.from),to=dateKey(args.to);check(from<=to&&to<=addDays(from,30),'Choose at most 31 calendar days.');
     if(args.route)check(c.routes.some(r=>r.code===args.route),'Unknown route.');
-    const rows=await db.prepare('SELECT e.* FROM v2_events e JOIN (SELECT run_id,MAX(revision) revision FROM v2_events WHERE service_date BETWEEN ? AND ? GROUP BY run_id) latest ON latest.run_id=e.run_id AND latest.revision=e.revision ORDER BY e.service_date,e.route').bind(from,to).all();
-    return result({from,to,route:args.route??null,missing_is_zero:false,runs:rows.results.filter(e=>!args.route||e.route===args.route).map(e=>({run:JSON.parse(e.payload),revision:e.revision,saved_at:e.saved_at,actor:e.actor,summary:summarise(JSON.parse(e.payload))}))});
+    const runs=await readSalesRuns(db,from,to,args.route);
+    return result({from,to,route:args.route??null,missing_is_zero:false,runs});
   }
   if(name==='get_forecast') {
     check(c.routes.some(r=>r.code===args.route),'Choose a route code from get_catalog.');
@@ -50,6 +51,15 @@ export async function readPaData(name, args, env, username) {
     const from=dateKey(args.from),to=dateKey(args.to);check(from<=to&&to<=addDays(from,30),'Choose at most 31 production days.');
     const url=new URL('https://fenmeat.invalid/api/order-guy');url.searchParams.set('from',from);url.searchParams.set('to',to);
     const data=await orderGuyApi({request:new Request(url),url,db,user,catalog:c,bodyOf,readPlan:production,forecastResult});
+    if(args.view==='summary'||args.supplier){
+      const {register,plans,catalog,requirements,rows,coverage,...summary}=data;
+      const supplier=args.supplier?.trim().toLowerCase();
+      const selected=rows.filter(row=>row.procure&&(!supplier||row.supplier.toLowerCase()===supplier));
+      return result({...summary,view:'summary',supplier:args.supplier??null,
+        coverage:coverage.map(({date,target_date,status,revision,stale,source_warning})=>({date,target_date,status,revision,stale,source_warning})),
+        rows:selected.map(({material,name,unit,supplier,gross,provisional,required_with_reserve,opening_qty,inventory_reason,quantity_ready,net,pack_qty,pack_spec,order_packs,quantity_review,unresolved})=>
+          ({material,name,unit,supplier,gross,provisional,required_with_reserve,opening_qty,inventory_reason,quantity_ready,net,pack_qty,pack_spec,order_packs,quantity_review,unresolved}))});
+    }
     return result(data);
   }
   throw new UserError('Unknown read tool.',404);

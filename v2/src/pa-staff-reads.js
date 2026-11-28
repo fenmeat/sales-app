@@ -86,7 +86,7 @@ export async function readStaffData(args,env,username,scopes,attempt=0){
   const url=new URL('https://fenmeat.invalid/api/staff/imports/rows');for(const[k,v]of Object.entries({id,sheet:args.sheet_id,q:args.q??'',offset:args.offset??0}))url.searchParams.set(k,String(v));
   return result(await staffImportApi({request:new Request(url),url,db,user:{username},bodyOf,current}));
  }
- if(resource==='attendance'){
+ if(resource==='attendance'||(resource==='hours'&&args.q?.trim()&&!args.employee_id)){
   const from=dateKey(args.from),to=dateKey(args.to);
   check(from<=to&&to<=addDays(from,30),'Choose at most 31 calendar days.');
   const name=args.q?.trim().toLowerCase();

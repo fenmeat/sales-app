@@ -193,6 +193,12 @@ test('OAuth discovery, owner consent, SDK handshake, all seven read tools and da
     if(name==='get_production')assert.equal(r.data.result.structuredContent.source_kind,'unsaved_suggestion');
   }
   assert.deepEqual(await businessSnapshot(f.db),before);
+  const range={from:'2026-10-12',to:'2026-10-12'};
+  const fullOrder=await ok(f,tokens,'get_order_requirements',range);
+  const shortOrder=await ok(f,tokens,'get_order_requirements',{...range,view:'summary'});
+  assert.deepEqual(shortOrder.warnings,fullOrder.warnings);
+  assert.deepEqual(shortOrder.rows.map(r=>r.order_packs),fullOrder.rows.filter(r=>r.procure).map(r=>r.order_packs));
+  assert.equal(shortOrder.catalog,undefined);assert.equal(shortOrder.register,undefined);
   const connections=await(await f.req('/api/pa/connections',{headers:{Cookie:session}})).json();assert.equal(connections.grants.length,1);assert.ok(!JSON.stringify(connections).includes(tokens.access_token));
   const stored=JSON.stringify((await f.db.prepare('SELECT * FROM v2_pa_oauth').all()).results);assert.ok(!stored.includes(tokens.access_token));assert.ok(!stored.includes(tokens.refresh_token));assert.ok(!stored.includes(key));
 });
@@ -513,6 +519,8 @@ test('one employee attendance, weekly wages and separately authorised pending le
  const week={employee_id,from:'2026-11-23',to:'2026-11-27'};
  const read=resource=>ok(f,prior.tokens,'get_staff_data',{query:{...week,resource}});
  const attendance=await read('attendance'),legacy=await read('hours'),wages=await read('wages');
+ const named=await ok(f,prior.tokens,'get_staff_data',{query:{resource:'hours',q:'Synthetic worker',from:week.from,to:week.to}});
+ assert.deepEqual(named.days,attendance.days);assert.equal(named.payroll,undefined);
  assert.deepEqual(attendance.days,legacy.rows[0].days);
  assert.equal(attendance.shifts,undefined);assert.equal(attendance.payroll,undefined);
  assert.deepEqual(wages.payroll.rows,legacy.payroll.rows);

@@ -22,3 +22,5 @@ src/recipe-fonts.js
 
 /src/mail-html-bundle.js
 /public/wage-pdf-bundle.js
+
+/public/*-bundle.js

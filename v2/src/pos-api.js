@@ -32,11 +32,11 @@ export async function posDaily(db, date) {
   const staff = await db.prepare(`SELECT actor,${sql} FROM v2_pos_sales WHERE service_date=? AND status='paid' GROUP BY actor ORDER BY actor`).bind(date).all();
   return {date, totals, staff:staff.results, stock:await posStockSummary(db,date), generated_at:new Date().toISOString()};
 }
-export async function posApi({request,url,db,user,catalog,bodyOf}) {
+export async function posApi({request,url,db,user,catalog,loadCatalog=async()=>catalog,bodyOf}) {
   check(canUseFactorySales(user.username), 'Your account does not have Factory POS access.', 403);
   const path = url.pathname;
   if (request.method === 'GET') {
-    if (path === '/api/pos/bootstrap') return {username:user.username, date:today(), products:catalog.products.filter(p=>p.active), catalog_revision:catalog.revision, payment_methods:['cash','card','shop2shop'], credit:false};
+    if (path === '/api/pos/bootstrap') {const catalog=await loadCatalog();return {username:user.username, date:today(), products:catalog.products.filter(p=>p.active), catalog_revision:catalog.revision, payment_methods:['cash','card','shop2shop'], credit:false};}
     if (path === '/api/pos/customers') {
       const query = posText(url.searchParams.get('q') ?? '',160);
       const rows = await db.prepare('SELECT id,name,phone FROM v2_pos_customers WHERE instr(lower(name),lower(?))>0 OR instr(phone,?)>0 ORDER BY name,id LIMIT 51').bind(query,query).all();
@@ -85,6 +85,7 @@ export async function posApi({request,url,db,user,catalog,bodyOf}) {
   const stamp=new Date().toISOString(),revision=b.revision+1;
   let sale=old?view(old):{id:b.id,actor:user.username,created_at:stamp,status:'draft'};
   if(b.action==='save') {
+    const catalog=await loadCatalog();
     const priced=posLines(b.lines,catalog.products);let customer={id:null,name:'Walk-in customer',phone:''};
     if(b.customer_id){check(posId(b.customer_id),'Choose a saved customer.');const c=await db.prepare('SELECT id,name,phone FROM v2_pos_customers WHERE id=?').bind(b.customer_id).first();check(c,'Customer not found.',404);customer=c;}
     sale={...sale,...priced,customer,date:today(),catalog_revision:catalog.revision,priced_at:stamp,status:'draft'};

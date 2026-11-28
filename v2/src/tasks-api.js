@@ -522,7 +522,24 @@ function openTask(task){return ['Pending','Scheduled','Waiting'].includes(task.s
 export async function readTasksForPa(env,user,query={}){
  await ensureTaskSchema(env.DB);check(isAdmin(user.username),'Only admins can read PA task integration.',403);
  if(query.resource==='email_requests'||query.resource==='report_contacts')return readTaskMail(env,user,query);
- if(query.task_id){const task=await getTask(env.DB,query.task_id);check(task&&fullTaskAccess(user,task),'Task not found.',404);const history=await env.DB.prepare('SELECT revision,action,actor,saved_at FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 50').bind(task.id).all();return {task,history:history.results,history_has_more:task.revision>50,save_contract:taskSaveContract};}
+ if(query.resource==='search'){
+  check(query.q?.trim(),'Gee ’n taaknommer of soekwoord.');
+  const {readTaskWorkspace}=await import('./task-workspace.js');
+  const {ensurePaReportSchema}=await import('./pa-report-api.js');
+  await ensurePaReportSchema(env.DB);
+  const {pa}=await readTaskWorkspace(env,user,{scope:'all',status:'all',search:query.q,offset:query.offset});
+  const page=pa.workspace;
+  return {total:page.total,next_offset:page.next_offset,rows:page.rows.map(r=>({id:r.id,app_task_id:r.workflow_id||r.app_task_id||(r.is_pa?null:r.id),title:r.title,status:r.status,assigned_to:r.assigned_to}))};
+ }
+ if(query.task_id){let task=await getTask(env.DB,query.task_id);
+  if(!task&&PA_ID.test(query.task_id)){
+   const {readTaskSubject,ensurePaReportSchema}=await import('./pa-report-api.js');
+   await ensurePaReportSchema(env.DB);
+   const row=await readTaskSubject(env,user,query.task_id);
+   if(!row.app_task_id)return {pa_task:row,app_task_id:null};
+   task=await getTask(env.DB,row.app_task_id);
+  }
+  check(task&&fullTaskAccess(user,task),'Task not found.',404);const history=await env.DB.prepare('SELECT revision,action,actor,saved_at FROM v2_task_events WHERE task_id=? ORDER BY revision DESC LIMIT 50').bind(task.id).all();return {task,history:history.results,history_has_more:task.revision>50,save_contract:taskSaveContract};}
  return {...await listTasks(env,user,{pending_sync:query.resource==='pending_sync',offset:query.offset??0}),save_contract:taskSaveContract};
 }
 
@@ -532,7 +549,7 @@ function canonicalTaskRequest(value){
  return value;
 }
 const taskSaveContract={
- create:'save_task({task:{action:"create",revision:0,request_id,data:{title,details,assigned_to,due_date,review_date,priority,reminder_mode,reminder_at}}}). task_id is optional ONLY for create; omitted IDs are derived from owner + request_id. Search all get_tasks pages before creating; reuse an existing task for the same obligation.',
+ create:'save_task({task:{action:"create",revision:0,request_id,data:{title,details,assigned_to,due_date,review_date,priority,reminder_mode,reminder_at}}}). task_id is optional ONLY for create; omitted IDs are derived from owner + request_id. Search with get_tasks resource search and q before creating; reuse an existing task for the same obligation.',
  visibility:'For new ordinary business work set data.visibility to operational. assigned limits sharing to administrators and task participants. confidential is for Alex and Alinda. private is Alex-only, including all admin connectors. Personal cases use the daily_report private_task bridge with an existing private TSK; never copy their content to the shared workbook. Older unclassified tasks keep assignment-based access.',
  update:'Read the current task first. save_task({task:{action:"update",task_id:task.id,revision:task.revision,request_id,data:{only_changed_fields},note}}). Use existing usernames from users. Use details for the description.',
  identifiers:'task_id and save_task request_id: 8–90 ASCII letters, digits or hyphens. UUIDs are safe. save_app_data request_id: 16–80. Reuse the SAME request_id and identical content for a retry; a changed request needs a new request_id. Never use a task id as the request id.',

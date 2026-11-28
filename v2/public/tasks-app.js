@@ -53,7 +53,8 @@ function reminderValues(form){const mode=form.elements.reminder_mode.value;retur
 function dateLabel(t){const d=review(t);return d?(t.status==='Waiting'||!t.due_date?'Opvolg ':'Datum ')+d:'Geen datum';}
 let taskFilters={person:'',date:'',priority:''};
 function workspaceURL(offset=0){
- const q=new URLSearchParams({status:filter,scope:paScope,search,...taskFilters});
+ const q=new URLSearchParams({status:filter,scope:paScope,search,...taskFilters,compact:'1'});
+ if(!data&&reportMode)q.set('report_default','1');
  if(offset){q.set('offset',offset);q.set('snapshot',pa.workspace.snapshot);}
  const deep=new URL(location.href).searchParams.get('case')||new URL(location.href).searchParams.get('task');if(deep)q.set('case',deep);
  return '/api/tasks/workspace?'+q;
@@ -72,10 +73,13 @@ async function load(options={}){
  const offset=options.offset||0,key=workspaceURL(offset),sequence=++loadSequence,cached=workspaceCache.peek(key),hadData=!!data;
  if(data){const same=Object.entries(taskFilters).every(([key,value])=>(pa.workspace?.[key]||'')===value)&&pa.workspace?.scope===paScope&&pa.workspace?.status===filter&&pa.workspace?.search===search;pa.workspace={...pa.workspace,...(same||offset?{}:{rows:[],total:0}),loading:true};render();}
  try{
-  const result=await workspaceCache.read(key);if(sequence!==loadSequence||result.obsolete)return;
+  let result;
+  try{result=await workspaceCache.read(key);}
+  catch(e){if(e.status!==404||sequence!==loadSequence)throw e;legacyMode=true;return legacyLoad();}
+  if(sequence!==loadSequence||result.obsolete)return;
   if(result.unsupported){legacyMode=true;return legacyLoad();}
+  if(!hadData&&reportMode)paScope=result.value.pa.workspace.scope;
   applyWorkspace(result.value,!!offset);
-  if(!hadData&&reportMode&&data.admin&&paScope==='mine'){paScope=data.username==='alex'?'all':'fenmeat';await load();return;}
   loadInbox();
   if(reportMode||rabbiMode)await loadReport();
   const id=new URL(location.href).searchParams.get('task');if(id&&!deepLinkHandled){deepLinkHandled=true;const linked=pa?.workspace?.rows?.find(r=>r.id===id&&r.workflow_id);
@@ -84,7 +88,6 @@ async function load(options={}){
    else await detailsCurrent({id});}
  }catch(e){
   if(sequence!==loadSequence)return;
-  if(e.status===404){legacyMode=true;return legacyLoad();}
   if([401,403].includes(e.status)){data=null;pa=null;workspaceCache.clear();return login(e);}
   if(data){if(pa?.workspace)pa.workspace.loading=false;render();toast(e.message);}
   else{$('#app').innerHTML='<main class="shell"><h1>Tasks</h1><p>'+esc(e.message)+'</p><button id="retry-load">Probeer weer</button></main>';$('#retry-load').onclick=load;}
@@ -96,11 +99,12 @@ async function loadInbox(){
  return inboxFlight;
 }
 async function loadReport(){
- if(data?.invoice_rep)return;const key=data.username+':'+reportDate;
+ if(data?.invoice_rep)return;const view=rabbiMode&&data.username!=='alex'?'rabbi':'report';
+ const key=data.username+':'+view+':'+reportDate;
  if(reportCache?.key===key){render();return;}
  if(reportFlight?.key===key&&reportFlight.generation===mutationGeneration)return reportFlight.promise;
  const username=data.username,selectedDate=reportDate,generation=mutationGeneration;
- const promise=(async()=>{try{const fresh=await api('/api/pa-report?view=report'+(selectedDate?'&date='+encodeURIComponent(selectedDate):''));if(data?.username!==username||reportDate!==selectedDate||generation!==mutationGeneration)return;reportCache={key,username,data:fresh};pa={...pa,report:fresh.report,history:fresh.history,rabbi:fresh.rabbi,rabbi_history:fresh.rabbi_history,feedback:fresh.feedback,context_rows:fresh.rows};render();}catch(e){toast(e.message);}finally{if(reportFlight?.key===key&&reportFlight.generation===generation)reportFlight=null;}})();reportFlight={key,promise,generation};return promise;
+ const promise=(async()=>{try{const fresh=await api('/api/pa-report?view='+view+(selectedDate?'&date='+encodeURIComponent(selectedDate):''));if(data?.username!==username||reportDate!==selectedDate||view!==(rabbiMode&&data.username!=='alex'?'rabbi':'report')||generation!==mutationGeneration)return;reportCache={key,username,data:fresh};pa={...pa,report:fresh.report,history:fresh.history,rabbi:fresh.rabbi,rabbi_history:fresh.rabbi_history,feedback:fresh.feedback,context_rows:fresh.rows};render();}catch(e){toast(e.message);}finally{if(reportFlight?.key===key&&reportFlight.generation===generation)reportFlight=null;}})();reportFlight={key,promise,generation};return promise;
 }
 async function prepareOptions(){if(data?.workspace_source&&!data.options_loaded){const r=await api('/api/tasks/options');data.suppliers=r.suppliers;data.options_loaded=true;}}
 async function newTask(){try{await prepareOptions();edit();}catch(e){toast(e.message);}}
@@ -117,11 +121,32 @@ async function detailsCurrent(t){
 }
 function queryChanged(){clearTimeout(searchTimer);return load();}
 function searchChanged(value){search=value;loadSequence++;clearTimeout(searchTimer);searchTimer=setTimeout(()=>load(),220);}
+function legacyPageControl(){
+ document.querySelector('#legacy-pages')?.remove();
+ if(data?.next_offset==null)return;
+ const control=document.createElement('section'),button=document.createElement('button');
+ control.id='legacy-pages';control.className='shell';
+ control.append('Net die gelaaide take word gewys en deursoek. ');
+ button.textContent='Laai die volgende bladsy';control.append(button);
+ document.querySelector('#app').after(control);
+ button.onclick=async()=>{
+  const current=data,offset=current.next_offset;
+  button.disabled=true;
+  try{
+   const page=await api('/api/tasks?offset='+offset);
+   if(current!==data)return;
+   if(current.username!==page.username)return login({status:401});
+   data.tasks.push(...page.tasks);data.next_offset=page.next_offset;
+   render();legacyPageControl();
+  }catch(e){if([401,403].includes(e.status))return login(e);toast(e.message);button.disabled=false;}
+ };
+}
 async function legacyLoad(){
- try{const first=!data;data=await api('/api/tasks');if(data.invoice_rep){reportMode=false;rabbiMode=false;}if(first&&reportMode&&data.admin)owner='all';let offset=data.next_offset;while(offset!==null){const page=await api('/api/tasks?offset='+offset);data.tasks.push(...page.tasks);offset=page.next_offset;}if(reportMode&&data.username==='alex'){try{mail=await api('/api/tasks/emails');let mailOffset=mail.next_offset;while(mailOffset!=null){const page=await api('/api/tasks/emails?offset='+mailOffset);mail.requests.push(...page.requests);mailOffset=page.next_offset;}}catch{mail={requests:[],error:'Die e-posstatus kon nie laai nie. Verfris en probeer weer.'};}}if(data.invoice_rep){pa=null;paError='';}else try{pa=await api('/api/pa-report'+(reportDate?'?date='+encodeURIComponent(reportDate):''));paError='';if(first&&reportMode)paScope=data.username==='alex'?'all':data.admin?'fenmeat':'mine';}catch(e){pa=null;paError='Die PA-taaklys kon nie laai nie. Hier is die take wat in die app gestoor is. Verfris en probeer weer.';}if(pa?.rabbi_access??pa?.private_report){const key=new URL(location.href).searchParams.get('case');if(key&&(pa.report?.sections.find(s=>s.id==='rabbi')?.items.some(i=>i.subject_key===key)||pa.rabbi?.items.some(i=>'report-'+pa.rabbi.date+':'+i.id===key))){rabbiMode=true;reportMode=false;const url=new URL(location.href);url.searchParams.set('view','rabbi');history.replaceState(null,'',url.pathname+url.search);}}else if(pa){rabbiMode=false;}render();const id=new URL(location.href).searchParams.get('task');if(id&&!deepLinkHandled){deepLinkHandled=true;const t=data.tasks.find(t=>t.id===id);if(t){if(reportMode&&!pa?.register_revision)document.querySelector('[data-report-task="'+t.id+'"]')?.scrollIntoView?.({block:'center'});else details(t);}}
+ try{const first=!data;data=await api('/api/tasks');if(data.invoice_rep){reportMode=false;rabbiMode=false;}if(first&&reportMode&&data.admin)owner='all';if(reportMode&&data.username==='alex'){try{mail=await api('/api/tasks/emails');let mailOffset=mail.next_offset;while(mailOffset!=null){const page=await api('/api/tasks/emails?offset='+mailOffset);mail.requests.push(...page.requests);mailOffset=page.next_offset;}}catch{mail={requests:[],error:'Die e-posstatus kon nie laai nie. Verfris en probeer weer.'};}}if(data.invoice_rep){pa=null;paError='';}else try{pa=await api('/api/pa-report'+(reportDate?'?date='+encodeURIComponent(reportDate):''));paError='';if(first&&reportMode)paScope=data.username==='alex'?'all':data.admin?'fenmeat':'mine';}catch(e){pa=null;paError='Die PA-taaklys kon nie laai nie. Hier is die take wat in die app gestoor is. Verfris en probeer weer.';}if(pa?.rabbi_access??pa?.private_report){const key=new URL(location.href).searchParams.get('case');if(key&&(pa.report?.sections.find(s=>s.id==='rabbi')?.items.some(i=>i.subject_key===key)||pa.rabbi?.items.some(i=>'report-'+pa.rabbi.date+':'+i.id===key))){rabbiMode=true;reportMode=false;const url=new URL(location.href);url.searchParams.set('view','rabbi');history.replaceState(null,'',url.pathname+url.search);}}else if(pa){rabbiMode=false;}render();legacyPageControl();const id=new URL(location.href).searchParams.get('task');if(id&&!deepLinkHandled){deepLinkHandled=true;const t=data.tasks.find(t=>t.id===id);if(t){if(reportMode&&!pa?.register_revision)document.querySelector('[data-report-task="'+t.id+'"]')?.scrollIntoView?.({block:'center'});else details(t);}}
  }catch(e){if(e.status===401||e.status===403)await login(e);else{$('#app').innerHTML='<main class="shell"><h1>Tasks</h1><p>'+esc(e.message)+'</p><button id="retry-load">Probeer weer</button></main>';$('#retry-load').onclick=load;}}
 }
 async function login(error){
+ document.querySelector('#legacy-pages')?.remove();
  draftStorage.clearPrivate();workspaceCache.clear();reportCache=null;data=null;pa=null;mail={requests:[]};
  dialogCleanup();if(dialog.open)dialog.close();dialog.innerHTML='';
  let phone;try{phone=await api('/api/invoicing/access/status');}catch{}

@@ -21,10 +21,13 @@ export async function productionApi({request,url,db,user,catalog,forecastResult,
   const date=dateKey(url.searchParams.get('date')),old=await last(date);
   if(old){const r=result(old);r.factory_pos_stock=await factoryStock(date);try{const fresh=await needs(r.plan.target_date,r.plan.routes);r.stale=fresh.snapshot!==r.plan.demand_snapshot;}catch{r.stale=true;r.source_warning='Current route needs could not be checked. Saved plan retained.';}return r;}
   const target_date=nextProductionTarget(date,catalog.routes),routes=catalog.routes.filter(r=>routeScheduled(r,target_date)).map(r=>r.code);productionContext({date,target_date,routes},catalog);
-  const fresh=await needs(target_date,routes),recent=await db.prepare('SELECT payload FROM v2_production_events WHERE production_date<? ORDER BY production_date DESC,revision DESC LIMIT 1').bind(date).first();
+  const [fresh,recent,{register},factory_pos_stock]=await Promise.all([
+   needs(target_date,routes),
+   db.prepare('SELECT payload FROM v2_production_events WHERE production_date<? ORDER BY production_date DESC,revision DESC LIMIT 1').bind(date).first(),
+   readRegister(db,catalog),factoryStock(date)
+  ]);
   const settingsPlan=recent?normaliseProductionPlan(JSON.parse(recent.payload)):null;
-  const {register}=await readRegister(db,catalog);
-  const plan=buildProductionPlan({date,target_date,routes,...fresh,yieldSettings:settingsPlan?.items,settingsPlan,register});return {plan,revision:0,summary:productionSummary(productionPlanningView(plan,catalog)),factory_pos_stock:await factoryStock(date),stale:false};
+  const plan=buildProductionPlan({date,target_date,routes,...fresh,yieldSettings:settingsPlan?.items,settingsPlan,register});return {plan,revision:0,summary:productionSummary(productionPlanningView(plan,catalog)),factory_pos_stock,stale:false};
  }
  const b=await bodyOf(request);check(['save','refresh','confirm','actuals','update_recipe'].includes(b.action),'Unknown production action.');check(typeof b.request_id==='string'&&/^[a-zA-Z0-9-]{16,80}$/.test(b.request_id),'Missing save identifier.');check(Number.isSafeInteger(b.revision)&&b.revision>=0,'Invalid revision.');
  const fingerprint=await hash(JSON.stringify(b)),replay=await db.prepare('SELECT * FROM v2_production_events WHERE request_id=?').bind(b.request_id).first();

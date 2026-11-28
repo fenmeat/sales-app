@@ -9,8 +9,22 @@ export function unifiedWork(app,pa){
  const canonical=new Map(pa.rows.map(r=>[r.id,r])),byApp=new Map(pa.rows.filter(r=>r.app_task_id).map(r=>[r.app_task_id,r])),last=new Map();
  // Feedback is newest-first; a later reply can correct an earlier completion.
  for(const f of pa.feedback??[])if((f.action==='complete'||f.action==='respond')&&!last.has(f.subject_key))last.set(f.subject_key,f);
+ const rowsByApp=new Map(),stagesByRow=new Map();
+ for(const row of pa.rows){
+  if(!row.app_task_id)continue;
+  if(!rowsByApp.has(row.app_task_id))rowsByApp.set(row.app_task_id,[]);
+  rowsByApp.get(row.app_task_id).push(row.id);
+ }
+ for(const task of app.tasks){
+  const parents=new Set(rowsByApp.get(task.id)||[]);
+  if(task.pa_task_id)parents.add(task.pa_task_id);
+  for(const id of parents){
+   if(!stagesByRow.has(id))stagesByRow.set(id,[]);
+   stagesByRow.get(id).push(task);
+  }
+ }
  const rows=pa.rows.map(r=>{
-  const stages=app.tasks.filter(t=>t.pa_task_id===r.id||t.id===r.app_task_id),f=last.get(r.id);
+  const stages=stagesByRow.get(r.id)||[],f=last.get(r.id);
   const completion_requested=paOpen(r)&&f?.action==='complete'&&f.status==='pending';
   const part_pending=completion_requested&&f.completion_scope==='part';
   const completion_pending=completion_requested&&!part_pending&&f.actor===r.assigned_to&&stages.length===0&&!needsReview(r);
